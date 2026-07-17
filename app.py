@@ -1932,43 +1932,41 @@ def _extract_unit_from_filename(filename: str) -> str | None:
 
 def _detect_edexcel_maths_ms_table(doc):
     """
-    扫描 Edexcel Maths Mark Scheme PDF，定位包含 Question/Scheme/Marks 表格头的页面。
+    扫描 Edexcel Maths Mark Scheme PDF，按题切割答案区域。
 
-    Edexcel Maths MS 真实结构（根据样板图）：
-      ┌───────────────┬──────────────────────────────────┬────────┐
-      │ Question      │           Scheme                 │ Marks  │
-      │ Number        │                                  │        │
-      ├───────────────┼──────────────────────────────────┼────────┤
-      │ 1. (a)        │  ... 公式/方案 ...               │ M1 A1  │
-      │               │  ...                             │ A1*    │
-      │               │                              (3) │        │
-      │ (b)           │  ...                             │ M1     │
-      │               │                              (3) │        │
-      │ (c) (i)       │  ...                             │ M1 A1  │
-      │ (ii)          │  ...                             │ A1     │
-      │               │                          (9 marks)│       │
-      └───────────────┴──────────────────────────────────┴────────┘
+    切割逻辑（根据样板图标注）：
+      ┌──────────────────────────────────────────────────┐  ← 表头行 y0（蓝色，切割顶部）
+      │ Question Number │    Scheme     │     Marks      │
+      ├─────────────────┴───────────────┴────────────────┤
+      │ 1.(a)  │  ... 公式 ...                  │ M1 A1  │  ← 红色题号 "1" → q_num=1
+      │        │  ...                           │ A1*    │
+      │        │                            (3) │        │
+      │  (b)   │  ...                           │ M1 A1  │
+      │        │                        (9 marks)│       │  ← 绿色总分行（切割底部）
+      └────────────────────────────────────────────────--┘  ← 总分行 y1（y_bot）
+      Notes ...  ← 表格外，不截
 
-    关键特征：
-      - 题号 "1." 或 "1. (a)" 在 Question Number 列（最左列），x0 较小
-      - 子题 "(b)", "(c) (i)" 等也在 Question Number 列，但不以数字开头
-      - 切割范围：从本题第一行(y_top) → 到本题总分行 "(N marks)"/"(N)" 的 y1
-      - Notes 文字在表格外部，不在切割范围内
+    关键规则：
+      - y_top = 表头行（Question Number/Scheme/Marks）的 y0
+      - y_bot = 该题总分行 "(N marks)" 的 y1
+      - q_num = 表格内 Question Number 列第一个纯数字/数字开头的文本
+      - 一个 MS 文件中每道题对应一张独立的表格（或共享同一表头）
 
     返回：
       {q_num: [(page_idx, y_top, y_bottom, x_left, x_right), ...]}
     """
-    # ── 表头关键词（同时支持 "question" 和 "question number"）──
-    HDR_WORDS = {'question', 'scheme', 'marks'}
+    import re as _re
 
-    # ── 题号模式：匹配 "1", "1.", "1. (a)", "1.(a)", "1 (a)", "12." 等 ──
-    # 要求：行首是 1-2 位数字，后面可接 "." / " " / "(" 或行尾
-    Q_NUM_PAT = re.compile(r'^(\d{1,2})[.\s(]')
-    # 也匹配纯数字行（如仅 "1" 占一行的情况）
-    Q_NUM_ONLY = re.compile(r'^(\d{1,2})$')
+    HDR_WORDS   = {'question', 'scheme', 'marks'}
+    # 总分行：(3), (9 marks), (7 marks), (12 marks) 等
+    TOTAL_PAT   = _re.compile(r'^\(\s*\d+\s*(?:marks?)?\s*\)$', re.IGNORECASE)
+    # 题号：行首 1-2 位数字，后接 "." / " " / "(" 或行尾
+    Q_NUM_PAT   = _re.compile(r'^(\d{1,2})[.\s(]')
+    Q_NUM_ONLY  = _re.compile(r'^(\d{1,2})$')
 
-    # ── 第一步：找所有含 Question/Scheme/Marks 表头的页面及其 y_bottom ──
-    header_positions = []   # [(page_idx, header_y_bottom)]
+    # ── 第一步：找每一个表头块 (header_y0, header_y1, page_idx) ──
+    # 每个表头块 = 在 y 跨度 40pt 内同时出现 question + scheme + marks 的一组行
+    header_blocks = []   # [(page_idx, hdr_y0, hdr_y1)]
 
     for pg_i in range(doc.page_count):
         page = doc[pg_i]
@@ -1977,7 +1975,6 @@ def _detect_edexcel_maths_ms_table(doc):
         except Exception:
             continue
 
-        # 收集本页文本行 (y0, y1, x0, text_lower)
         text_lines = []
         for b in blocks:
             if b.get('type') != 0:
@@ -1987,68 +1984,71 @@ def _detect_edexcel_maths_ms_table(doc):
                 if not ltxt:
                     continue
                 bbox = line['bbox']
-                text_lines.append((bbox[1], bbox[3], bbox[0], ltxt))
+                text_lines.append((bbox[1], bbox[3], bbox[0], bbox[2], ltxt))
         text_lines.sort(key=lambda x: x[0])
 
-        # 滑动窗口（y 跨度 < 40pt）检测 question + scheme + marks 同时出现
         n = len(text_lines)
-        for i in range(n):
+        i = 0
+        while i < n:
             y0_i = text_lines[i][0]
             window_words = set()
+            window_y0    = y0_i
             window_y1    = text_lines[i][1]
             for j in range(i, n):
-                y0_j, y1_j, x0_j, txt_j = text_lines[j]
+                y0_j, y1_j = text_lines[j][0], text_lines[j][1]
+                txt_j = text_lines[j][4]
                 if y0_j > y0_i + 40:
                     break
                 for hw in HDR_WORDS:
                     if hw in txt_j:
                         window_words.add(hw)
+                window_y0 = min(window_y0, y0_j)
                 window_y1 = max(window_y1, y1_j)
             if HDR_WORDS <= window_words:
-                header_positions.append((pg_i, window_y1))
-                break   # 本页只取一次
+                header_blocks.append((pg_i, window_y0, window_y1))
+                i = j + 1   # 跳过已处理的行
+                # 同页可能有多个表头（例如每题一个），继续扫
+            else:
+                i += 1
 
-    if not header_positions:
+    if not header_blocks:
         return {}
 
-    # ── 第二步：收集所有表头页之后的文本行 ──
-    first_hdr_pg = header_positions[0][0]
-    hdr_set = {pg: hy for pg, hy in header_positions}   # {page_idx: header_y_bottom}
+    # ── 第二步：收集全部文本行（从第一个表头页开始）──
+    first_pg = header_blocks[0][0]
 
-    all_content = []   # (page_idx, y0, y1, x0, raw_text)
-    for pg_i in range(first_hdr_pg, doc.page_count):
+    # all_lines: (page_idx, y0, y1, x0, x1, text)  ← 保留 x1 以便判断列位置
+    all_lines = []
+    for pg_i in range(first_pg, doc.page_count):
         page = doc[pg_i]
         ph   = page.rect.height
         try:
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
             continue
-        content_y_start = hdr_set.get(pg_i, 0)
         for b in blocks:
             if b.get('type') != 0:
                 continue
             for line in b.get('lines', []):
                 bbox = line['bbox']
-                y0, y1, x0 = bbox[1], bbox[3], bbox[0]
-                if y0 < content_y_start - 2:
-                    continue
-                if y0 > ph - 28:   # 跳过页脚
+                y0, y1, x0, x1 = bbox[1], bbox[3], bbox[0], bbox[2]
+                if y0 > ph - 28:
                     continue
                 ltxt = ''.join(s['text'] for s in line['spans']).strip()
                 if not ltxt:
                     continue
-                all_content.append((pg_i, y0, y1, x0, ltxt))
+                all_lines.append((pg_i, y0, y1, x0, x1, ltxt))
 
-    # ── 第三步：在 Question Number 列找题号行 ──
-    # Question Number 列：x0 通常在 28~100pt 之间（A4 页面，左边距约 42pt）
-    # 放宽到 110pt 以应对不同版本排版
-    Q_COL_MAX_X = 110
+    # ── 第三步：确定 Question Number 列 和 Marks 列的 x 边界 ──
+    # 从表头块扫描 "scheme" 文字 x0 作为 Question 列右边界
+    # 从表头块扫描 "marks"  文字 x0 作为 Marks  列左边界
+    pw_default  = doc[0].rect.width
+    q_col_max_x = pw_default * 0.20   # 默认：页宽 20%
+    marks_col_x = pw_default * 0.70   # 默认：页宽 70%
 
-    # 先确定 Question 列的实际右边界（通过表头行定位）
-    # 寻找包含 "scheme" 的行，其 x0 即为 Scheme 列起始，也是 Question 列右边界
-    scheme_col_x = None
-    for pg_i, hy in header_positions:
+    for pg_i, hy0, hy1 in header_blocks:
         page = doc[pg_i]
+        pw   = page.rect.width
         try:
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
@@ -2058,156 +2058,93 @@ def _detect_edexcel_maths_ms_table(doc):
                 continue
             for line in b.get('lines', []):
                 ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
-                if 'scheme' in ltxt and 'question' not in ltxt:
-                    scheme_col_x = line['bbox'][0]
-                    break
-            if scheme_col_x is not None:
-                break
-        if scheme_col_x is not None:
-            break
-
-    # 如果找到 Scheme 列起始，以此作为 Question Number 列右边界（加 10pt 容差）
-    if scheme_col_x and scheme_col_x > 40:
-        Q_COL_MAX_X = scheme_col_x + 10
-    Q_COL_MAX_X = min(Q_COL_MAX_X, 200)   # 不超过 200pt（防止异常值）
-
-    q_boundaries = []   # [(q_num, page_idx, y_top)]
-    seen_qnums   = set()
-
-    for pg_i, y0, y1, x0, ltxt in all_content:
-        # 必须在 Question Number 列内
-        if x0 > Q_COL_MAX_X:
-            continue
-        # 匹配题号
-        stripped = ltxt.strip()
-        m = Q_NUM_PAT.match(stripped) or Q_NUM_ONLY.match(stripped)
-        if not m:
-            continue
-        q_num = int(m.group(1))
-        if not (1 <= q_num <= 30):   # 最多支持 30 题
-            continue
-        if q_num in seen_qnums:
-            continue   # 同一题号只取第一次
-
-        # 校验：在同一页、y 距离 50pt 内，Scheme 列（x > Q_COL_MAX_X - 10）有内容
-        # 用 50pt 宽窗口以兼容"题号行单独占行"和"题号与第一子题同行"两种情况
-        has_scheme_nearby = any(
-            c[0] == pg_i and abs(c[1] - y0) < 50 and c[3] > (Q_COL_MAX_X - 10)
-            for c in all_content
-        )
-        if not has_scheme_nearby:
-            continue
-
-        seen_qnums.add(q_num)
-        q_boundaries.append((q_num, pg_i, y0))
-
-    if not q_boundaries:
-        return {}
-
-    # 按题号排序（而非出现顺序，以防 PDF 乱序）
-    q_boundaries.sort(key=lambda x: x[0])
-
-    # ── 第四步：为每题找表格真实底部 ──
-    # 规则：只截表格主体（Question/Scheme/Marks 三列），不包含 Notes。
-    # 表格底部 = 该题"总分行"的 y1，即 Marks 列出现 "(N marks)" 或 "(N)" 的最后一行。
-    # 总分行特征：
-    #   - 文本匹配 r'^\(\d+\s*(marks?)?\)$'  → "(3)", "(9 marks)", "(7 marks)" 等
-    #   - 位置在 Marks 列（x0 较大，靠右）
-    #   - 在本题 y_top 之后、下一题 y_top 之前
-
-    TOTAL_PAT = re.compile(r'^\(\s*\d+\s*(?:marks?)?\s*\)$', re.IGNORECASE)
-
-    # 确定 Marks 列的左边界（即 Scheme 列右边界）
-    # 通过表头行找含 "marks" 文字的行的 x0
-    marks_col_x = None
-    for pg_i, hy in header_positions:
-        page = doc[pg_i]
-        try:
-            blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
-        except Exception:
-            continue
-        for b in blocks:
-            if b.get('type') != 0:
-                continue
-            for line in b.get('lines', []):
-                ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
-                # "marks" 列：文本仅含 marks，且 x0 在页面右侧 1/3
-                page_pw = doc[pg_i].rect.width
                 bbox = line['bbox']
-                if ltxt == 'marks' and bbox[0] > page_pw * 0.6:
-                    marks_col_x = bbox[0]
-                    break
-            if marks_col_x is not None:
-                break
-        if marks_col_x is not None:
-            break
+                y0_l = bbox[1]
+                if not (hy0 - 2 <= y0_l <= hy1 + 2):
+                    continue
+                # scheme 列：文本含 "scheme"，x0 在中间区域
+                if 'scheme' in ltxt and 'question' not in ltxt:
+                    q_col_max_x = max(q_col_max_x, bbox[0] + 5)
+                # marks 列：文本仅为 "marks"，在右侧
+                if ltxt.strip() == 'marks' and bbox[0] > pw * 0.55:
+                    marks_col_x = min(marks_col_x, bbox[0] - 5)
+        break   # 只用第一个表头块定列宽
 
-    # 如果没找到，用页面宽度的 70% 作为估算
-    if marks_col_x is None:
-        pw_default = doc[0].rect.width
-        marks_col_x = pw_default * 0.70
+    q_col_max_x = min(q_col_max_x, 200)
+    marks_col_x = max(marks_col_x, pw_default * 0.55)
 
-    def _find_table_bottom_for_q(q_num, pg_start, y_top, next_pg_bound, next_y_bound):
-        """
-        在 all_content 中，从 (pg_start, y_top) 开始到 (next_pg_bound, next_y_bound)，
-        找 Marks 列中最后一个总分行 "(N marks)" 或 "(N)" 的 y1。
-        返回 (page_idx, y_bottom)，如果找不到则返回 (next_pg_bound, next_y_bound)。
-        """
-        best_pg  = None
-        best_y1  = None
+    # ── 第四步：为每个表头块确定对应的 q_num 和总分行 y_bot ──
+    # 策略：
+    #   - q_num  = 表头块之后，Question Number 列（x0 < q_col_max_x）中第一个数字文本
+    #   - y_bot  = 表头块之后，Marks 列（x0 >= marks_col_x）中最后一个匹配 TOTAL_PAT 的行的 y1
+    #   - 搜索范围：从本表头 hdr_y1 起，到下一个表头 hdr_y0 前（或页末）
 
-        for pg_i, y0, y1, x0, ltxt in all_content:
-            # 范围限制：在本题区间内
-            if pg_i < pg_start or pg_i > next_pg_bound:
-                continue
-            if pg_i == pg_start and y0 < y_top:
-                continue
-            if pg_i == next_pg_bound and y0 >= next_y_bound:
-                continue
-
-            # 必须在 Marks 列（x0 >= marks_col_x - 20）
-            if x0 < marks_col_x - 20:
-                continue
-
-            # 文本匹配总分行
-            if TOTAL_PAT.match(ltxt.strip()):
-                best_pg = pg_i
-                best_y1 = y1  # 持续更新，取最后一个（最后一个总分行）
-
-        if best_pg is not None:
-            return (best_pg, best_y1 + 4)   # +4pt 留少量底部间距
-
-        # 找不到总分行：回退到下一题题号行（此情况较少，保底）
-        return (next_pg_bound, next_y_bound)
-
-    # ── 第五步：根据题号边界 + 表格底部生成渲染切片 ──
-    answers = {}
-
-    for i, (q_num, pg_start, y_top) in enumerate(q_boundaries):
-        # 确定"搜索上界"：下一题的 y_top（用于限定查找范围）
-        if i + 1 < len(q_boundaries):
-            nb_pg, nb_y = q_boundaries[i + 1][1], q_boundaries[i + 1][2]
+    # 构建表头块的搜索区间
+    search_regions = []   # [(pg_i, start_y, end_pg, end_y)]
+    for idx, (pg_i, hy0, hy1) in enumerate(header_blocks):
+        if idx + 1 < len(header_blocks):
+            next_pg, next_hy0, _ = header_blocks[idx + 1]
+            search_regions.append((pg_i, hy1, next_pg, next_hy0))
         else:
-            nb_pg = doc.page_count - 1
-            nb_y  = doc[nb_pg].rect.height - 28
+            last_pg = doc.page_count - 1
+            search_regions.append((pg_i, hy1, last_pg, doc[last_pg].rect.height - 28))
 
-        # 找本题表格真实底部
-        end_pg, end_y = _find_table_bottom_for_q(q_num, pg_start, y_top, nb_pg, nb_y)
+    answers = {}   # {q_num: [(pg_i, y_top, y_bot, x_left, x_right)]}
 
+    for (hdr_pg, hdr_y0, hdr_y1), (s_pg, s_y, e_pg, e_y) in zip(header_blocks, search_regions):
+        page_w = doc[hdr_pg].rect.width
+
+        # 在搜索区间内找 q_num 和总分行
+        q_num    = None
+        best_total_pg = None
+        best_total_y1 = None
+
+        for pg_i, y0, y1, x0, x1, ltxt in all_lines:
+            # 范围：从表头 y1 开始
+            if pg_i < s_pg or pg_i > e_pg:
+                continue
+            if pg_i == s_pg and y0 < s_y - 2:
+                continue
+            if pg_i == e_pg and y0 >= e_y:
+                continue
+
+            # 找 q_num（Question Number 列，第一个数字文本）
+            if q_num is None and x0 < q_col_max_x:
+                stripped = ltxt.strip()
+                m = Q_NUM_PAT.match(stripped) or Q_NUM_ONLY.match(stripped)
+                if m:
+                    cand = int(m.group(1))
+                    if 1 <= cand <= 30:
+                        q_num = cand
+
+            # 找总分行（Marks 列）
+            if x0 >= marks_col_x - 15:
+                if TOTAL_PAT.match(ltxt.strip()):
+                    best_total_pg = pg_i
+                    best_total_y1 = y1   # 取最后一个
+
+        if q_num is None:
+            continue   # 找不到题号，跳过
+
+        if best_total_pg is None:
+            # 找不到总分行：用搜索区间末尾作为底部
+            best_total_pg = e_pg
+            best_total_y1 = e_y
+
+        y_bot = best_total_y1 + 4   # 留 4pt 底部空白
+
+        # 生成切片：y_top = 表头行 y0，y_bot = 总分行 y1
         slices = []
-        for pg_i in range(pg_start, end_pg + 1):
+        for pg_i in range(hdr_pg, best_total_pg + 1):
             page = doc[pg_i]
             ph   = page.rect.height
             pw   = page.rect.width
 
-            # 起始 y：首页用 y_top，续页从表头之后开始
-            top = y_top if pg_i == pg_start else hdr_set.get(pg_i, 36)
-            # 结束 y：末页用 end_y，中间页用页底
-            bottom = end_y if pg_i == end_pg else (ph - 28)
+            top    = hdr_y0 if pg_i == hdr_pg else 28   # 续页从页顶开始
+            bottom = y_bot  if pg_i == best_total_pg else (ph - 28)
 
-            # 横向：页面全宽（表格铺满）
-            left  = 26
-            right = pw - 26
+            left  = 24
+            right = pw - 24
 
             if bottom > top + 6:
                 slices.append((pg_i, top, bottom, left, right))
