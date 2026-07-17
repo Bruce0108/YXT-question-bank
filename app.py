@@ -1934,32 +1934,51 @@ def _detect_edexcel_maths_ms_table(doc):
     """
     扫描 Edexcel Maths Mark Scheme PDF，定位包含 Question/Scheme/Marks 表格头的页面。
 
-    Edexcel Maths MS 结构：
-      - 每页或若干页有一个表格，表头行包含 "Question"、"Scheme"、"Marks" 三列
-      - 表头行之后的每一行对应一道题（q_num, y_start, y_end, page_idx）
-      - 同一题的答案可能跨多行甚至多页（直到下一个 q_num 出现）
+    Edexcel Maths MS 真实结构（根据样板图）：
+      ┌───────────────┬──────────────────────────────────┬────────┐
+      │ Question      │           Scheme                 │ Marks  │
+      │ Number        │                                  │        │
+      ├───────────────┼──────────────────────────────────┼────────┤
+      │ 1. (a)        │  ... 公式/方案 ...               │ M1 A1  │
+      │               │  ...                             │ A1*    │
+      │               │                              (3) │        │
+      │ (b)           │  ...                             │ M1     │
+      │               │                              (3) │        │
+      │ (c) (i)       │  ...                             │ M1 A1  │
+      │ (ii)          │  ...                             │ A1     │
+      │               │                          (9 marks)│       │
+      └───────────────┴──────────────────────────────────┴────────┘
+
+    关键特征：
+      - 题号 "1." 或 "1. (a)" 在 Question Number 列（最左列），x0 较小
+      - 子题 "(b)", "(c) (i)" 等也在 Question Number 列，但不以数字开头
+      - 同一题的边界：从 "N." 或 "N. (a)" 行起 → 到下一个 "N+1." 行前
+      - Notes 等内容在 Scheme 列，包含在本题范围内
 
     返回：
-      {q_num: [(page_idx, y_top, y_bottom), ...]}  ── 每题的答案区切片列表
+      {q_num: [(page_idx, y_top, y_bottom, x_left, x_right), ...]}
     """
-    # 表头关键词（不区分大小写）
+    # ── 表头关键词（同时支持 "question" 和 "question number"）──
     HDR_WORDS = {'question', 'scheme', 'marks'}
-    # 题号模式：纯数字 "1" "12" 或 "1(a)" "1a" 等（取首数字作 q_num）
-    Q_NUM_PAT = re.compile(r'^(\d{1,2})')
 
-    # 第一步：找所有含 Question/Scheme/Marks 表头的页面及其 y 坐标
-    # 返回 [(page_idx, header_y_bottom)]
-    header_positions = []
+    # ── 题号模式：匹配 "1", "1.", "1. (a)", "1.(a)", "1 (a)", "12." 等 ──
+    # 要求：行首是 1-2 位数字，后面可接 "." / " " / "(" 或行尾
+    Q_NUM_PAT = re.compile(r'^(\d{1,2})[.\s(]')
+    # 也匹配纯数字行（如仅 "1" 占一行的情况）
+    Q_NUM_ONLY = re.compile(r'^(\d{1,2})$')
+
+    # ── 第一步：找所有含 Question/Scheme/Marks 表头的页面及其 y_bottom ──
+    header_positions = []   # [(page_idx, header_y_bottom)]
+
     for pg_i in range(doc.page_count):
         page = doc[pg_i]
-        ph   = page.rect.height
         try:
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
             continue
 
-        # 收集本页所有文本 block，按 y0 排序
-        text_lines = []   # (y0, y1, x0, text_lower)
+        # 收集本页文本行 (y0, y1, x0, text_lower)
+        text_lines = []
         for b in blocks:
             if b.get('type') != 0:
                 continue
@@ -1969,20 +1988,17 @@ def _detect_edexcel_maths_ms_table(doc):
                     continue
                 bbox = line['bbox']
                 text_lines.append((bbox[1], bbox[3], bbox[0], ltxt))
-
         text_lines.sort(key=lambda x: x[0])
 
-        # 滑动窗口：查找同一"行带"（y差<15pt）中同时含 question+scheme+marks 的行
-        # 采用更宽松策略：在连续 3 行内（y跨度 < 30pt）找到三个关键词
+        # 滑动窗口（y 跨度 < 40pt）检测 question + scheme + marks 同时出现
         n = len(text_lines)
         for i in range(n):
-            y0_i, y1_i, x0_i, txt_i = text_lines[i]
-            # 收集从 i 开始 y 范围内 30pt 的行
+            y0_i = text_lines[i][0]
             window_words = set()
-            window_y1 = y1_i
+            window_y1    = text_lines[i][1]
             for j in range(i, n):
                 y0_j, y1_j, x0_j, txt_j = text_lines[j]
-                if y0_j > y0_i + 30:
+                if y0_j > y0_i + 40:
                     break
                 for hw in HDR_WORDS:
                     if hw in txt_j:
@@ -1990,23 +2006,16 @@ def _detect_edexcel_maths_ms_table(doc):
                 window_y1 = max(window_y1, y1_j)
             if HDR_WORDS <= window_words:
                 header_positions.append((pg_i, window_y1))
-                break   # 本页只需找一次
+                break   # 本页只取一次
 
     if not header_positions:
         return {}
 
-    # 第二步：在每个 header_positions 对应的区域之后，按题号扫描答案行
-    # 构建全局答案边界：{q_num: [(page_idx, y_top, y_bottom), ...]}
-    answers = {}   # {q_num: [(page_idx, y_top, y_bot)]}
-
-    # 为便于处理跨页，先把所有"感兴趣的页"上的文本行收集起来
-    # 从第一个 header 页开始
+    # ── 第二步：收集所有表头页之后的文本行 ──
     first_hdr_pg = header_positions[0][0]
+    hdr_set = {pg: hy for pg, hy in header_positions}   # {page_idx: header_y_bottom}
 
-    # 构建 (page_idx, y0, y1, x0, raw_text) 全局列表（从表头页开始）
-    all_content = []   # (page_idx, y0, y1, x0, text)
-    hdr_set = {pg: hy for pg, hy in header_positions}
-
+    all_content = []   # (page_idx, y0, y1, x0, raw_text)
     for pg_i in range(first_hdr_pg, doc.page_count):
         page = doc[pg_i]
         ph   = page.rect.height
@@ -2014,65 +2023,100 @@ def _detect_edexcel_maths_ms_table(doc):
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
             continue
-
-        # 本页答案内容的起始 y（header 之后，或页面顶部）
         content_y_start = hdr_set.get(pg_i, 0)
-
         for b in blocks:
             if b.get('type') != 0:
                 continue
             for line in b.get('lines', []):
-                bbox  = line['bbox']
+                bbox = line['bbox']
                 y0, y1, x0 = bbox[1], bbox[3], bbox[0]
-                if y0 < content_y_start - 2:   # 在 header 上方，跳过
+                if y0 < content_y_start - 2:
                     continue
-                if y0 > ph - 30:   # 页脚页码区域跳过
+                if y0 > ph - 28:   # 跳过页脚
                     continue
                 ltxt = ''.join(s['text'] for s in line['spans']).strip()
                 if not ltxt:
                     continue
                 all_content.append((pg_i, y0, y1, x0, ltxt))
 
-    # 第三步：在 all_content 中找题号行，划定每题答案区
-    # 题号行特征：x0 较小（左列）且首字符是数字
-    # Edexcel MS 表格：Question 列 x0 通常 < 80pt
-    Q_COL_MAX_X = 90   # Question 列右边界（pt），超过此值不认为是题号列
+    # ── 第三步：在 Question Number 列找题号行 ──
+    # Question Number 列：x0 通常在 28~100pt 之间（A4 页面，左边距约 42pt）
+    # 放宽到 110pt 以应对不同版本排版
+    Q_COL_MAX_X = 110
 
-    q_boundaries = []  # [(q_num, page_idx, y_top)]
-    for idx, (pg_i, y0, y1, x0, ltxt) in enumerate(all_content):
+    # 先确定 Question 列的实际右边界（通过表头行定位）
+    # 寻找包含 "scheme" 的行，其 x0 即为 Scheme 列起始，也是 Question 列右边界
+    scheme_col_x = None
+    for pg_i, hy in header_positions:
+        page = doc[pg_i]
+        try:
+            blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
+        except Exception:
+            continue
+        for b in blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
+                ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
+                if 'scheme' in ltxt and 'question' not in ltxt:
+                    scheme_col_x = line['bbox'][0]
+                    break
+            if scheme_col_x is not None:
+                break
+        if scheme_col_x is not None:
+            break
+
+    # 如果找到 Scheme 列起始，以此作为 Question Number 列右边界（加 10pt 容差）
+    if scheme_col_x and scheme_col_x > 40:
+        Q_COL_MAX_X = scheme_col_x + 10
+    Q_COL_MAX_X = min(Q_COL_MAX_X, 200)   # 不超过 200pt（防止异常值）
+
+    q_boundaries = []   # [(q_num, page_idx, y_top)]
+    seen_qnums   = set()
+
+    for pg_i, y0, y1, x0, ltxt in all_content:
+        # 必须在 Question Number 列内
         if x0 > Q_COL_MAX_X:
             continue
-        m = Q_NUM_PAT.match(ltxt)
+        # 匹配题号
+        stripped = ltxt.strip()
+        m = Q_NUM_PAT.match(stripped) or Q_NUM_ONLY.match(stripped)
         if not m:
             continue
         q_num = int(m.group(1))
-        if not (1 <= q_num <= 20):
+        if not (1 <= q_num <= 30):   # 最多支持 30 题
             continue
-        # 避免重复（同一题号只取第一次出现）
-        existing = [b for b in q_boundaries if b[0] == q_num]
-        if existing:
+        if q_num in seen_qnums:
+            continue   # 同一题号只取第一次
+
+        # 校验：在同一页、y 距离 50pt 内，Scheme 列（x > Q_COL_MAX_X - 10）有内容
+        # 用 50pt 宽窗口以兼容"题号行单独占行"和"题号与第一子题同行"两种情况
+        has_scheme_nearby = any(
+            c[0] == pg_i and abs(c[1] - y0) < 50 and c[3] > (Q_COL_MAX_X - 10)
+            for c in all_content
+        )
+        if not has_scheme_nearby:
             continue
-        # 额外过滤：确认同一行或相邻列有 Scheme 内容（x > Q_COL_MAX_X）
-        # 即本行或 y 相近行中有 x > Q_COL_MAX_X 的内容
-        nearby = [c for c in all_content
-                  if c[0] == pg_i and abs(c[1] - y0) < 15 and c[3] > Q_COL_MAX_X]
-        if not nearby:
-            continue
+
+        seen_qnums.add(q_num)
         q_boundaries.append((q_num, pg_i, y0))
 
     if not q_boundaries:
         return {}
 
+    # 按题号排序（而非出现顺序，以防 PDF 乱序）
     q_boundaries.sort(key=lambda x: x[0])
 
-    # 第四步：根据题号边界，为每题确定答案区切片
+    # ── 第四步：根据题号边界生成每题的渲染切片 ──
+    answers = {}
+
     for i, (q_num, pg_start, y_top) in enumerate(q_boundaries):
-        # 本题结束：下一题开始处，或文档末尾
+        # 本题结束位置：下一题题号行的 y_top，或文档末尾
         if i + 1 < len(q_boundaries):
             next_q_num, next_pg, next_y = q_boundaries[i + 1]
         else:
-            next_pg  = doc.page_count - 1
-            next_y   = doc[next_pg].rect.height - 30
+            next_pg = doc.page_count - 1
+            next_y  = doc[next_pg].rect.height - 28
 
         slices = []
         for pg_i in range(pg_start, next_pg + 1):
@@ -2080,14 +2124,16 @@ def _detect_edexcel_maths_ms_table(doc):
             ph   = page.rect.height
             pw   = page.rect.width
 
-            top    = y_top if pg_i == pg_start else (hdr_set.get(pg_i, 36))
-            bottom = next_y if pg_i == next_pg else (ph - 30)
+            # 本页起始 y：首页用 y_top，续页从表头之后开始（避免把新页表头也截进来）
+            top = y_top if pg_i == pg_start else hdr_set.get(pg_i, 36)
+            # 本页结束 y：末页用 next_y，中间页用页底（去掉页脚）
+            bottom = next_y if pg_i == next_pg else (ph - 28)
 
-            # 横向：从左边距到右边距（MS 表格通常铺满页面）
-            left  = 28
-            right = pw - 28
+            # 横向：从页面左边距到右边距（表格铺满页面）
+            left  = 26
+            right = pw - 26
 
-            if bottom > top + 8:
+            if bottom > top + 6:
                 slices.append((pg_i, top, bottom, left, right))
 
         if slices:
