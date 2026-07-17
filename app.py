@@ -4639,6 +4639,513 @@ def load_workbook():
         return jsonify({'error': str(e)}), 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 云端题库系统 v2
+# 数据结构（R2 Key / 本地路径）：
+#   cloud_db/subjects.json              — 全局学科+考试局元数据
+#   cloud_db/{subject}/{board}/topics.json  — 该学科考试局的知识点树（一级/二级）
+#   cloud_db/{subject}/{board}/{topic1}/{topic2}/{qid}.json  — 单题元数据
+#   cloud_db/images/{qid}.jpg           — 题目图片（所有题目图片集中存放）
+#   cloud_db/stats.json                 — 全局统计缓存（定期更新）
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── 学科配置 ──
+_CLOUD_SUBJECTS = ['数学 Maths', '物理 Physics', '化学 Chemistry',
+                   '生物 Biology', '高数 Further Maths', '经济 Economics',
+                   '商业 Business', '会计 Accounting']
+_CLOUD_BOARDS   = ['CAIE', 'Edexcel', 'AQA', 'OCR', 'IB', 'AP']
+
+# 知识点树：从现有 syllabus JSON 中加载（cambridge / edexcel_maths），
+# 运行时根据 board+subject 动态确定使用哪套知识点
+
+def _cloud_prefix(subject: str = '', board: str = '', topic1: str = '',
+                   topic2: str = '', qid: str = '') -> str:
+    """生成云端题库的存储 key（R2 key 或本地路径）。"""
+    def _safe(s):
+        return re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff. ]', '_', s).strip()
+
+    parts = ['cloud_db']
+    if subject: parts.append(_safe(subject))
+    if board:   parts.append(_safe(board))
+    if topic1:  parts.append(_safe(topic1))
+    if topic2:  parts.append(_safe(topic2))
+    if qid:     parts.append(qid)
+
+    if storage.is_r2_mode():
+        return '/'.join(parts)
+    else:
+        base = os.path.join(os.path.dirname(__file__), 'uploads')
+        return os.path.join(base, *parts)
+
+
+def _cloud_img_key(qid: str) -> str:
+    """图片存储 key"""
+    if storage.is_r2_mode():
+        return f'cloud_db/images/{qid}.jpg'
+    else:
+        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db', 'images')
+        os.makedirs(base, exist_ok=True)
+        return os.path.join(base, f'{qid}.jpg')
+
+
+def _cloud_stats_key() -> str:
+    if storage.is_r2_mode():
+        return 'cloud_db/_stats.json'
+    else:
+        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db')
+        os.makedirs(base, exist_ok=True)
+        return os.path.join(base, '_stats.json')
+
+
+def _list_cloud_questions(subject: str, board: str,
+                          topic1: str = '', topic2: str = '') -> list:
+    """列出指定路径下所有题目元数据（JSON文件）的 key 列表。"""
+    prefix = _cloud_prefix(subject, board, topic1, topic2)
+    if storage.is_r2_mode():
+        prefix_key = prefix + '/'
+        all_keys   = storage.list_prefix(prefix_key)
+        return [k for k in all_keys if k.endswith('.json') and not k.endswith('_meta.json')]
+    else:
+        results = []
+        if not os.path.isdir(prefix):
+            return results
+        import glob as _glob
+        pattern = os.path.join(prefix, '**', '*.json')
+        for fp in _glob.glob(pattern, recursive=True):
+            if not os.path.basename(fp).startswith('_'):
+                results.append(fp)
+        return results
+
+
+def _load_cloud_question(key: str) -> dict | None:
+    """从 key 加载单题元数据。"""
+    if storage.is_r2_mode():
+        return storage.load_json(key)
+    else:
+        try:
+            with open(key, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+
+def _save_cloud_question(key: str, data: dict):
+    """保存单题元数据到 key。"""
+    if storage.is_r2_mode():
+        storage.store_json(key, data)
+    else:
+        os.makedirs(os.path.dirname(key), exist_ok=True)
+        with open(key, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _build_stats_cache() -> dict:
+    """
+    重新计算全局统计缓存，返回统计对象：
+    {
+      total: int,
+      by_subject: {subject: {total, by_board: {board: {total, by_topic1: {t1: {total, by_topic2: {t2: int}}}}}}}
+    }
+    """
+    stats = {'total': 0, 'by_subject': {}}
+
+    for subj in _CLOUD_SUBJECTS:
+        for board in _CLOUD_BOARDS:
+            keys = _list_cloud_questions(subj, board)
+            if not keys:
+                continue
+            subj_stats = stats['by_subject'].setdefault(subj, {'total': 0, 'by_board': {}})
+            board_stats = subj_stats['by_board'].setdefault(board, {'total': 0, 'by_topic1': {}})
+
+            for key in keys:
+                q = _load_cloud_question(key)
+                if not q:
+                    continue
+                t1 = q.get('topic1', '未分类')
+                t2 = q.get('topic2', '未分类')
+                t1_stats = board_stats['by_topic1'].setdefault(t1, {'total': 0, 'by_topic2': {}})
+                t1_stats['by_topic2'][t2] = t1_stats['by_topic2'].get(t2, 0) + 1
+                t1_stats['total'] += 1
+                board_stats['total'] += 1
+                subj_stats['total'] += 1
+                stats['total'] += 1
+
+    # 写缓存
+    key = _cloud_stats_key()
+    if storage.is_r2_mode():
+        storage.store_json(key, stats)
+    else:
+        os.makedirs(os.path.dirname(key), exist_ok=True)
+        with open(key, 'w', encoding='utf-8') as f:
+            json.dump(stats, f, ensure_ascii=False)
+    return stats
+
+
+def _get_stats_cache() -> dict:
+    """读取统计缓存，不存在则返回空。"""
+    key = _cloud_stats_key()
+    if storage.is_r2_mode():
+        return storage.load_json(key) or {}
+    else:
+        try:
+            with open(key, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+
+def _invalidate_stats():
+    """删除统计缓存（下次读取时重建）。"""
+    key = _cloud_stats_key()
+    try:
+        if storage.is_r2_mode():
+            storage.delete_object(key)
+        else:
+            os.remove(key)
+    except Exception:
+        pass
+
+
+# ── API: 获取云端题库基本配置 ──
+@app.route('/api/cloud_library/config', methods=['GET'])
+def cloud_library_config():
+    """返回学科列表、考试局列表。"""
+    return jsonify({
+        'subjects': _CLOUD_SUBJECTS,
+        'boards':   _CLOUD_BOARDS,
+    })
+
+
+# ── API: 获取全局/分级统计 ──
+@app.route('/api/cloud_library/stats', methods=['GET'])
+def cloud_library_stats():
+    """
+    返回云端题库统计（先查缓存，缓存失效时重算）。
+    ?rebuild=1  强制重算
+    """
+    rebuild = request.args.get('rebuild', '0') == '1'
+    if rebuild:
+        stats = _build_stats_cache()
+    else:
+        stats = _get_stats_cache()
+        if not stats:
+            stats = _build_stats_cache()
+    return jsonify(stats)
+
+
+# ── API: 保存题目到云端题库 ──
+@app.route('/api/cloud_library/save_questions', methods=['POST'])
+def cloud_library_save_questions():
+    """
+    将选中的题目批量保存到云端题库。
+    请求体：{
+      session_id: str,
+      questions: [{
+        q_num: int,
+        file_idx: int,
+        subject: str,           # 学科
+        board: str,             # 考试局
+        topic1: str,            # 知识点一级标题
+        topic2: str,            # 知识点二级标题（可为空）
+        difficulty: int|null,   # 1-5
+        topics: [...],          # 原始 topics 数组
+        exam_date: str,         # "October 2023"
+        source: str,            # 'cambridge'|'edexcel'|...
+        paper_type: str,
+        maths_unit: str,
+        img_bytes_b64: str|null  # 若前端已有图片 base64，直接传；否则服务端裁图
+      }]
+    }
+    返回：{saved: int, failed: int, ids: [...]}
+    """
+    import base64 as _b64
+    data       = request.json or {}
+    session_id = data.get('session_id', '')
+    questions  = data.get('questions', [])
+
+    if not questions:
+        return jsonify({'error': '没有题目数据'}), 400
+
+    sess = _get_session(session_id) if session_id else None
+
+    from collections import defaultdict
+    file_groups = defaultdict(list)  # file_idx -> [(list_pos, q)]
+    b64_cache   = {}                 # list_pos -> b64 string
+
+    for i, q in enumerate(questions):
+        if q.get('img_bytes_b64'):
+            b64_cache[i] = q['img_bytes_b64']
+        else:
+            file_groups[int(q.get('file_idx', q.get('gIdx', 0)))].append((i, q))
+
+    # 从 PDF session 裁图
+    for file_idx, items in file_groups.items():
+        if not sess or file_idx >= len(sess):
+            continue
+        group      = sess[file_idx]
+        save_path  = group['path']
+        paper_type = group['paper_type']
+        q_meta     = group['questions']
+        if not os.path.exists(save_path):
+            continue
+        try:
+            doc = fitz.open(save_path)
+            for (i, q) in items:
+                q_num = int(q.get('q_num', 0))
+                q_idx = next((qi for qi, qo in enumerate(q_meta) if qo['q_num'] == q_num), None)
+                if q_idx is None:
+                    continue
+                img_bytes, _, _ = crop_question_image(doc, q_meta, q_idx, dpi=150, paper_type=paper_type)
+                from PIL import Image as _PIL
+                _im = _PIL.open(io.BytesIO(img_bytes))
+                buf = io.BytesIO()
+                _im.convert('RGB').save(buf, format='JPEG', quality=88)
+                b64_cache[i] = _b64.b64encode(buf.getvalue()).decode()
+            doc.close()
+        except Exception as e:
+            print(f'[cloud_save] crop error file_idx={file_idx}: {e}')
+
+    saved = 0
+    failed = 0
+    saved_ids = []
+
+    for i, q in enumerate(questions):
+        b64 = b64_cache.get(i, '')
+        subject  = q.get('subject', '数学 Maths')
+        board    = q.get('board', 'CAIE')
+        topic1   = (q.get('topic1') or '未分类').strip()
+        topic2   = (q.get('topic2') or '通用').strip()
+
+        # 生成唯一题目ID
+        qid = str(uuid.uuid4())[:12]
+
+        # 保存图片
+        if b64:
+            try:
+                img_data = _b64.b64decode(b64)
+                img_key  = _cloud_img_key(qid)
+                if storage.is_r2_mode():
+                    storage.store_bytes(img_key, img_data)
+                else:
+                    with open(img_key, 'wb') as f:
+                        f.write(img_data)
+            except Exception as e:
+                print(f'[cloud_save] img save error qid={qid}: {e}')
+                failed += 1
+                continue
+
+        # 构建元数据（不含图片 base64，图片单独存）
+        q_meta_save = {
+            'qid':        qid,
+            'q_num':      q.get('q_num'),
+            'subject':    subject,
+            'board':      board,
+            'topic1':     topic1,
+            'topic2':     topic2,
+            'difficulty': q.get('difficulty'),
+            'topics':     q.get('topics', []),
+            'exam_date':  q.get('exam_date', ''),
+            'source':     q.get('source', ''),
+            'paper_type': q.get('paper_type', ''),
+            'maths_unit': q.get('maths_unit', ''),
+            'has_image':  bool(b64),
+            'saved_at':   __import__('datetime').datetime.utcnow().isoformat(),
+        }
+
+        # 写元数据 JSON
+        meta_key = _cloud_prefix(subject, board, topic1, topic2) + \
+                   (f'/{qid}.json' if storage.is_r2_mode() else f'{os.sep}{qid}.json')
+        try:
+            _save_cloud_question(meta_key, q_meta_save)
+            saved += 1
+            saved_ids.append(qid)
+        except Exception as e:
+            print(f'[cloud_save] meta save error qid={qid}: {e}')
+            failed += 1
+
+    # 失效统计缓存
+    if saved > 0:
+        _invalidate_stats()
+
+    return jsonify({'saved': saved, 'failed': failed, 'ids': saved_ids})
+
+
+# ── API: 查询云端题库题目列表 ──
+@app.route('/api/cloud_library/questions', methods=['GET'])
+def cloud_library_questions():
+    """
+    分页查询某节点下的题目列表。
+    参数：subject, board, topic1(可选), topic2(可选), page(默认1), per_page(默认30)
+    返回：{questions: [...], total: int, page: int, pages: int}
+    """
+    subject  = request.args.get('subject', '')
+    board    = request.args.get('board', '')
+    topic1   = request.args.get('topic1', '')
+    topic2   = request.args.get('topic2', '')
+    page     = max(1, int(request.args.get('page', 1)))
+    per_page = min(100, int(request.args.get('per_page', 30)))
+
+    if not subject or not board:
+        return jsonify({'error': '必须提供 subject 和 board'}), 400
+
+    keys = _list_cloud_questions(subject, board, topic1, topic2)
+    total = len(keys)
+    start = (page - 1) * per_page
+    end   = start + per_page
+    page_keys = keys[start:end]
+
+    questions = []
+    for key in page_keys:
+        q = _load_cloud_question(key)
+        if q:
+            # 附上图片 URL（供前端展示）
+            q['img_url'] = f'/api/cloud_library/image/{q.get("qid", "")}'
+            questions.append(q)
+
+    return jsonify({
+        'questions': questions,
+        'total':     total,
+        'page':      page,
+        'pages':     max(1, (total + per_page - 1) // per_page),
+    })
+
+
+# ── API: 获取题目图片 ──
+@app.route('/api/cloud_library/image/<qid>', methods=['GET'])
+def cloud_library_image(qid):
+    """返回云端题库中指定题目的图片（JPEG）。"""
+    # 防注入
+    qid = re.sub(r'[^A-Za-z0-9\-_]', '', qid)
+    img_key = _cloud_img_key(qid)
+    if storage.is_r2_mode():
+        data = storage.load_bytes(img_key)
+        if not data:
+            return jsonify({'error': '图片不存在'}), 404
+        return send_file(io.BytesIO(data), mimetype='image/jpeg')
+    else:
+        if not os.path.isfile(img_key):
+            return jsonify({'error': '图片不存在'}), 404
+        return send_file(img_key, mimetype='image/jpeg')
+
+
+# ── API: 删除云端题库题目 ──
+@app.route('/api/cloud_library/delete_question/<qid>', methods=['DELETE'])
+def cloud_library_delete_question(qid):
+    """删除单题（元数据 + 图片）。"""
+    subject = request.args.get('subject', '')
+    board   = request.args.get('board', '')
+    topic1  = request.args.get('topic1', '')
+    topic2  = request.args.get('topic2', '')
+
+    qid = re.sub(r'[^A-Za-z0-9\-_]', '', qid)
+    meta_key = _cloud_prefix(subject, board, topic1, topic2) + \
+               (f'/{qid}.json' if storage.is_r2_mode() else f'{os.sep}{qid}.json')
+    img_key  = _cloud_img_key(qid)
+
+    if storage.is_r2_mode():
+        storage.delete_object(meta_key)
+        storage.delete_object(img_key)
+    else:
+        for p in [meta_key, img_key]:
+            try: os.remove(p)
+            except Exception: pass
+
+    _invalidate_stats()
+    return jsonify({'ok': True})
+
+
+# ── API: 清空整个云端题库（危险操作，需要确认参数）──
+@app.route('/api/cloud_library/clear_all', methods=['POST'])
+def cloud_library_clear_all():
+    """
+    清空所有云端题库数据。
+    需要请求体携带 {"confirm": "CLEAR_ALL"}
+    """
+    data = request.json or {}
+    if data.get('confirm') != 'CLEAR_ALL':
+        return jsonify({'error': '需要确认参数 confirm=CLEAR_ALL'}), 400
+
+    if storage.is_r2_mode():
+        storage.delete_prefix('cloud_db/')
+    else:
+        import shutil
+        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db')
+        shutil.rmtree(base, ignore_errors=True)
+        os.makedirs(base, exist_ok=True)
+
+    _invalidate_stats()
+    return jsonify({'ok': True, 'message': '已清空云端题库'})
+
+
+# ── API: 获取四级目录树（含各层级题目数量） ──
+@app.route('/api/cloud_library/tree', methods=['GET'])
+def cloud_library_tree():
+    """
+    返回完整的四级目录树：
+    学科 → 考试局 → 知识点一级 → 知识点二级，每级带题目数量。
+    优先使用统计缓存；若缓存不存在则实时扫描。
+    ?subject=  可过滤只返回该学科
+    ?board=    可过滤只返回该考试局
+    """
+    filter_subject = request.args.get('subject', '')
+    filter_board   = request.args.get('board', '')
+
+    stats = _get_stats_cache()
+    if not stats:
+        stats = _build_stats_cache()
+
+    by_subj = stats.get('by_subject', {})
+
+    subjects_out = []
+    for subj in _CLOUD_SUBJECTS:
+        if filter_subject and subj != filter_subject:
+            continue
+        subj_data  = by_subj.get(subj, {})
+        subj_total = subj_data.get('total', 0)
+
+        boards_out = []
+        for board in _CLOUD_BOARDS:
+            if filter_board and board != filter_board:
+                continue
+            board_data  = subj_data.get('by_board', {}).get(board, {})
+            board_total = board_data.get('total', 0)
+
+            topics1_out = []
+            for t1, t1_data in sorted(board_data.get('by_topic1', {}).items()):
+                t1_total = t1_data.get('total', 0)
+                topics2_out = []
+                for t2, t2_cnt in sorted(t1_data.get('by_topic2', {}).items()):
+                    topics2_out.append({'name': t2, 'count': t2_cnt})
+                topics1_out.append({'name': t1, 'count': t1_total, 'subtopics': topics2_out})
+
+            boards_out.append({
+                'name':    board,
+                'count':   board_total,
+                'topics':  topics1_out,
+            })
+
+        subjects_out.append({
+            'name':   subj,
+            'count':  subj_total,
+            'boards': boards_out,
+        })
+
+    return jsonify({
+        'total':    stats.get('total', 0),
+        'subjects': subjects_out,
+    })
+
+
+# ── API: 批量导入题目图片后保存到云端题库（支持从 session 批量推送）──
+@app.route('/api/cloud_library/push_from_session', methods=['POST'])
+def cloud_library_push_from_session():
+    """
+    从当前 session 推送指定题目到云端题库（供"保存到云端题库"按钮调用）。
+    与 save_questions 的区别：此接口支持更丰富的批量配置。
+    """
+    return cloud_library_save_questions()
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 3000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
