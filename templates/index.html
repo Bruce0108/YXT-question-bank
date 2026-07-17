@@ -225,6 +225,12 @@
   .src-tag.edexcel{background:#ffe4e6;color:var(--rose)}
   .exam-date-tag{font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;background:#fef3c7;color:#92400e;white-space:nowrap;flex-shrink:0}
   .paper-date-badge{font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:#fef3c7;color:#92400e;white-space:nowrap}
+  /* MS 关联徽标 */
+  .ms-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;background:#dcfce7;color:#15803d;white-space:nowrap;flex-shrink:0;border:1px solid #bbf7d0;letter-spacing:.5px}
+  /* 答案区域 */
+  .qc-answer-wrap{border-top:1px solid #bbf7d0;margin-top:0;background:#f0fdf4}
+  .qc-answer-bar{padding:5px 10px;font-size:11px;font-weight:600;color:#15803d;background:#dcfce7;border-bottom:1px solid #bbf7d0;display:flex;align-items:center;gap:5px}
+  .qc-answer-img{width:100%;display:block;}
 
   /* Modal */
   .mo{position:fixed;inset:0;background:rgba(15,23,42,.72);z-index:200;display:none;overflow:auto;padding:20px;backdrop-filter:blur(4px)}
@@ -397,6 +403,7 @@
         <div class="ico">📋</div>
         <p><strong>点击选择</strong> 或拖拽 PDF 到此处</p>
         <p style="margin-top:4px;color:var(--g400);font-size:11px">支持同时选择多个文件 · 自动区分考试局</p>
+        <p style="margin-top:3px;color:#15803d;font-size:11px;font-weight:500">💡 可同时上传 Question Paper + Mark Scheme，自动关联答案</p>
         <input type="file" id="fileIn" accept=".pdf" multiple>
       </div>
 
@@ -915,6 +922,14 @@
           当前 DPI：<b id="pdfDpiShow">150</b>
         </div>
       </div>
+      <div class="pdf-field" id="pdfAnswerToggleWrap" style="display:none">
+        <label>📋 Mark Scheme 答案</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 0">
+          <input type="checkbox" id="pdfIncludeAnswer" checked style="width:16px;height:16px;cursor:pointer">
+          <span style="font-size:13px;color:var(--g700)">在 PDF 中包含答案（Mark Scheme）</span>
+        </label>
+        <div style="font-size:11px;color:var(--g400);margin-top:2px">取消勾选后，导出的 PDF 不含答案部分，适合打印练习</div>
+      </div>
     </div>
     <div class="mo-ft">
       <button class="btn btn-outline" onclick="closePdfModal()">取消</button>
@@ -1053,6 +1068,7 @@ function _autoRestore() {
     renderStats();
     renderSyllabusCard();
     _updateDiffFilterVisibility();
+    _updatePdfAnswerToggle();       // 恢复后也检查 MS 开关
     // 异步加载考纲（不阻塞恢复）
     _loadAllSyllabi();
     const total = allQuestions.length;
@@ -1181,12 +1197,20 @@ async function doUpload(files) {
     renderStats();
     renderSyllabusCard();
     _updateDiffFilterVisibility();  // 决定是否显示难度筛选栏
+    _updatePdfAnswerToggle();       // 决定是否显示「包含答案」开关
 
     // 加载考纲（按需带 unit 过滤）
     _loadAllSyllabi();
 
+    // MS 关联提示
+    const msGroups = data.groups.filter(g => g.has_ms);
     const srcLabels = [...new Set(groups.map(g => g.source))].join(' + ');
-    toast(`成功识别 ${total} 道题（${srcLabels}，共 ${data.groups.length} 份试卷）`, 'ok');
+    if (msGroups.length > 0) {
+      const msNames = msGroups.map(g => g.ms_file || 'Mark Scheme').join(', ');
+      toast(`成功识别 ${total} 道题（${srcLabels}，共 ${data.groups.length} 份试卷）✅ 已关联 Mark Scheme：${msNames}`, 'ok');
+    } else {
+      toast(`成功识别 ${total} 道题（${srcLabels}，共 ${data.groups.length} 份试卷）`, 'ok');
+    }
 
   } catch(e) {
     fill.style.width = '0%'; ptxt.textContent = '解析失败';
@@ -1207,10 +1231,16 @@ function renderFileList() {
   groups.forEach((g, gi) => {
     const div = document.createElement('div');
     div.className = 'file-item' + (gi === activeGIdx ? ' active' : '');
-    const ptLabel = {'mcq':'MCQ','structured':'大题','edexcel':'Edexcel','edexcel_mcq':'Edexcel MCQ'}[g.paper_type] || g.paper_type;
+    const srcShort = g.source === 'cambridge' ? 'CIE'
+                   : g.source === 'edexcel_maths' ? 'EDX-M'
+                   : g.source === 'edexcel' ? 'EDX' : '?';
+    const msBadge = g.has_ms
+      ? `<span style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:5px;background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;flex-shrink:0" title="已关联 Mark Scheme: ${g.ms_file||''}">MS✓</span>`
+      : '';
     div.innerHTML = `
-      <span class="fi-src ${g.source}">${g.source === 'cambridge' ? 'CIE' : g.source === 'edexcel' ? 'EDX' : '?'}</span>
+      <span class="fi-src ${g.source}">${srcShort}</span>
       <span class="fi-name" title="${g.filename}">${g.filename}</span>
+      ${msBadge}
       <span class="fi-badge">${g.total_questions}题</span>`;
     div.onclick = () => { activeGIdx = gi; renderFileList(); };
     el.appendChild(div);
@@ -1480,10 +1510,25 @@ function renderGrid() {
       card.className = 'qc' + (st?' st':'');
       card.id = `qc-${uid}`;
       const examDateHtml = q.exam_date ? `<span class="exam-date-tag">${q.exam_date}</span>` : '';
+
+      // 答案区域（仅当题目有 answer_b64 时显示）
+      const hasAnswer = !!(q.answer_b64);
+      const answerHtml = hasAnswer ? `
+        <div class="qc-answer-wrap" id="ans-${uid}" style="display:none">
+          <div class="qc-answer-bar">📋 Mark Scheme 答案</div>
+          <img class="qc-answer-img" src="data:image/jpeg;base64,${q.answer_b64}"
+               alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">
+        </div>` : '';
+      const ansToggleHtml = hasAnswer ? `
+        <button class="btn btn-sm btn-ans-toggle" id="ansbtn-${uid}"
+                style="flex:1;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0"
+                onclick="toggleAnswer('${uid}',event)">👁 显示答案</button>` : '';
+
       card.innerHTML = `
         <div class="qc-hdr">
           <span class="q-badge${st?' st':''}">${st?'第':'Q'}${q.q_num}${st?'题':''}</span>
           ${examDateHtml}
+          ${hasAnswer ? '<span class="ms-badge" title="已关联 Mark Scheme 答案">MS</span>' : ''}
           <span class="qpg">${pgInfo}</span>
           <div class="qck" id="ck-${uid}"></div>
         </div>
@@ -1492,8 +1537,10 @@ function renderGrid() {
         <div class="qt-ld${st?' st-h':''}" id="tld-${uid}"><span class="spin">⏳</span></div>
         <img class="qt${st?' st-h':''}" id="th-${uid}" src="" style="display:none"
              onerror="this.style.display='none';document.getElementById('tld-${uid}').innerHTML='⚠️'">
+        ${answerHtml}
         <div class="qc-act">
           <button class="btn btn-outline btn-sm" style="flex:1" onclick="openPrev(${q.q_num},${q.gIdx},event)">🔍 预览</button>
+          ${ansToggleHtml}
           <button class="btn btn-sm" style="flex:1;background:#e0f2fe;color:#0369a1" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},null,event)">✏️ 编辑</button>
           <button class="btn btn-primary btn-sm" style="flex:1" onclick="dlOne(${q.q_num},${q.gIdx},event)">⬇️</button>
         </div>`;
@@ -1506,6 +1553,29 @@ function renderGrid() {
   });
 
   updateSelUI();
+}
+
+// ── 答案显示/隐藏切换 ──
+function toggleAnswer(uid, e) {
+  if (e) e.stopPropagation();
+  const ansWrap = document.getElementById(`ans-${uid}`);
+  const ansBtn  = document.getElementById(`ansbtn-${uid}`);
+  if (!ansWrap) return;
+  const visible = ansWrap.style.display !== 'none';
+  ansWrap.style.display = visible ? 'none' : '';
+  if (ansBtn) {
+    ansBtn.textContent = visible ? '👁 显示答案' : '🙈 隐藏答案';
+    ansBtn.style.background = visible ? '#f0fdf4' : '#fef9c3';
+    ansBtn.style.color       = visible ? '#15803d' : '#854d0e';
+    ansBtn.style.border      = visible ? '1px solid #bbf7d0' : '1px solid #fef08a';
+  }
+}
+
+// ── 更新 PDF modal 的「包含答案」开关可见性 ──
+function _updatePdfAnswerToggle() {
+  const hasAnyAnswer = allQuestions.some(q => q.answer_b64);
+  const wrap = document.getElementById('pdfAnswerToggleWrap');
+  if (wrap) wrap.style.display = hasAnyAnswer ? '' : 'none';
 }
 
 function procThumbQ() {
@@ -2012,7 +2082,8 @@ async function doExportPdf() {
       body: JSON.stringify({
         session_id: sessionId, merged: true,
         sel_by_group, ordered_items, dpi, filename, layout,
-        cover_title: (document.getElementById('pdfCoverTitle')?.value||'').trim()
+        cover_title: (document.getElementById('pdfCoverTitle')?.value||'').trim(),
+        include_answer: document.getElementById('pdfIncludeAnswer')?.checked !== false
       })
     });
     const startData = await startRes.json();
