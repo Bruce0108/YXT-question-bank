@@ -1,0 +1,563 @@
+{
+  "exam_board": "Cambridge International",
+  "subject": "Physics",
+  "code": "9702",
+  "years": "2025-2027",
+  "topics": [
+    {
+      "id": 1,
+      "title": "Physical quantities and units",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "1.1",
+          "title": "Physical quantities",
+          "level": "AS"
+        },
+        {
+          "id": "1.2",
+          "title": "SI units",
+          "level": "AS"
+        },
+        {
+          "id": "1.3",
+          "title": "Errors and uncertainties",
+          "level": "AS"
+        },
+        {
+          "id": "1.4",
+          "title": "Scalars and vectors",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Kinematics",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "2.1",
+          "title": "Equations of motion",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Dynamics",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "3.1",
+          "title": "Momentum and Newton’s laws of motion",
+          "level": "AS"
+        },
+        {
+          "id": "3.2",
+          "title": "Non-uniform motion",
+          "level": "AS"
+        },
+        {
+          "id": "3.3",
+          "title": "Linear momentum and its conservation",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Forces, density and pressure",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "4.1",
+          "title": "Turning effects of forces",
+          "level": "AS"
+        },
+        {
+          "id": "4.2",
+          "title": "Equilibrium of forces",
+          "level": "AS"
+        },
+        {
+          "id": "4.3",
+          "title": "Density and pressure",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Work, energy and power",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "5.1",
+          "title": "Energy conservation",
+          "level": "AS"
+        },
+        {
+          "id": "5.2",
+          "title": "Gravitational potential energy and kinetic energy",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Deformation of solids",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "6.1",
+          "title": "Stress and strain",
+          "level": "AS"
+        },
+        {
+          "id": "6.2",
+          "title": "Elastic and plastic behaviour",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Waves",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "7.1",
+          "title": "Progressive waves",
+          "level": "AS"
+        },
+        {
+          "id": "7.2",
+          "title": "Transverse and longitudinal waves",
+          "level": "AS"
+        },
+        {
+          "id": "7.3",
+          "title": "Doppler effect for sound waves",
+          "level": "AS"
+        },
+        {
+          "id": "7.4",
+          "title": "Electromagnetic spectrum",
+          "level": "AS"
+        },
+        {
+          "id": "7.5",
+          "title": "Polarisation",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Superposition",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "8.1",
+          "title": "Stationary waves",
+          "level": "AS"
+        },
+        {
+          "id": "8.2",
+          "title": "Diffraction",
+          "level": "AS"
+        },
+        {
+          "id": "8.3",
+          "title": "Interference",
+          "level": "AS"
+        },
+        {
+          "id": "8.4",
+          "title": "The diffraction grating",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Electricity",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "9.1",
+          "title": "Electric current",
+          "level": "AS"
+        },
+        {
+          "id": "9.2",
+          "title": "Potential difference and power",
+          "level": "AS"
+        },
+        {
+          "id": "9.3",
+          "title": "Resistance and resistivity",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "D.C. circuits",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "10.1",
+          "title": "Practical circuits",
+          "level": "AS"
+        },
+        {
+          "id": "10.2",
+          "title": "Kirchhoff’s laws",
+          "level": "AS"
+        },
+        {
+          "id": "10.3",
+          "title": "Potential dividers",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Particle physics",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "11.1",
+          "title": "Atoms, nuclei and radiation",
+          "level": "AS"
+        },
+        {
+          "id": "11.2",
+          "title": "Fundamental particles",
+          "level": "AS"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Motion in a circle",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "12.1",
+          "title": "Kinematics of uniform circular motion",
+          "level": "A2"
+        },
+        {
+          "id": "12.2",
+          "title": "Centripetal acceleration",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Gravitational fields",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "13.1",
+          "title": "Gravitational field",
+          "level": "A2"
+        },
+        {
+          "id": "13.2",
+          "title": "Gravitational force between point masses",
+          "level": "A2"
+        },
+        {
+          "id": "13.3",
+          "title": "Gravitational field of a point mass",
+          "level": "A2"
+        },
+        {
+          "id": "13.4",
+          "title": "Gravitational potential",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Temperature",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "14.1",
+          "title": "Thermal equilibrium",
+          "level": "A2"
+        },
+        {
+          "id": "14.2",
+          "title": "Temperature scales",
+          "level": "A2"
+        },
+        {
+          "id": "14.3",
+          "title": "Specific heat capacity and specific latent heat",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Ideal gases",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "15.1",
+          "title": "The mole",
+          "level": "A2"
+        },
+        {
+          "id": "15.2",
+          "title": "Equation of state",
+          "level": "A2"
+        },
+        {
+          "id": "15.3",
+          "title": "Kinetic theory of gases",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Thermodynamics",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "16.1",
+          "title": "Internal energy",
+          "level": "A2"
+        },
+        {
+          "id": "16.2",
+          "title": "The first law of thermodynamics",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Oscillations",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "17.1",
+          "title": "Simple harmonic oscillations",
+          "level": "A2"
+        },
+        {
+          "id": "17.2",
+          "title": "Energy in simple harmonic motion",
+          "level": "A2"
+        },
+        {
+          "id": "17.3",
+          "title": "Damped and forced oscillations, resonance",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Electric fields",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "18.1",
+          "title": "Electric fields and field lines",
+          "level": "A2"
+        },
+        {
+          "id": "18.2",
+          "title": "Uniform electric fields",
+          "level": "A2"
+        },
+        {
+          "id": "18.3",
+          "title": "Electric force between point charges",
+          "level": "A2"
+        },
+        {
+          "id": "18.4",
+          "title": "Electric field of a point charge",
+          "level": "A2"
+        },
+        {
+          "id": "18.5",
+          "title": "Electric potential",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Capacitance",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "19.1",
+          "title": "Capacitors and capacitance",
+          "level": "A2"
+        },
+        {
+          "id": "19.2",
+          "title": "Energy stored in a capacitor",
+          "level": "A2"
+        },
+        {
+          "id": "19.3",
+          "title": "Discharging a capacitor",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Magnetic fields",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "20.1",
+          "title": "Concept of a magnetic field",
+          "level": "A2"
+        },
+        {
+          "id": "20.2",
+          "title": "Force on a current-carrying conductor",
+          "level": "A2"
+        },
+        {
+          "id": "20.3",
+          "title": "Force on a moving charge",
+          "level": "A2"
+        },
+        {
+          "id": "20.4",
+          "title": "Magnetic fields due to currents",
+          "level": "A2"
+        },
+        {
+          "id": "20.5",
+          "title": "Electromagnetic induction",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Alternating currents",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "21.1",
+          "title": "Characteristics of alternating currents",
+          "level": "A2"
+        },
+        {
+          "id": "21.2",
+          "title": "Rectification and smoothing",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "Quantum physics",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "22.1",
+          "title": "Energy and momentum of a photon",
+          "level": "A2"
+        },
+        {
+          "id": "22.2",
+          "title": "Photoelectric effect",
+          "level": "A2"
+        },
+        {
+          "id": "22.3",
+          "title": "Wave-particle duality",
+          "level": "A2"
+        },
+        {
+          "id": "22.4",
+          "title": "Energy levels in atoms and line spectra",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "Nuclear physics",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "23.1",
+          "title": "Mass defect and nuclear binding energy",
+          "level": "A2"
+        },
+        {
+          "id": "23.2",
+          "title": "Radioactive decay",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "Medical physics",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "24.1",
+          "title": "Production and use of ultrasound",
+          "level": "A2"
+        },
+        {
+          "id": "24.2",
+          "title": "Production and use of X-rays",
+          "level": "A2"
+        },
+        {
+          "id": "24.3",
+          "title": "PET scanning",
+          "level": "A2"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "title": "Astronomy and cosmology",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "25.1",
+          "title": "Standard candles",
+          "level": "A2"
+        },
+        {
+          "id": "25.2",
+          "title": "Stellar radii",
+          "level": "A2"
+        },
+        {
+          "id": "25.3",
+          "title": "Hubble’s law and the Big Bang theory",
+          "level": "A2"
+        }
+      ]
+    }
+  ]
+}

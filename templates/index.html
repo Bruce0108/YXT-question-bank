@@ -1,0 +1,2874 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>教学教研题库</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+<style>
+  :root {
+    --blue:#2563eb;--blue-lt:#eff6ff;--blue-dk:#1d4ed8;
+    --green:#16a34a;--red:#dc2626;--amber:#d97706;
+    --purple:#7c3aed;--purple-lt:#f5f3ff;
+    --rose:#e11d48;--orange:#f97316;
+    --g50:#f9fafb;--g100:#f3f4f6;--g200:#e5e7eb;
+    --g400:#9ca3af;--g600:#4b5563;--g800:#1f2937;
+    --sh:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);
+    --sh-lg:0 10px 15px -3px rgba(0,0,0,.1),0 4px 6px -2px rgba(0,0,0,.05);
+    --r:10px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:var(--g100);color:var(--g800);font-size:14px;min-height:100vh}
+
+  /* Header */
+  .hdr{background:#fff;border-bottom:1px solid var(--g200);padding:14px 24px;display:flex;align-items:center;gap:12px;box-shadow:var(--sh);position:sticky;top:0;z-index:100}
+  .hdr-icon{font-size:26px}
+  .hdr h1{font-size:18px;font-weight:700}
+  .hdr p{font-size:12px;color:var(--g400);margin-top:2px}
+  .hdr-r{margin-left:auto;display:flex;align-items:center;gap:10px}
+
+  /* Layout */
+  .wrap{max-width:1500px;margin:0 auto;padding:20px;display:grid;grid-template-columns:340px 1fr;gap:20px}
+  @media(max-width:960px){.wrap{grid-template-columns:1fr}}
+  .sidebar{display:flex;flex-direction:column;gap:14px}
+  .card{background:#fff;border:1px solid var(--g200);border-radius:var(--r);padding:18px;box-shadow:var(--sh)}
+  .card-title{font-size:12px;font-weight:700;color:var(--g600);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+
+  /* Upload */
+  .drop{border:2px dashed var(--g200);border-radius:8px;padding:22px 14px;text-align:center;cursor:pointer;transition:all .2s;background:var(--g50)}
+  .drop:hover,.drop.over{border-color:var(--blue);background:var(--blue-lt)}
+  .drop .ico{font-size:32px;margin-bottom:6px}
+  .drop p{color:var(--g600);font-size:13px}
+  .drop p strong{color:var(--blue)}
+  .drop input{display:none}
+  .drop.ok{border-color:var(--green);background:#f0fdf4}
+
+  /* Paper type pills */
+  .pt-wrap{margin-top:10px}
+  .pt-lbl{font-size:11px;font-weight:700;color:var(--g600);margin-bottom:7px;display:block}
+  .pt-pills{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+  .pt-btn{padding:6px 3px;border-radius:7px;border:2px solid var(--g200);background:#fff;
+    font-size:10px;font-weight:700;cursor:pointer;transition:all .15s;text-align:center;
+    color:var(--g600);line-height:1.4}
+  .pt-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-lt)}
+  .pt-btn.active.auto{border-color:var(--amber);color:var(--amber);background:#fffbeb}
+  .pt-btn.active.mcq{border-color:var(--blue);color:var(--blue);background:var(--blue-lt)}
+  .pt-btn.active.structured{border-color:var(--purple);color:var(--purple);background:var(--purple-lt)}
+  .pt-btn.active.edexcel{border-color:var(--rose);color:var(--rose);background:#fff1f2}
+  .pt-btn.active.edexcel_mcq{border-color:var(--orange);color:var(--orange);background:#fff7ed}
+
+  /* File list */
+  .file-list{margin-top:10px;display:flex;flex-direction:column;gap:5px}
+  .file-item{background:var(--g50);border:1px solid var(--g200);border-radius:6px;padding:7px 10px;display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;transition:all .15s}
+  .file-item:hover{border-color:var(--blue);background:var(--blue-lt)}
+  .file-item.active{border-color:var(--blue);background:var(--blue-lt);font-weight:600}
+  .file-item .fi-src{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;white-space:nowrap}
+  .fi-src.cambridge{background:#dbeafe;color:var(--blue)}
+  .fi-src.edexcel{background:#ffe4e6;color:var(--rose)}
+  .fi-src.unknown{background:var(--g200);color:var(--g600)}
+  .file-item .fi-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fi-badge{font-size:10px;background:var(--g200);padding:1px 6px;border-radius:10px;white-space:nowrap}
+
+  /* Syllabus filter */
+  .syllabus-filter{margin-top:0}
+  .sf-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .sf-search{width:100%;border:1px solid var(--g200);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;margin-bottom:8px}
+  .sf-search:focus{border-color:var(--blue)}
+  .sf-level{display:flex;gap:5px;margin-bottom:8px}
+  .sf-lvl-btn{padding:3px 10px;border-radius:5px;border:1px solid var(--g200);background:#fff;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;color:var(--g600)}
+  .sf-lvl-btn.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .topic-tree{max-height:280px;overflow-y:auto;border:1px solid var(--g200);border-radius:6px}
+  .topic-item{border-bottom:1px solid var(--g200)}
+  .topic-item:last-child{border-bottom:none}
+  .topic-hdr{display:flex;align-items:center;padding:7px 10px;cursor:pointer;gap:6px;background:#fff;transition:background .1s}
+  .topic-hdr:hover{background:var(--g50)}
+  .topic-hdr input[type=checkbox]{width:14px;height:14px;accent-color:var(--blue);flex-shrink:0}
+  .topic-hdr-text{flex:1;font-size:12px;font-weight:600}
+  .topic-hdr-cnt{font-size:10px;color:var(--g400)}
+  .topic-chevron{font-size:10px;color:var(--g400);transition:transform .15s;flex-shrink:0}
+  .topic-chevron.open{transform:rotate(90deg)}
+  .sub-list{display:none;background:var(--g50)}
+  .sub-list.open{display:block}
+  .sub-item{display:flex;align-items:center;padding:5px 10px 5px 28px;gap:6px;border-top:1px solid var(--g200);cursor:pointer;transition:background .1s}
+  .sub-item:hover{background:var(--blue-lt)}
+  .sub-item input[type=checkbox]{width:13px;height:13px;accent-color:var(--blue);flex-shrink:0}
+  .sub-item-text{font-size:11px;flex:1}
+  .sub-cnt{font-size:10px;font-weight:600;background:#e0e7ff;color:#4338ca;padding:1px 5px;border-radius:8px;flex-shrink:0}
+  .sub-id{font-size:10px;color:var(--g400);font-weight:600}
+  .level-badge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px}
+  .level-badge.AS{background:#dbeafe;color:var(--blue)}
+  .level-badge.A2{background:#f3e8ff;color:var(--purple)}
+  .sf-actions{display:flex;gap:6px;margin-top:8px}
+
+  /* Progress */
+  .prog-wrap{margin-top:10px;display:none}
+  .prog-bar{height:5px;background:var(--g200);border-radius:3px;overflow:hidden}
+  .prog-fill{height:100%;background:var(--blue);border-radius:3px;transition:width .3s}
+  .prog-txt{font-size:11px;color:var(--g400);margin-top:4px}
+
+  /* Stats */
+  .stats-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .stat{background:var(--g50);border-radius:8px;padding:10px;text-align:center;border:1px solid var(--g200)}
+  .stat-n{font-size:22px;font-weight:800;color:var(--blue)}
+  .stat-n.purple{color:var(--purple)}
+  .stat-l{font-size:11px;color:var(--g400);margin-top:2px}
+  .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;border:1px solid transparent;margin-top:10px}
+  .badge.mcq{background:var(--blue-lt);color:var(--blue);border-color:#bfdbfe}
+  .badge.structured{background:var(--purple-lt);color:var(--purple);border-color:#ddd6fe}
+  .badge.edexcel{background:#fff1f2;color:var(--rose);border-color:#fecdd3}
+  .badge.edexcel_mcq{background:#fff7ed;color:var(--orange);border-color:#fed7aa}
+
+  /* Settings */
+  .s-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+  .s-row:last-child{margin-bottom:0}
+  .s-lbl{font-size:13px;color:var(--g600)}
+  .s-row select,.s-row input[type=range]{font-size:13px;border:1px solid var(--g200);border-radius:6px;padding:5px 8px;background:#fff;cursor:pointer}
+  .dpi-v{font-size:12px;color:var(--blue);font-weight:700;min-width:48px;text-align:right}
+
+  /* PDF export card */
+  .pdf-mo-box{max-width:440px}
+  .pdf-mo-body{padding:20px}
+  .pdf-field{margin-bottom:14px}
+  .pdf-field label{display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:5px}
+  .pdf-field input,.pdf-field select{width:100%;border:1px solid var(--g200);border-radius:8px;padding:8px 12px;font-size:14px;font-family:inherit;background:#fff;outline:none;transition:border-color .15s}
+  .pdf-field input:focus,.pdf-field select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+  .pdf-preview-info{background:var(--g50);border:1px solid var(--g200);border-radius:8px;padding:12px;font-size:12px;color:var(--g600);margin-bottom:14px}
+  .pdf-preview-info b{color:var(--g800)}
+
+  /* PDF progress bar */
+  .ld-prog-wrap{width:260px;margin-top:4px}
+  .ld-prog-bar{height:8px;background:var(--g200);border-radius:4px;overflow:hidden}
+  .ld-prog-fill{height:100%;background:var(--purple);border-radius:4px;transition:width .3s}
+  .ld-prog-txt{font-size:12px;color:var(--g600);margin-top:6px;text-align:center}
+
+  /* Buttons */
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:8px;border:none;font:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;text-decoration:none}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn-primary{background:var(--blue);color:#fff}
+  .btn-primary:hover:not(:disabled){background:var(--blue-dk)}
+  .btn-success{background:var(--green);color:#fff}
+  .btn-success:hover:not(:disabled){background:#15803d}
+  .btn-outline{background:#fff;color:var(--g600);border:1px solid var(--g200)}
+  .btn-outline:hover:not(:disabled){border-color:var(--blue);color:var(--blue);background:var(--blue-lt)}
+  .btn-purple{background:var(--purple);color:#fff}
+  .btn-purple:hover:not(:disabled){background:#6d28d9}
+  .btn-sm{padding:5px 10px;font-size:12px;border-radius:6px}
+  .btn-block{width:100%;justify-content:center}
+  .divider{height:1px;background:var(--g200);margin:8px 0}
+
+  /* Main */
+  .main{display:flex;flex-direction:column;gap:14px}
+  .toolbar{background:#fff;border:1px solid var(--g200);border-radius:var(--r);padding:11px 15px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:var(--sh)}
+  .tb-sep{width:1px;height:22px;background:var(--g200)}
+
+  /* Grid */
+  .q-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .q-grid.st-mode{grid-template-columns:repeat(auto-fill,minmax(270px,1fr))}
+
+  /* Card */
+  .qc{background:#fff;border:2px solid var(--g200);border-radius:var(--r);overflow:hidden;cursor:pointer;transition:all .2s;box-shadow:var(--sh)}
+  .qc:hover{border-color:var(--blue);box-shadow:var(--sh-lg);transform:translateY(-2px)}
+  .qc.sel{border-color:var(--blue);background:var(--blue-lt)}
+  .qc.st:hover{border-color:var(--purple)}
+  .qc.st.sel{border-color:var(--purple);background:var(--purple-lt)}
+
+  .qc-hdr{padding:7px 9px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--g200);gap:5px}
+  .q-badge{background:var(--blue);color:#fff;font-size:12px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .q-badge.st{background:var(--purple)}
+  .qpg{font-size:11px;color:var(--g400);flex:1;text-align:right}
+  .qck{width:18px;height:18px;border-radius:4px;border:2px solid var(--g200);background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all .15s}
+  .qc.sel .qck{background:var(--blue);border-color:var(--blue);color:#fff}
+  .qc.st.sel .qck{background:var(--purple);border-color:var(--purple)}
+
+  .qt{width:100%;height:152px;object-fit:contain;object-position:top;background:var(--g50);display:block;border-bottom:1px solid var(--g200)}
+  .qt.st-h{height:190px}
+  .qt-ld{background:var(--g100);display:flex;align-items:center;justify-content:center;color:var(--g400);font-size:12px}
+  .qt-ld.st-h{height:190px}
+  .qt-ld:not(.st-h){height:152px}
+  .spin{animation:spin 1s linear infinite;display:inline-block;font-size:20px}
+  .qc-act{padding:7px 9px;display:flex;gap:5px}
+
+  /* 难度星级 */
+  .q-difficulty{padding:4px 9px 3px;display:flex;align-items:center;gap:5px;border-bottom:1px solid var(--g200);min-height:24px}
+  .q-difficulty:empty{display:none;padding:0;border:none}
+  .diff-label{font-size:10px;color:var(--g400);letter-spacing:.3px;white-space:nowrap}
+  .diff-label.no-diff{cursor:pointer;color:#94a3b8;font-style:italic}
+  .diff-label.no-diff:hover{color:#0369a1}
+  .diff-stars{font-size:16px;line-height:1;letter-spacing:1px}
+  .star-icon{cursor:pointer;transition:transform .1s,color .1s}
+  .star-icon:hover{transform:scale(1.3)}
+  .star-icon.full-star{color:#f59e0b}
+  .star-icon.empty-star{color:#d1d5db}
+  .diff-badge{font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:2px}
+  .diff-1{background:#d1fae5;color:#065f46}
+  .diff-2{background:#dbeafe;color:#1d4ed8}
+  .diff-3{background:#fef9c3;color:#713f12}
+  .diff-4{background:#fed7aa;color:#9a3412}
+  .diff-5{background:#fecaca;color:#991b1b}
+
+  /* 知识点标签 */
+  .q-topics{padding:3px 8px 4px;display:flex;flex-wrap:wrap;gap:3px;border-bottom:1px solid var(--g200)}
+  .q-topics:empty{display:none;padding:0;border:none}
+  .topic-tag{font-size:10px;line-height:1.5;padding:1px 6px;border-radius:10px;background:#e0f2fe;color:#0369a1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;cursor:pointer;transition:background .15s}
+  .topic-tag:hover{background:#bfdbfe}
+  .topic-tag.add-tag{background:#f1f5f9;color:#64748b;border:1px dashed #94a3b8;font-size:11px}
+  .topic-tag.add-tag:hover{background:#e2e8f0}
+  .topic-tag.top1{background:#dbeafe;color:#1d4ed8;font-weight:600}
+  .topic-tag.matched{background:#dcfce7;color:#166534;font-weight:700;box-shadow:0 0 0 1px #86efac}
+
+  /* Source group header */
+  .src-group{margin-bottom:20px}
+  .src-group-hdr{display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:8px;border-bottom:2px solid var(--g200)}
+  .src-group-hdr h3{font-size:14px;font-weight:700}
+  .src-tag{font-size:11px;font-weight:700;padding:3px 9px;border-radius:5px}
+  .src-tag.cambridge{background:#dbeafe;color:var(--blue)}
+  .src-tag.edexcel{background:#ffe4e6;color:var(--rose)}
+  .exam-date-tag{font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;background:#fef3c7;color:#92400e;white-space:nowrap;flex-shrink:0}
+  .paper-date-badge{font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:#fef3c7;color:#92400e;white-space:nowrap}
+
+  /* Modal */
+  .mo{position:fixed;inset:0;background:rgba(15,23,42,.72);z-index:200;display:none;overflow:auto;padding:20px;backdrop-filter:blur(4px)}
+  .mo.show{display:flex;align-items:flex-start;justify-content:center}
+  .mo-box{background:#fff;border-radius:14px;max-width:900px;width:100%;box-shadow:0 25px 50px -12px rgba(0,0,0,.25);overflow:hidden}
+  .mo-hdr{padding:14px 18px;border-bottom:1px solid var(--g200);display:flex;align-items:center;justify-content:space-between}
+  .mo-hdr h3{font-size:15px;font-weight:700}
+  .mo-cls{background:var(--g100);border:none;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:15px;color:var(--g600)}
+  .mo-cls:hover{background:var(--g200)}
+  .mo-body{padding:18px;text-align:center;overflow:auto;max-height:78vh}
+  .mo-body img{max-width:100%;border:1px solid var(--g200);border-radius:8px;box-shadow:var(--sh)}
+  .mo-ft{padding:12px 18px;border-top:1px solid var(--g200);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+
+  /* 编辑+预览合体弹窗 */
+  .edit-preview-box{max-width:1100px!important}
+  .edit-preview-body{display:flex;height:72vh;min-height:480px;overflow:hidden}
+  .edit-panel{width:360px;min-width:300px;border-right:1px solid var(--g200);display:flex;flex-direction:column;overflow:hidden}
+  .preview-panel{flex:1;padding:14px;display:flex;flex-direction:column;overflow:auto;background:#f8fafc}
+  .edit-section{padding:12px 14px;border-bottom:1px solid var(--g100)}
+  .edit-section-title{font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px}
+  .edit-diff-row{display:flex;gap:6px;flex-wrap:wrap}
+  .diff-btn{border:2px solid #e5e7eb;background:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:all .15s;display:flex;align-items:center;gap:3px}
+  .diff-btn:hover{border-color:#6366f1;background:#eef2ff}
+  .diff-btn.active{border-color:#4f46e5;background:#4f46e5;color:#fff}
+  /* 二级知识点树 */
+  .edit-topic-tree{flex:1;overflow-y:auto;padding:6px 8px}
+  .tree-chapter{margin-bottom:4px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden}
+  .tree-chapter-hdr{display:flex;align-items:center;gap:6px;padding:7px 10px;background:#f1f5f9;cursor:pointer;user-select:none}
+  .tree-chapter-hdr:hover{background:#e2e8f0}
+  .tree-chapter-chev{font-size:10px;color:#94a3b8;transition:transform .2s;margin-left:auto}
+  .tree-chapter-chev.open{transform:rotate(90deg)}
+  .tree-chapter-cb{accent-color:#4f46e5;width:14px;height:14px;cursor:pointer}
+  .tree-chapter-label{font-size:12px;font-weight:600;color:#1e293b;flex:1}
+  .tree-chapter-id{font-size:10px;color:#64748b;font-family:monospace;background:#e2e8f0;padding:1px 5px;border-radius:4px}
+  .tree-star-btn{background:none;border:none;cursor:pointer;font-size:14px;padding:0 2px;opacity:.4;transition:opacity .15s,transform .15s}
+  .tree-star-btn:hover{opacity:1;transform:scale(1.2)}
+  .tree-star-btn.starred{opacity:1;color:#f59e0b}
+  .tree-subs{display:none;border-top:1px solid #e5e7eb}
+  .tree-subs.open{display:block}
+  .tree-sub-item{display:flex;align-items:center;gap:6px;padding:6px 10px 6px 28px;border-bottom:1px solid #f1f5f9;transition:background .1s}
+  .tree-sub-item:hover{background:#f8fafc}
+  .tree-sub-item:last-child{border-bottom:none}
+  .tree-sub-cb{accent-color:#4f46e5;width:13px;height:13px;cursor:pointer}
+  .tree-sub-label{font-size:11px;color:#374151;flex:1}
+  .tree-sub-id{font-size:9px;color:#94a3b8;font-family:monospace}
+  .tree-sub-star{background:none;border:none;cursor:pointer;font-size:12px;padding:0;opacity:.35;transition:opacity .15s}
+  .tree-sub-star:hover{opacity:1}
+  .tree-sub-star.starred{opacity:1;color:#f59e0b}
+
+  /* Empty */
+  .empty{background:#fff;border:1px solid var(--g200);border-radius:var(--r);padding:60px 24px;text-align:center;box-shadow:var(--sh)}
+  .empty-ico{font-size:52px;margin-bottom:14px}
+  .empty-t{font-size:17px;font-weight:700;margin-bottom:8px}
+  .empty-d{font-size:13px;color:var(--g400);line-height:1.7}
+
+  /* Toast */
+  .toast-wrap{position:fixed;top:20px;right:20px;z-index:999;display:flex;flex-direction:column;gap:8px}
+  .toast{background:var(--g800);color:#fff;padding:11px 16px;border-radius:8px;font-size:13px;box-shadow:var(--sh-lg);display:flex;align-items:center;gap:8px;animation:slideIn .2s ease;max-width:320px}
+  .toast.ok{background:var(--green)}
+  .toast.err{background:var(--red)}
+  .toast.info{background:var(--blue)}
+
+  /* Loading */
+  .ld-ov{position:fixed;inset:0;background:rgba(255,255,255,.87);z-index:300;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;backdrop-filter:blur(3px)}
+  .ld-ov.show{display:flex}
+  .ld-sp{width:44px;height:44px;border:4px solid var(--g200);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
+  .ld-txt{font-size:14px;color:var(--g600);font-weight:600}
+
+  /* Sel count */
+  .sel-all{display:flex;align-items:center;gap:7px}
+  .sel-all input{width:16px;height:16px;cursor:pointer;accent-color:var(--blue)}
+
+  /* 难度筛选栏 */
+  .diff-filter{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .diff-filter-label{font-size:11px;color:var(--g400);white-space:nowrap;font-weight:600}
+  .diff-star-btn{display:inline-flex;align-items:center;gap:2px;padding:3px 8px;
+    border-radius:16px;border:1.5px solid var(--g200);background:#fff;
+    font-size:12px;cursor:pointer;transition:all .15s;color:var(--g600);font-weight:600;white-space:nowrap}
+  .diff-star-btn:hover{border-color:#f59e0b;background:#fffbeb;color:#92400e}
+  .diff-star-btn.active{border-color:#f59e0b;background:#fef3c7;color:#92400e}
+  .diff-star-btn .ds{color:#f59e0b;font-size:11px}
+  .diff-star-btn.clear-btn{color:var(--g400);border-style:dashed}
+  .diff-star-btn.clear-btn.active{border-color:var(--blue);background:var(--blue-lt);color:var(--blue)}
+  .sel-cnt{font-size:12px;color:var(--blue);font-weight:600;background:var(--blue-lt);padding:3px 10px;border-radius:20px}
+
+  @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="hdr">
+  <div class="hdr-icon">📚</div>
+  <div>
+    <h1>教学教研题库</h1>
+    <p>支持 Cambridge / Edexcel 试卷 · 多文件导入 · 知识点筛选</p>
+  </div>
+  <div class="hdr-r">
+    <span id="fileTag" style="font-size:12px;color:var(--g400);display:none"></span>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+
+    <!-- Upload Card -->
+    <div class="card">
+      <div class="card-title">📤 导入文件</div>
+      <div class="drop" id="drop">
+        <div class="ico">📋</div>
+        <p><strong>点击选择</strong> 或拖拽 PDF 到此处</p>
+        <p style="margin-top:4px;color:var(--g400);font-size:11px">支持同时选择多个文件 · 自动区分考试局</p>
+        <input type="file" id="fileIn" accept=".pdf" multiple>
+      </div>
+
+      <!-- 导入已导出 PDF 按钮 -->
+      <div style="margin-top:8px">
+        <button class="btn btn-outline btn-sm" style="width:100%;border-style:dashed;color:#0369a1"
+                onclick="document.getElementById('importFileIn').click()">
+          📥 导入已导出的题库 PDF（重新读取）
+        </button>
+        <input type="file" id="importFileIn" accept=".pdf" style="display:none"
+               onchange="importExportedPdf(this.files[0])">
+      </div>
+
+      <!-- 保存/读取题册 -->
+      <div style="margin-top:6px;display:flex;gap:6px">
+        <button class="btn btn-outline btn-sm" style="flex:1;border-style:dashed;color:#7c3aed"
+                onclick="openSaveLibDialog()" id="btnSaveWb" disabled>
+          💾 保存题册
+        </button>
+        <button class="btn btn-outline btn-sm" style="flex:1;border-style:dashed;color:#065f46"
+                onclick="openLoadLibDialog()">
+          📂 读取题册
+        </button>
+      </div>
+
+      <!-- 已上传文件列表 -->
+      <div id="fileList" class="file-list" style="display:none"></div>
+
+      <!-- 题型模式 -->
+      <div class="pt-wrap">
+        <span class="pt-lbl">🗂️ 题型模式（上传前选择）</span>
+        <div class="pt-pills">
+          <button class="pt-btn auto active" data-type="auto" onclick="setPaperType('auto',this)">🔍<br>自动</button>
+          <button class="pt-btn mcq"  data-type="mcq"  onclick="setPaperType('mcq',this)">🔢<br>MCQ<br><span style="font-size:9px;font-weight:400">Cambridge</span></button>
+          <button class="pt-btn structured" data-type="structured" onclick="setPaperType('structured',this)">📝<br>大题<br><span style="font-size:9px;font-weight:400">Cambridge</span></button>
+          <button class="pt-btn edexcel" data-type="edexcel" onclick="setPaperType('edexcel',this)">📋<br>Edexcel<br><span style="font-size:9px;font-weight:400">混合</span></button>
+          <button class="pt-btn edexcel_mcq" data-type="edexcel_mcq" onclick="setPaperType('edexcel_mcq',this)">🔤<br>Edexcel<br><span style="font-size:9px;font-weight:400">MCQ</span></button>
+        </div>
+      </div>
+
+      <div class="prog-wrap" id="prog">
+        <div class="prog-bar"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
+        <div class="prog-txt" id="progTxt">解析中...</div>
+      </div>
+    </div>
+
+    <!-- Syllabus Filter Card -->
+    <div class="card" id="syllabusCard" style="display:none">
+      <div class="card-title">🎯 知识点筛选 <span id="syllabusSubtitle" style="font-size:10px;font-weight:400;color:var(--g400)">(9702 CIE 2025-27)</span></div>
+      <div class="syllabus-filter">
+        <input type="text" class="sf-search" id="sfSearch" placeholder="🔍 搜索知识点..." oninput="filterTopics()">
+        <div class="sf-level" id="sfLevelBar">
+          <button class="sf-lvl-btn active" onclick="setLevel('all',this)">全部</button>
+          <button class="sf-lvl-btn" onclick="setLevel('AS',this)">AS Level (1-11)</button>
+          <button class="sf-lvl-btn" onclick="setLevel('A2',this)">A2 Level (12-25)</button>
+        </div>
+        <div class="topic-tree" id="topicTree"></div>
+        <div class="sf-actions">
+          <button class="btn btn-outline btn-sm" style="flex:1" onclick="sfSelectAll()">全选</button>
+          <button class="btn btn-outline btn-sm" style="flex:1" onclick="sfClearAll()">清除</button>
+          <button class="btn btn-primary btn-sm" style="flex:1" onclick="applyTopicFilter()">📌 筛选题目</button>
+        </div>
+        <div id="filterHint" style="font-size:11px;color:var(--g400);margin-top:6px;text-align:center;display:none"></div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="card" id="statsCard" style="display:none">
+      <div class="card-title">📊 解析结果</div>
+      <div class="stats-row">
+        <div class="stat"><div class="stat-n" id="stPg">0</div><div class="stat-l">总页数</div></div>
+        <div class="stat"><div class="stat-n" id="stQ">0</div><div class="stat-l" id="stQL">识别题目</div></div>
+      </div>
+      <div style="text-align:center"><span id="typeBadge" class="badge" style="display:none"></span></div>
+    </div>
+
+    <!-- Export Settings -->
+    <div class="card">
+      <div class="card-title">⚙️ 导出设置</div>
+      <div class="s-row">
+        <span class="s-lbl">图片格式</span>
+        <select id="fmtSel"><option value="png">PNG（高质量）</option><option value="jpg">JPG（较小）</option></select>
+      </div>
+      <div class="s-row">
+        <span class="s-lbl">分辨率 DPI</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" id="dpiR" min="72" max="300" value="150" step="10" style="width:90px">
+          <span class="dpi-v" id="dpiV">150 dpi</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="card" id="actCard" style="display:none">
+      <div class="card-title">⬇️ 批量操作</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn btn-success btn-block" onclick="dlAll()">📦 导出全部 (ZIP图片)</button>
+        <button class="btn btn-primary btn-block" id="btnDlSel" onclick="dlSelected()" disabled>✅ 导出选中 (ZIP图片)</button>
+        <div class="divider"></div>
+        <button class="btn btn-purple btn-block" onclick="openPdfModal('all')">📑 全部题目 → PDF</button>
+        <button class="btn btn-outline btn-block" id="btnPdfSel" onclick="openPdfModal('selected')" disabled>📑 选中题目 → PDF</button>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="toolbar" id="toolbar" style="display:none">
+      <div class="sel-all">
+        <input type="checkbox" id="chkAll" onchange="selAll(this.checked)">
+        <label for="chkAll" style="font-size:13px;font-weight:600;cursor:pointer">全选</label>
+      </div>
+      <span class="sel-cnt" id="selCnt">0 已选</span>
+      <div class="tb-sep"></div>
+      <!-- 难度筛选 -->
+      <div class="diff-filter" id="diffFilterWrap" style="display:none">
+        <span class="diff-filter-label">⭐ 难度</span>
+        <button class="diff-star-btn clear-btn active" data-diff="0" onclick="setDiffFilter(0,this)" title="全部难度">全部</button>
+        <button class="diff-star-btn" data-diff="1" onclick="setDiffFilter(1,this)" title="入门"><span class="ds">★</span>入门</button>
+        <button class="diff-star-btn" data-diff="2" onclick="setDiffFilter(2,this)" title="基础"><span class="ds">★★</span>基础</button>
+        <button class="diff-star-btn" data-diff="3" onclick="setDiffFilter(3,this)" title="中等"><span class="ds">★★★</span>中等</button>
+        <button class="diff-star-btn" data-diff="4" onclick="setDiffFilter(4,this)" title="较难"><span class="ds">★★★★</span>较难</button>
+        <button class="diff-star-btn" data-diff="5" onclick="setDiffFilter(5,this)" title="挑战"><span class="ds">★★★★★</span>挑战</button>
+        <div class="tb-sep"></div>
+      </div>
+      <span id="tbHint" style="font-size:12px;color:var(--g400)">点击卡片选中</span>
+      <!-- 排序控件 -->
+      <div class="tb-sep"></div>
+      <span style="font-size:11px;color:var(--g400);white-space:nowrap">排列：</span>
+      <select id="sortOrderSel" onchange="setSortOrder(this.value)"
+              style="font-size:11px;border:1px solid var(--g200);border-radius:6px;padding:3px 6px;background:#fff;cursor:pointer">
+        <option value="default">默认顺序</option>
+        <option value="chapter">按章节顺序</option>
+        <option value="diff_asc">难度 低→高</option>
+        <option value="diff_desc">难度 高→低</option>
+      </select>
+      <div style="margin-left:auto">
+        <button class="btn btn-outline btn-sm" onclick="reset()">🔄 重新上传</button>
+      </div>
+    </div>
+
+    <div class="empty" id="empty">
+      <div class="empty-ico">🗂️</div>
+      <div class="empty-t">上传 PDF 开始使用</div>
+      <div class="empty-d">
+        支持剑桥 A-Level / IGCSE 及 Edexcel IAL 标准试卷<br>
+        ✦ 可同时导入多份试卷，按考试局自动分组<br>
+        ✦ 按 CIE 9702 考纲知识点筛选题目<br>
+        ✦ 选择题多题共页 · 大题跨页合并
+      </div>
+    </div>
+
+    <div id="qGridWrap"></div>
+  </main>
+</div>
+
+<!-- Preview Modal -->
+<div class="mo" id="prevMo">
+  <div class="mo-box">
+    <div class="mo-hdr">
+      <h3 id="moTitle">题目预览</h3>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="moBadge" class="badge" style="display:none"></span>
+        <button class="mo-cls" onclick="closePrev()">✕</button>
+      </div>
+    </div>
+    <div class="mo-body"><img id="prevImg" src="" alt="预览"></div>
+    <div class="mo-ft">
+      <button class="btn btn-outline" onclick="closePrev()">关闭</button>
+      <button class="btn btn-primary" id="moPrev" onclick="navMo(-1)">◀ 上一题</button>
+      <button class="btn btn-primary" id="moNext" onclick="navMo(1)">下一题 ▶</button>
+      <button class="btn btn-success" onclick="dlFromMo()">⬇️ 下载此题</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit + Preview Modal (合并编辑与预览，左编辑右预览) -->
+<div class="mo" id="editMetaMo" onclick="if(event.target===this)closeEditMeta()">
+  <div class="mo-box edit-preview-box">
+    <div class="mo-hdr">
+      <h3 id="editMetaTitle">✏️ 编辑题目信息</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-outline btn-sm" id="editNavPrev" onclick="editNavQ(-1)">◀ 上一题</button>
+        <button class="btn btn-outline btn-sm" id="editNavNext" onclick="editNavQ(1)">下一题 ▶</button>
+        <button class="mo-cls" onclick="closeEditMeta()">✕</button>
+      </div>
+    </div>
+    <div class="edit-preview-body">
+      <!-- 左侧：编辑面板 -->
+      <div class="edit-panel">
+        <!-- 难度设置 -->
+        <div class="edit-section">
+          <div class="edit-section-title">⭐ 难度设置</div>
+          <div id="editDiffStars" class="edit-diff-row"></div>
+        </div>
+        <!-- 知识点：二级树 -->
+        <div class="edit-section" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+          <div class="edit-section-title" style="display:flex;justify-content:space-between;align-items:center">
+            <span>🏷️ 知识点（可多选）</span>
+            <button class="btn btn-sm btn-outline" onclick="clearAllTopicSel()" style="font-size:10px;padding:2px 8px">清除</button>
+          </div>
+          <div id="editTopicTree" class="edit-topic-tree"></div>
+        </div>
+      </div>
+      <!-- 右侧：题目预览图 -->
+      <div class="preview-panel">
+        <div style="font-size:11px;color:#6b7280;margin-bottom:6px;font-weight:600">📷 题目预览</div>
+        <div id="editPreviewWrap" style="text-align:center;flex:1;overflow:auto">
+          <div id="editPreviewLoad" style="padding:40px;color:#94a3b8">⏳ 加载中...</div>
+          <img id="editPreviewImg" src="" style="display:none;max-width:100%;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1)" alt="">
+        </div>
+      </div>
+    </div>
+    <div class="mo-ft">
+      <button class="btn btn-outline" onclick="closeEditMeta()">取消</button>
+      <button class="btn btn-primary" onclick="saveEditMeta()">✅ 保存修改</button>
+    </div>
+  </div>
+</div>
+
+<!-- PDF Export Modal -->
+<div class="mo" id="pdfMo">
+  <div class="mo-box pdf-mo-box">
+    <div class="mo-hdr">
+      <h3>📑 导出为 PDF</h3>
+      <button class="mo-cls" onclick="closePdfModal()">✕</button>
+    </div>
+    <div class="pdf-mo-body">
+      <div class="pdf-preview-info" id="pdfInfo">将导出 <b id="pdfQCount">0</b> 道题目</div>
+      <div class="pdf-field">
+        <label>📁 文件名</label>
+        <input type="text" id="pdfName" placeholder="例如：物理选择题练习" value="questions">
+        <div style="font-size:11px;color:var(--g400);margin-top:4px">自动添加 .pdf 后缀</div>
+      </div>
+      <div class="pdf-field">
+        <label>📄 封面标题 <span style="color:var(--g400);font-size:11px">（留空则不生成封面）</span></label>
+        <input type="text" id="pdfCoverTitle" placeholder="例如：数学Edexcel P3题册" value="">
+        <div style="font-size:11px;color:var(--g400);margin-top:4px">封面将自动显示 Logo 及题目数量</div>
+      </div>
+      <div class="pdf-field">
+        <label>📐 页面版式</label>
+        <select id="pdfLayout">
+          <option value="one_per_page">自动排版（选择题多题共页 / 大题独页）</option>
+          <option value="two_per_page">每页两列（选择题备用布局）</option>
+        </select>
+      </div>
+      <div class="pdf-field">
+        <label>🖨️ 清晰度（继承导出设置中的 DPI）</label>
+        <div style="background:var(--g50);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--g600)">
+          当前 DPI：<b id="pdfDpiShow">150</b>
+        </div>
+      </div>
+    </div>
+    <div class="mo-ft">
+      <button class="btn btn-outline" onclick="closePdfModal()">取消</button>
+      <button class="btn btn-purple" onclick="doExportPdf()">📑 生成 PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading -->
+<div class="ld-ov" id="ldOv">
+  <div class="ld-sp"></div>
+  <div class="ld-txt" id="ldTxt">处理中...</div>
+  <div class="ld-prog-wrap" id="ldProgWrap" style="display:none">
+    <div class="ld-prog-bar"><div class="ld-prog-fill" id="ldProgFill" style="width:0%"></div></div>
+    <div class="ld-prog-txt" id="ldProgTxt">0 / 0</div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════════════════
+let sessionId   = null;    // 当前上传 session
+let groups      = [];      // [{filename, source, paper_type, questions, ...}]
+let activeGIdx  = 0;       // 当前激活的 group index（预览/导出用）
+let selNums     = new Set();
+let curMoQ      = null;
+let curMoGIdx   = 0;
+let chosenPT    = 'auto';
+let uploadToken = 0;
+let syllabus    = null;    // CIE 9702 知识库
+let mathsSyllabus = null;  // Edexcel Maths 知识库
+let sfLevel     = 'all';   // syllabus filter level
+let thumbQ = [], thumbIng = 0;
+const MAX_CO = 3;
+let pdfExportScope = 'all';
+
+// ── flat list of all visible questions across groups ──
+let allQuestions = [];   // [{q_num, page_idx, source, paper_type, gIdx, ...}]
+
+// ── filtered subset ──
+let filteredNums = null;  // null = no filter active
+
+// ── difficulty filter ──
+let activeDiffFilter = 0;  // 0 = all, 1-5 = specific star level
+
+// ── sort order ──
+let sortOrder = 'default';  // 'default' | 'chapter' | 'diff_asc' | 'diff_desc'
+
+// 章节排序用的 ID 序列（从考纲加载）
+const _CHAPTER_ORDER = [];
+
+// ══════════════════════════════════════════════════════════
+//  SESSION STORAGE — 临时数据库（标签页级别，关闭/刷新后自动清空）
+// ══════════════════════════════════════════════════════════
+const TIKU_KEY = 'tiku_session';
+
+function _saveSession() {
+  try {
+    // _img_b64 数据量巨大（每题 ~50KB base64），会撑爆 5MB 的 sessionStorage
+    // 存储时剔除 _img_b64/_img_w/_img_h，恢复后从 API 重新获取
+    const stripImg = (q) => {
+      const {_img_b64, _img_w, _img_h, ...rest} = q;
+      return rest;
+    };
+    const payload = {
+      sessionId,
+      groups: groups.map(g => ({
+        ...g,
+        questions: (g.questions || []).map(stripImg)
+      })),
+      allQuestions: allQuestions.map(stripImg),
+      activeGIdx,
+      ts: Date.now()
+    };
+    sessionStorage.setItem(TIKU_KEY, JSON.stringify(payload));
+  } catch(e) { /* 容量不足时静默失败 */ }
+}
+
+function _restoreSession() {
+  try {
+    const raw = sessionStorage.getItem(TIKU_KEY);
+    if (!raw) return false;
+    const p = JSON.parse(raw);
+    // 超过 4 小时视为过期
+    if (!p.sessionId || !p.groups || (Date.now() - p.ts) > 4 * 3600 * 1000) {
+      sessionStorage.removeItem(TIKU_KEY);
+      return false;
+    }
+    sessionId   = p.sessionId;
+    groups      = p.groups;
+    allQuestions = p.allQuestions || [];
+    activeGIdx  = p.activeGIdx || 0;
+    filteredNums = null;
+    selNums.clear();
+    return true;
+  } catch(e) { return false; }
+}
+
+// 页面加载时尝试恢复上次数据（函数定义，在脚本末尾调用）
+function _loadAllSyllabi() {
+  // Cambridge 物理考纲（只要有 cambridge 文件就加载）
+  const hasCambridge = groups.some(g => g.source === 'cambridge');
+  if (hasCambridge && !syllabus) {
+    fetch('/api/syllabus').then(r=>r.json()).then(d=>{syllabus=d; renderSyllabusCard();}).catch(()=>{});
+  }
+
+  // Edexcel Maths 考纲：根据文件的 unit 决定加载哪个 unit
+  const mathsGroups = groups.filter(g => g.source === 'edexcel_maths');
+  if (mathsGroups.length > 0) {
+    // 收集所有用到的 unit（去重）
+    const units = [...new Set(mathsGroups.map(g => g.maths_unit).filter(Boolean))];
+
+    if (units.length === 1) {
+      // 单一 unit：加载该 unit 的过滤考纲
+      const unit = units[0];
+      const url = `/api/syllabus/edexcel_maths?unit=${encodeURIComponent(unit)}`;
+      fetch(url).then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
+    } else if (units.length > 1) {
+      // 多个不同 unit：加载全部考纲
+      fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
+    } else {
+      // unit 未知：加载全部考纲
+      fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
+    }
+  }
+}
+
+function _autoRestore() {
+  if (_restoreSession()) {
+    uploadToken++;
+    renderFileList();
+    renderGrid();
+    renderStats();
+    renderSyllabusCard();
+    _updateDiffFilterVisibility();
+    // 异步加载考纲（不阻塞恢复）
+    _loadAllSyllabi();
+    const total = allQuestions.length;
+    setTimeout(() => toast(`已恢复上次会话：${total} 道题目（刷新不丢失）`, 'info', 4000), 500);
+  } else {
+    // 无缓存，异步加载考纲备用
+    _loadAllSyllabi();
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  UTILS
+// ══════════════════════════════════════════════════════════
+const toast = (msg, type='info', ms=3500) => {
+  const w = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  const ico = {ok:'✅',err:'❌',info:'ℹ️'};
+  el.innerHTML = `<span>${ico[type]||'ℹ️'}</span><span>${msg}</span>`;
+  w.appendChild(el);
+  setTimeout(() => el.remove(), ms);
+};
+const showLd = t => { document.getElementById('ldTxt').textContent = t; document.getElementById('ldOv').classList.add('show'); };
+const hideLd = ()  => document.getElementById('ldOv').classList.remove('show');
+const getDPI = ()  => +document.getElementById('dpiR').value;
+const getFmt = ()  => document.getElementById('fmtSel').value;
+
+function isSt(pt) {
+  return pt === 'structured' || pt === 'edexcel' || pt === 'edexcel_mcq';
+}
+
+// ══════════════════════════════════════════════════════════
+//  SYLLABUS LOAD
+// ══════════════════════════════════════════════════════════
+async function loadSyllabus() {
+  try {
+    const r = await fetch('/api/syllabus');
+    if (r.ok) {
+      syllabus = await r.json();
+      renderTopicTree();
+    }
+  } catch(e) {}
+}
+loadSyllabus();
+
+// ══════════════════════════════════════════════════════════
+//  PAPER TYPE SELECTION
+// ══════════════════════════════════════════════════════════
+function setPaperType(t, btn) {
+  chosenPT = t;
+  document.querySelectorAll('.pt-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+// ══════════════════════════════════════════════════════════
+//  UPLOAD — multi-file
+// ══════════════════════════════════════════════════════════
+const dropEl = document.getElementById('drop');
+const fileIn = document.getElementById('fileIn');
+dropEl.addEventListener('click', () => fileIn.click());
+dropEl.addEventListener('dragover',  e => { e.preventDefault(); dropEl.classList.add('over'); });
+dropEl.addEventListener('dragleave', () => dropEl.classList.remove('over'));
+dropEl.addEventListener('drop', e => {
+  e.preventDefault(); dropEl.classList.remove('over');
+  const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (files.length) doUpload(files);
+});
+fileIn.addEventListener('change', () => {
+  const files = Array.from(fileIn.files);
+  if (files.length) doUpload(files);
+});
+
+async function doUpload(files) {
+  uploadToken++;
+  const tok = uploadToken;
+
+  // Reset UI
+  dropEl.classList.add('ok');
+  document.getElementById('fileTag').textContent = files.length === 1 ? files[0].name : `${files.length} 个文件`;
+  document.getElementById('fileTag').style.display = '';
+
+  const prog = document.getElementById('prog');
+  const fill = document.getElementById('progFill');
+  const ptxt = document.getElementById('progTxt');
+  prog.style.display = 'block';
+  fill.style.width = '20%'; ptxt.textContent = `上传 ${files.length} 个文件...`;
+
+  const fd = new FormData();
+  files.forEach(f => fd.append('files[]', f));
+  fd.append('paper_type', chosenPT);
+
+  try {
+    fill.style.width = '60%'; ptxt.textContent = '解析题号...';
+    const res  = await fetch('/api/upload_multi', { method:'POST', body:fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || '上传失败');
+
+    fill.style.width = '100%';
+    const total = data.groups.reduce((s,g) => s + g.total_questions, 0);
+    ptxt.textContent = `识别到 ${total} 道题目（${data.groups.length} 个文件）`;
+    setTimeout(() => { prog.style.display = 'none'; }, 2000);
+
+    sessionId = data.session_id;
+    groups    = data.groups;
+    activeGIdx = 0;
+    selNums.clear();
+    filteredNums = null;
+    activeDiffFilter = 0;  // 重置难度筛选
+    window._activeSyllabusType = null;  // 强制由文件内容重新决定考纲类型
+
+    // 构建 allQuestions（带 gIdx）
+    allQuestions = [];
+    groups.forEach((g, gi) => {
+      g.questions.forEach(q => {
+        allQuestions.push({ ...q, gIdx: gi, source: g.source, paper_type: g.paper_type,
+                            maths_unit: g.maths_unit || null,
+                            exam_date: g.exam_date || '' });
+      });
+    });
+
+    // 保存到 sessionStorage（刷新后可恢复）
+    _saveSession();
+
+    renderFileList();
+    renderGrid();
+    renderStats();
+    renderSyllabusCard();
+    _updateDiffFilterVisibility();  // 决定是否显示难度筛选栏
+
+    // 加载考纲（按需带 unit 过滤）
+    _loadAllSyllabi();
+
+    const srcLabels = [...new Set(groups.map(g => g.source))].join(' + ');
+    toast(`成功识别 ${total} 道题（${srcLabels}，共 ${data.groups.length} 份试卷）`, 'ok');
+
+  } catch(e) {
+    fill.style.width = '0%'; ptxt.textContent = '解析失败';
+    prog.style.display = 'none';
+    dropEl.classList.remove('ok');
+    toast(e.message, 'err');
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  FILE LIST
+// ══════════════════════════════════════════════════════════
+function renderFileList() {
+  const el = document.getElementById('fileList');
+  if (groups.length === 0) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML = '';
+  groups.forEach((g, gi) => {
+    const div = document.createElement('div');
+    div.className = 'file-item' + (gi === activeGIdx ? ' active' : '');
+    const ptLabel = {'mcq':'MCQ','structured':'大题','edexcel':'Edexcel','edexcel_mcq':'Edexcel MCQ'}[g.paper_type] || g.paper_type;
+    div.innerHTML = `
+      <span class="fi-src ${g.source}">${g.source === 'cambridge' ? 'CIE' : g.source === 'edexcel' ? 'EDX' : '?'}</span>
+      <span class="fi-name" title="${g.filename}">${g.filename}</span>
+      <span class="fi-badge">${g.total_questions}题</span>`;
+    div.onclick = () => { activeGIdx = gi; renderFileList(); };
+    el.appendChild(div);
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+//  STATS
+// ══════════════════════════════════════════════════════════
+function renderStats() {
+  const totalPages = groups.reduce((s,g) => s + (g.total_pages||0), 0);
+  const totalQ     = allQuestions.length;
+
+  document.getElementById('stPg').textContent = totalPages || groups.length + ' 份';
+  document.getElementById('stQ').textContent  = totalQ;
+
+  const hasSt = groups.some(g => isSt(g.paper_type));
+  document.getElementById('stQL').textContent  = hasSt ? '题目总数' : '选择题数';
+  document.getElementById('stQ').className     = 'stat-n' + (hasSt ? ' purple' : '');
+
+  const b = document.getElementById('typeBadge');
+  if (groups.length > 1) {
+    b.className = 'badge mcq'; b.style.display = '';
+    b.innerHTML = `📚 ${groups.length} 份混合试卷`;
+  } else if (groups.length === 1) {
+    const pt = groups[0].paper_type;
+    b.className = `badge ${pt}`; b.style.display = '';
+    const m = {'mcq':'🔢 Cambridge MCQ','structured':'📝 Cambridge 大题','edexcel':'📋 Edexcel 试卷','edexcel_mcq':'🔤 Edexcel MCQ'};
+    b.innerHTML = m[pt] || pt;
+  }
+
+  document.getElementById('statsCard').style.display = '';
+  document.getElementById('actCard').style.display   = '';
+  document.getElementById('toolbar').style.display   = '';
+  document.getElementById('empty').style.display     = 'none';
+}
+
+// ══════════════════════════════════════════════════════════
+//  SYLLABUS CARD
+// ══════════════════════════════════════════════════════════
+function renderSyllabusCard() {
+  const hasCambridge   = groups.some(g => g.source === 'cambridge');
+  const hasMaths       = groups.some(g => g.source === 'edexcel_maths');
+  const card = document.getElementById('syllabusCard');
+
+  // 显示条件：有 Cambridge 试卷 或 有 Edexcel Maths 试卷
+  const shouldShow = hasCambridge || hasMaths;
+  card.style.display = shouldShow ? '' : 'none';
+  if (!shouldShow) return;
+
+  // ── 自动决定当前应该显示哪个考纲 ──
+  const hasBoth = hasCambridge && hasMaths;
+  if (!hasBoth) {
+    window._activeSyllabusType = hasMaths ? 'edexcel_maths' : 'cambridge';
+  } else if (!window._activeSyllabusType) {
+    window._activeSyllabusType = 'cambridge';
+  }
+
+  const stype = window._activeSyllabusType;
+
+  // ── 更新副标题 ──
+  const subtitle = document.getElementById('syllabusSubtitle');
+  if (stype === 'edexcel_maths') {
+    // 获取当前所有 edexcel_maths 文件的 unit 列表
+    const mathsGroups = groups.filter(g => g.source === 'edexcel_maths');
+    const units = [...new Set(mathsGroups.map(g => g.maths_unit).filter(Boolean))];
+    if (units.length === 1) {
+      subtitle.textContent = `(Edexcel IAL ${units[0]})`;
+    } else if (units.length > 1) {
+      subtitle.textContent = `(Edexcel IAL ${units.join(' + ')})`;
+    } else {
+      subtitle.textContent = '(Edexcel IAL Pure Maths)';
+    }
+  } else {
+    subtitle.textContent = '(9702 CIE 2025-27)';
+  }
+
+  // ── AS/A2 Level 筛选按钮：只对 Cambridge 有意义 ──
+  const levelBar = document.getElementById('sfLevelBar');
+  if (levelBar) levelBar.style.display = stype === 'cambridge' ? '' : 'none';
+
+  // ── 切换器（只有两种都有时显示）──
+  const treeWrap = document.getElementById('topicTree');
+  let switcher = document.getElementById('syllabusSwitcher');
+  if (hasBoth) {
+    if (!switcher) {
+      switcher = document.createElement('div');
+      switcher.id = 'syllabusSwitcher';
+      switcher.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
+      switcher.innerHTML = `
+        <button class="btn btn-sm" id="swBtn_cambridge" onclick="switchSyllabus('cambridge')">📐 CIE 9702 物理</button>
+        <button class="btn btn-sm" id="swBtn_edexcel_maths" onclick="switchSyllabus('edexcel_maths')">📊 Edexcel 纯数</button>`;
+      treeWrap.parentElement.insertBefore(switcher, treeWrap);
+    }
+    switcher.style.display = 'flex';
+    ['cambridge','edexcel_maths'].forEach(t => {
+      const b = document.getElementById(`swBtn_${t}`);
+      if (b) b.className = 'btn btn-sm' + (stype===t ? ' btn-primary' : ' btn-outline');
+    });
+  } else if (switcher) {
+    switcher.style.display = 'none';
+  }
+
+  // ── 触发考纲加载（若还未加载）──
+  if (stype === 'edexcel_maths' && !mathsSyllabus) {
+    _loadAllSyllabi();
+  } else if (stype === 'cambridge' && !syllabus) {
+    _loadAllSyllabi();
+  }
+
+  // 渲染考纲树
+  renderTopicTree();
+}
+
+// ══════════════════════════════════════════════════════════
+//  GRID (multi-source grouped view)
+// ══════════════════════════════════════════════════════════
+function getVisibleQuestions() {
+  let qs = [...allQuestions];
+  // 知识点过滤
+  if (filteredNums !== null) {
+    qs = qs.filter(q => filteredNums.has(q.gIdx + '_' + q.q_num));
+  }
+  // 难度过滤
+  if (activeDiffFilter > 0) {
+    qs = qs.filter(q => q.difficulty === activeDiffFilter);
+  }
+  // 排序
+  if (sortOrder === 'chapter') {
+    qs = _sortByChapter(qs);
+  } else if (sortOrder === 'diff_asc') {
+    qs = qs.sort((a, b) => (a.difficulty || 99) - (b.difficulty || 99));
+  } else if (sortOrder === 'diff_desc') {
+    qs = qs.sort((a, b) => (b.difficulty || 0) - (a.difficulty || 0));
+  }
+  return qs;
+}
+
+function _sortByChapter(qs) {
+  // 获取题目的主章节 ID（优先 is_core，否则第一个 topic）
+  function getChapterId(q) {
+    const topics = Array.isArray(q.topics) ? q.topics : [];
+    if (!topics.length) return 'ZZZ';  // 无知识点排最后
+    const core = topics.find(t => t.is_core);
+    const best = core || topics[0];
+    const id = String(best.id || '');
+    // 规范化为章节 ID（去掉小数点后部分，如 P3-2.1 → P3-2）
+    return id.replace(/\.\d+$/, '');
+  }
+  // 章节排序键：按 unit 字母 + 数字
+  function chapterSortKey(chId) {
+    // e.g. "P3-2" → ["P3", 2]
+    const m = chId.match(/^([A-Za-z]+\d+)-(\d+)/);
+    if (!m) return [chId, 0];
+    return [m[1], parseInt(m[2])];
+  }
+  return qs.sort((a, b) => {
+    const ca = getChapterId(a);
+    const cb = getChapterId(b);
+    if (ca === cb) return (a.q_num || 0) - (b.q_num || 0);
+    const [ua, na] = chapterSortKey(ca);
+    const [ub, nb] = chapterSortKey(cb);
+    if (ua !== ub) return ua < ub ? -1 : 1;
+    return na - nb;
+  });
+}
+
+function setSortOrder(val) {
+  sortOrder = val;
+  renderGrid();
+  toast(val === 'default' ? '默认顺序' :
+        val === 'chapter' ? '已按章节顺序排列' :
+        val === 'diff_asc' ? '已按难度从低到高排列' : '已按难度从高到低排列', 'info');
+}
+
+function renderGrid() {
+  thumbQ = []; thumbIng = 0;
+  const wrap = document.getElementById('qGridWrap');
+  wrap.innerHTML = '';
+  const tok = uploadToken;
+  const visible = getVisibleQuestions();
+
+  if (visible.length === 0) {
+    wrap.innerHTML = '<div class="empty" style="text-align:center;padding:30px"><div class="empty-ico">🔍</div><div class="empty-t">无匹配题目</div><div class="empty-d">请调整筛选条件</div></div>';
+    updateSelUI(); return;
+  }
+
+  // 章节排序时跨文件统一展示（不再按paper分组），其他排序保持按paper分组
+  const isChapterSort = (sortOrder === 'chapter');
+
+  // 按 source/paper_type 分组（章节排序时只有1组）
+  const srcGroups = {};
+  visible.forEach(q => {
+    const key = isChapterSort ? '__unified__' : `${q.source}__${q.gIdx}`;
+    if (!srcGroups[key]) srcGroups[key] = {
+      source: q.source, paper_type: q.paper_type, gIdx: q.gIdx,
+      filename: groups[q.gIdx]?.filename, qs: [], unified: isChapterSort
+    };
+    srcGroups[key].qs.push(q);
+  });
+
+  const hasManyGroups = !isChapterSort && Object.keys(srcGroups).length > 1;
+
+  Object.values(srcGroups).forEach(sg => {
+    // 统一视图时paper_type取第一题的
+    const pt = sg.unified ? (sg.qs[0]?.paper_type || 'edexcel_maths') : sg.paper_type;
+    const st = isSt(pt);
+    let section = document.createElement('div');
+    section.className = 'src-group';
+
+    if (hasManyGroups) {
+      const hdr = document.createElement('div');
+      hdr.className = 'src-group-hdr';
+      const srcLabel = sg.source === 'cambridge' ? 'Cambridge'
+                     : sg.source === 'edexcel_maths' ? 'Edexcel Maths'
+                     : sg.source === 'edexcel' ? 'Edexcel' : sg.source;
+      const ptLabel  = {'mcq':'MCQ','structured':'大题','edexcel':'Edexcel混合','edexcel_mcq':'Edexcel MCQ','edexcel_maths':'纯数大题'}[sg.paper_type] || sg.paper_type;
+      const examDate = groups[sg.gIdx]?.exam_date || '';
+      hdr.innerHTML = `<span class="src-tag ${sg.source}">${srcLabel}</span><h3>${sg.filename || ('文件 '+(sg.gIdx+1))}</h3>${examDate ? `<span class="paper-date-badge">${examDate}</span>` : ''}<span style="font-size:11px;color:var(--g400)">${sg.qs.length} 道 · ${ptLabel}</span>`;
+      section.appendChild(hdr);
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'q-grid' + (st ? ' st-mode' : '');
+    section.appendChild(grid);
+    wrap.appendChild(section);
+
+    sg.qs.forEach((q, idx) => {
+      const uid = `${q.gIdx}_${q.q_num}`;
+      let pgInfo = `P${q.page_idx+1}`;
+      if (st) {
+        const allGrpQs = allQuestions.filter(x => x.gIdx === q.gIdx);
+        const localIdx = allGrpQs.findIndex(x => x.q_num === q.q_num);
+        if (localIdx + 1 < allGrpQs.length) {
+          const ep = allGrpQs[localIdx+1].page_idx;
+          if (ep > q.page_idx) pgInfo = `P${q.page_idx+1}~P${ep}`;
+        } else {
+          pgInfo = `P${q.page_idx+1}~`;
+        }
+      }
+
+      // 构建知识点标签 HTML（取得分最高的前3个，可点击编辑）
+      const qTopics = Array.isArray(q.topics) ? q.topics : [];
+      const activeSubs    = new Set(getCheckedSubIds ? getCheckedSubIds() : []);
+      const activeParents = new Set(getCheckedTopicIds ? getCheckedTopicIds() : []);
+      const topTagsHtml = qTopics.slice(0,3).map((t,i) => {
+        const isMatch = activeSubs.has(String(t.id)) || activeParents.has(String(t.parent_id)) || activeParents.has(String(t.id));
+        const cls = isMatch ? 'topic-tag matched' : (i===0 ? 'topic-tag top1' : 'topic-tag');
+        return `<span class="${cls}" title="点击修改知识点" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},'topics',event)">${t.id} ${t.title}</span>`;
+      }).join('') + `<span class="topic-tag add-tag" title="添加/修改知识点" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},'topics',event)">✏️</span>`;
+
+      // 构建难度星级 HTML（可点击编辑）
+      const diffLevel = typeof q.difficulty === 'number' ? q.difficulty : null;
+      const diffLabelMap = {1:'Starter',2:'Basic',3:'Medium',4:'Hard',5:'Expert'};
+      let diffHtml = '';
+      if (diffLevel !== null) {
+        const starsHtml = Array.from({length:5},(_,i)=>`<span class="star-icon ${i<diffLevel?'full':'empty'}-star" onclick="setDiffQuick('${uid}',${q.gIdx},${q.q_num},${i+1},event)" title="设为${i+1}星">★</span>`).join('');
+        const lbl = diffLabelMap[diffLevel] || '';
+        diffHtml = `<span class="diff-label">Difficulty</span>
+                    <span class="diff-stars">${starsHtml}</span>
+                    <span class="diff-badge diff-${diffLevel}">${lbl}</span>`;
+      } else {
+        diffHtml = `<span class="diff-label no-diff" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},'difficulty',event)">点击设置难度</span>`;
+      }
+
+      const card = document.createElement('div');
+      card.className = 'qc' + (st?' st':'');
+      card.id = `qc-${uid}`;
+      const examDateHtml = q.exam_date ? `<span class="exam-date-tag">${q.exam_date}</span>` : '';
+      card.innerHTML = `
+        <div class="qc-hdr">
+          <span class="q-badge${st?' st':''}">${st?'第':'Q'}${q.q_num}${st?'题':''}</span>
+          ${examDateHtml}
+          <span class="qpg">${pgInfo}</span>
+          <div class="qck" id="ck-${uid}"></div>
+        </div>
+        <div class="q-difficulty">${diffHtml}</div>
+        <div class="q-topics" id="tp-${uid}">${topTagsHtml}</div>
+        <div class="qt-ld${st?' st-h':''}" id="tld-${uid}"><span class="spin">⏳</span></div>
+        <img class="qt${st?' st-h':''}" id="th-${uid}" src="" style="display:none"
+             onerror="this.style.display='none';document.getElementById('tld-${uid}').innerHTML='⚠️'">
+        <div class="qc-act">
+          <button class="btn btn-outline btn-sm" style="flex:1" onclick="openPrev(${q.q_num},${q.gIdx},event)">🔍 预览</button>
+          <button class="btn btn-sm" style="flex:1;background:#e0f2fe;color:#0369a1" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},null,event)">✏️ 编辑</button>
+          <button class="btn btn-primary btn-sm" style="flex:1" onclick="dlOne(${q.q_num},${q.gIdx},event)">⬇️</button>
+        </div>`;
+      card.addEventListener('click', e => { if(e.target.tagName==='BUTTON') return; toggleSel(uid); });
+      grid.appendChild(card);
+
+      thumbQ.push({ q_num: q.q_num, gIdx: q.gIdx, uid, tok });
+      procThumbQ();
+    });
+  });
+
+  updateSelUI();
+}
+
+function procThumbQ() {
+  while (thumbIng < MAX_CO && thumbQ.length > 0) {
+    const { q_num, gIdx, uid, tok } = thumbQ.shift();
+    if (tok !== uploadToken) { procThumbQ(); continue; }
+    thumbIng++;
+    const img = document.getElementById(`th-${uid}`);
+    const ld  = document.getElementById(`tld-${uid}`);
+    if (!img) { thumbIng--; procThumbQ(); continue; }
+
+    // ── 图书馆题目：直接用缓存的 base64 图片 ──
+    const qObj = allQuestions.find(q => q.gIdx === gIdx && q.q_num === q_num);
+    if (qObj && qObj._img_b64) {
+      const dataUrl = `data:image/jpeg;base64,${qObj._img_b64}`;
+      img.src = dataUrl; img.style.display='';
+      if (ld) ld.style.display='none';
+      thumbIng--; procThumbQ();
+      continue;
+    }
+
+    const t = new Image();
+    t.onload = () => {
+      if (tok !== uploadToken) { thumbIng--; procThumbQ(); return; }
+      img.src = t.src; img.style.display=''; if(ld) ld.style.display='none';
+      thumbIng--; procThumbQ();
+    };
+    t.onerror = () => { if(ld) ld.innerHTML='⚠️'; thumbIng--; procThumbQ(); };
+    t.src = `/api/preview/${q_num}?dpi=96&session_id=${sessionId}&file_idx=${gIdx}&_t=${tok}`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  SELECTION
+// ══════════════════════════════════════════════════════════
+function toggleSel(uid) {
+  const card = document.getElementById(`qc-${uid}`);
+  const ck   = document.getElementById(`ck-${uid}`);
+  if (!card) return;
+  if (selNums.has(uid)) { selNums.delete(uid); card.classList.remove('sel'); ck.textContent=''; }
+  else                  { selNums.add(uid);    card.classList.add('sel');    ck.textContent='✓'; }
+  updateSelUI();
+}
+function selAll(on) {
+  getVisibleQuestions().forEach(q => {
+    const uid = `${q.gIdx}_${q.q_num}`;
+    const card = document.getElementById(`qc-${uid}`);
+    const ck   = document.getElementById(`ck-${uid}`);
+    if (!card) return;
+    if (on) { selNums.add(uid); card.classList.add('sel'); ck.textContent='✓'; }
+    else    { selNums.delete(uid); card.classList.remove('sel'); ck.textContent=''; }
+  });
+  updateSelUI();
+}
+function updateSelUI() {
+  const n = selNums.size;
+  document.getElementById('selCnt').textContent = `${n} 已选`;
+  document.getElementById('btnDlSel').disabled  = n===0;
+  document.getElementById('btnPdfSel').disabled = n===0;
+  const hasSessions = allQuestions.length > 0;
+  const wbBtn = document.getElementById('btnSaveWb');
+  if (wbBtn) wbBtn.disabled = !hasSessions;
+  const visible = getVisibleQuestions();
+  const all = document.getElementById('chkAll');
+  all.checked       = n > 0 && n === visible.length;
+  all.indeterminate = n > 0 && n < visible.length;
+}
+
+// ══════════════════════════════════════════════════════════
+//  SYLLABUS FILTER
+// ══════════════════════════════════════════════════════════
+function setLevel(lv, btn) {
+  sfLevel = lv;
+  document.querySelectorAll('.sf-lvl-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderTopicTree();
+}
+
+function switchSyllabus(type) {
+  window._activeSyllabusType = type;
+  renderSyllabusCard();
+}
+
+function filterTopics() { renderTopicTree(); }
+
+function renderTopicTree() {
+  // 决定用哪个考纲
+  const stype = window._activeSyllabusType || 'cambridge';
+  const curSyllabus = stype === 'edexcel_maths' ? mathsSyllabus : syllabus;
+  const tree = document.getElementById('topicTree');
+
+  if (!curSyllabus) {
+    tree.innerHTML = '<div style="padding:12px;color:var(--g400);font-size:12px">⏳ 考纲加载中…</div>';
+    return;
+  }
+
+  const q = document.getElementById('sfSearch').value.toLowerCase();
+  tree.innerHTML = '';
+
+  // ── Edexcel Maths：两级树（章节 + 子知识点），带题目数量统计 ──
+  if (stype === 'edexcel_maths') {
+    // 统计每个 topic/subtopic 对应的题目数
+    const topicCount = {};   // id → count
+    allQuestions.forEach(q => {
+      (q.topics || []).forEach(t => {
+        const id = String(t.id);
+        topicCount[id] = (topicCount[id] || 0) + 1;
+        // 子知识点的父章节也加计数（但不重复）
+      });
+    });
+    // 章节计数：aggregation
+    const chapterCount = {};
+    curSyllabus.topics.forEach(topic => {
+      const chId = String(topic.id);
+      let cnt = topicCount[chId] || 0;
+      (topic.subtopics || []).forEach(sub => { cnt += topicCount[String(sub.id)] || 0; });
+      chapterCount[chId] = cnt;
+    });
+
+    curSyllabus.topics.forEach(topic => {
+      if (q && !topic.title.toLowerCase().includes(q) &&
+          !String(topic.id).toLowerCase().includes(q) &&
+          !(topic.subtopics||[]).some(s => s.title.toLowerCase().includes(q))) return;
+
+      const topicId = topic.id;
+      const tidSafe = String(topicId).replace(/[^a-z0-9_-]/gi,'_');
+      const subtopics = topic.subtopics || [];
+      const chCnt = chapterCount[topicId] || 0;
+
+      const item = document.createElement('div');
+      item.className = 'topic-item';
+
+      const hdr = document.createElement('div');
+      hdr.className = 'topic-hdr';
+      hdr.style.cursor = subtopics.length ? 'pointer' : 'default';
+      hdr.innerHTML = `
+        <input type="checkbox" id="tc-${tidSafe}" data-raw-id="${topicId}"
+               onchange="onMathsChapterCheck('${topicId}','${tidSafe}',this.checked)">
+        <span class="topic-hdr-text" onclick="toggleSub('${tidSafe}')">${topicId}. ${topic.title}</span>
+        ${chCnt > 0 ? `<span class="topic-hdr-cnt" style="background:#e0e7ff;color:#4338ca;font-size:10px;font-weight:600;padding:1px 5px;border-radius:8px;flex-shrink:0">${chCnt}</span>` : ''}
+        ${subtopics.length ? `<span class="topic-chevron" id="chev-${tidSafe}" onclick="toggleSub('${tidSafe}')">▶</span>` : ''}`;
+      item.appendChild(hdr);
+
+      if (subtopics.length) {
+        const subList = document.createElement('div');
+        subList.className = 'sub-list';
+        subList.id = `sub-${tidSafe}`;
+        subtopics.forEach(sub => {
+          if (q && !sub.title.toLowerCase().includes(q) && !topic.title.toLowerCase().includes(q)) return;
+          const sidSafe = String(sub.id).replace(/[^a-z0-9._-]/gi,'_');
+          const subCnt = topicCount[String(sub.id)] || 0;
+          const si = document.createElement('div');
+          si.className = 'sub-item';
+          si.innerHTML = `
+            <input type="checkbox" id="sc-${sidSafe}" data-raw-id="${sub.id}" data-parent="${tidSafe}"
+                   onchange="onSubCheck('${sub.id}','${tidSafe}',this.checked)">
+            <span class="sub-id">${sub.id}</span>
+            <span class="sub-item-text">${sub.title}</span>
+            ${subCnt > 0 ? `<span class="sub-cnt">${subCnt}</span>` : ''}`;
+          subList.appendChild(si);
+        });
+        item.appendChild(subList);
+      }
+      tree.appendChild(item);
+    });
+    return;
+  }
+
+  // ── Cambridge：原有的两级树 ──
+  curSyllabus.topics.forEach(topic => {
+    if (sfLevel !== 'all' && topic.level !== sfLevel) return;
+    const subtopics = topic.subtopics || [];
+    if (q && !topic.title.toLowerCase().includes(q) &&
+        !subtopics.some(s => s.title.toLowerCase().includes(q))) return;
+
+    const item = document.createElement('div');
+    item.className = 'topic-item';
+
+    const topicId   = topic.id;
+    const tidSafe   = String(topicId).replace(/[^a-z0-9_-]/gi,'_');
+    const levelBadge = topic.level
+      ? `<span class="level-badge ${topic.level}">${topic.level}</span>`
+      : '';
+
+    const hdr = document.createElement('div');
+    hdr.className = 'topic-hdr';
+    hdr.innerHTML = `
+      <input type="checkbox" id="tc-${tidSafe}" onchange="onTopicCheck('${tidSafe}',this.checked)">
+      ${levelBadge}
+      <span class="topic-hdr-text">${topicId}. ${topic.title}</span>
+      <span class="topic-hdr-cnt">${subtopics.length}</span>
+      <span class="topic-chevron" id="chev-${tidSafe}">▶</span>`;
+    hdr.querySelector('.topic-hdr-text').onclick = (e) => { e.stopPropagation(); toggleSub(tidSafe); };
+    hdr.querySelector('.topic-chevron').onclick = (e) => { e.stopPropagation(); toggleSub(tidSafe); };
+    item.appendChild(hdr);
+
+    const subList = document.createElement('div');
+    subList.className = 'sub-list';
+    subList.id = `sub-${tidSafe}`;
+    subtopics.forEach(sub => {
+      if (q && !sub.title.toLowerCase().includes(q) && !topic.title.toLowerCase().includes(q)) return;
+      const sidSafe = String(sub.id).replace(/[^a-z0-9._-]/gi,'_');
+      const si = document.createElement('div');
+      si.className = 'sub-item';
+      si.innerHTML = `
+        <input type="checkbox" id="sc-${sidSafe}" data-raw-id="${sub.id}" data-parent="${tidSafe}" onchange="onSubCheck('${sub.id}','${tidSafe}',this.checked)">
+        <span class="sub-id">${sub.id}</span>
+        <span class="sub-item-text">${sub.title}</span>`;
+      subList.appendChild(si);
+    });
+    item.appendChild(subList);
+    tree.appendChild(item);
+  });
+}
+
+function toggleSub(id) {
+  const sub  = document.getElementById(`sub-${id}`);
+  const chev = document.getElementById(`chev-${id}`);
+  if (!sub) return;
+  const open = sub.classList.toggle('open');
+  if (chev) chev.classList.toggle('open', open);
+}
+
+// ── Edexcel Maths：章节级勾选（联动子知识点） ──
+function onMathsChapterCheck(chapterId, tidSafe, checked) {
+  // 同步勾选/取消所有子知识点
+  const curSyllabus = mathsSyllabus;
+  if (!curSyllabus) return;
+  const topic = curSyllabus.topics.find(t => String(t.id) === chapterId);
+  if (!topic) return;
+  (topic.subtopics || []).forEach(sub => {
+    const sidSafe = String(sub.id).replace(/[^a-z0-9._-]/gi,'_');
+    const el = document.getElementById(`sc-${sidSafe}`);
+    if (el) el.checked = checked;
+  });
+}
+
+// ── 旧名兼容 ──
+function onChapterCheck(chapterId, checked) {}
+
+function onTopicCheck(topicId, checked) {
+  const stype = window._activeSyllabusType || 'cambridge';
+  const curSyllabus = stype === 'edexcel_maths' ? mathsSyllabus : syllabus;
+  if (!curSyllabus) return;
+  const topic = curSyllabus.topics.find(t => String(t.id) === String(topicId).replace(/_/g,'-'));
+  if (!topic) return;
+  (topic.subtopics || []).forEach(sub => {
+    const sidSafe = String(sub.id).replace(/[^a-z0-9._-]/gi,'_');
+    const el = document.getElementById(`sc-${sidSafe}`);
+    if (el) el.checked = checked;
+  });
+}
+
+function onSubCheck(subId, topicId, checked) {
+  const stype = window._activeSyllabusType || 'cambridge';
+  const curSyllabus = stype === 'edexcel_maths' ? mathsSyllabus : syllabus;
+  if (!curSyllabus) return;
+  const topic = curSyllabus.topics.find(t => String(t.id) === String(topicId).replace(/_/g,'-'));
+  if (!topic) return;
+  const allChecked = (topic.subtopics || []).every(s => {
+    const sidSafe = String(s.id).replace(/[^a-z0-9._-]/gi,'_');
+    const el = document.getElementById(`sc-${sidSafe}`);
+    return el ? el.checked : false;
+  });
+  const tidSafe = String(topicId).replace(/[^a-z0-9._-]/gi,'_');
+  const tc = document.getElementById(`tc-${tidSafe}`);
+  if (tc) tc.checked = allChecked;
+}
+
+function sfSelectAll() {
+  document.querySelectorAll('#topicTree input[type=checkbox]').forEach(el => el.checked = true);
+}
+function sfClearAll() {
+  document.querySelectorAll('#topicTree input[type=checkbox]').forEach(el => el.checked = false);
+}
+
+// ══════════════════════════════════════════════════════════
+//  难度筛选
+// ══════════════════════════════════════════════════════════
+function setDiffFilter(level, btn) {
+  activeDiffFilter = level;
+  // 更新按钮状态
+  document.querySelectorAll('.diff-star-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  // 重绘题目卡片
+  selNums.clear();
+  renderGrid();
+  if (level === 0) {
+    toast('已显示全部难度题目', 'info');
+  } else {
+    const labels = {1:'入门★',2:'基础★★',3:'中等★★★',4:'较难★★★★',5:'挑战★★★★★'};
+    const vis = getVisibleQuestions().length;
+    toast(`难度筛选：${labels[level]}，共 ${vis} 道题`, 'info');
+  }
+}
+
+// 在加载题目后决定是否显示难度筛选栏
+function _updateDiffFilterVisibility() {
+  // 只要有至少1道题有 difficulty 字段就显示
+  const hasDiff = allQuestions.some(q => typeof q.difficulty === 'number' && q.difficulty !== null);
+  document.getElementById('diffFilterWrap').style.display = hasDiff ? '' : 'none';
+}
+
+// ── 辅助：读取当前勾选的 subtopic id 和 topic id ──
+function getCheckedSubIds() {
+  const ids = [];
+  document.querySelectorAll('#topicTree input[id^="sc-"]:checked').forEach(el => {
+    // 优先用 data-raw-id（兼容数学考纲的 "P3-2.1" 格式）
+    ids.push(el.dataset.rawId || el.id.replace('sc-',''));
+  });
+  return ids;
+}
+function getCheckedTopicIds() {
+  // 返回 raw id 字符串（number 或 "P3-2"）
+  // 对 edexcel_maths，tc- checkbox 带有 data-raw-id 属性
+  const ids = [];
+  document.querySelectorAll('#topicTree input[id^="tc-"]:checked').forEach(el => {
+    const raw = el.dataset.rawId || el.id.replace('tc-','').replace(/_/g,'-');
+    ids.push(raw);
+  });
+  return ids;
+}
+
+function applyTopicFilter() {
+  const checkedSubs   = new Set(getCheckedSubIds());
+  const checkedTopics = new Set(getCheckedTopicIds());
+
+  if (checkedSubs.size === 0 && checkedTopics.size === 0) {
+    filteredNums = null;
+    document.getElementById('filterHint').style.display = 'none';
+    renderGrid();
+    toast('已清除筛选，显示全部题目', 'info');
+    return;
+  }
+
+  // ── 真正基于 topics 字段匹配 ──
+  filteredNums = new Set();
+  let matchCount = 0;
+
+  allQuestions.forEach(q => {
+    const qTopics = Array.isArray(q.topics) ? q.topics : [];
+    let hit = false;
+
+    if (qTopics.length > 0) {
+      hit = qTopics.some(t => {
+        const tid = String(t.id);
+        // 精确匹配 subtopic id
+        if (checkedSubs.has(tid)) return true;
+        // Cambridge: parent_id匹配
+        if (checkedTopics.has(String(t.parent_id))) return true;
+        // Edexcel Maths: 章节级id直接匹配（如 P3-6）
+        if (checkedTopics.has(tid)) return true;
+        // Edexcel Maths: 题目id是章节级别（P3-6），subtopic勾选了P3-6.x → 检查父章节
+        // e.g. tid="P3-6", checkedSubs含"P3-6.3" → 章节匹配
+        const parentChapter = tid.replace(/\.\d+$/, '');  // P3-6.3 → P3-6
+        if (parentChapter !== tid && checkedTopics.has(parentChapter)) return true;
+        // 题目的chapter-level id匹配某个已勾选的subtopic所在章节
+        // e.g. tid="P3-6", checkedSubs含"P3-6.x"
+        for (const sid of checkedSubs) {
+          if (sid.startsWith(tid + '.')) return true;  // sid=P3-6.3, tid=P3-6
+        }
+        return false;
+      });
+    } else {
+      // 无知识点标注：不过滤，全部通过
+      hit = true;
+    }
+
+    if (hit) {
+      filteredNums.add(`${q.gIdx}_${q.q_num}`);
+      matchCount++;
+    }
+  });
+
+  const hint = document.getElementById('filterHint');
+  const selLabels = [];
+  checkedSubs.forEach(sid => selLabels.push(sid));
+  checkedTopics.forEach(tid => selLabels.push('Topic '+tid+' (全部)'));
+  hint.textContent = `筛选条件: ${selLabels.join(', ')} — 共 ${matchCount} 道题目`;
+  hint.style.display = 'block';
+
+  renderGrid();
+  selNums.clear();
+  updateSelUI();
+  toast(`知识点筛选完成，显示 ${matchCount} 道题目`, 'ok');
+}
+
+// ══════════════════════════════════════════════════════════
+//  PREVIEW MODAL
+// ══════════════════════════════════════════════════════════
+function openPrev(qNum, gIdx, e) {
+  if(e) e.stopPropagation();
+  curMoQ = qNum; curMoGIdx = gIdx;
+  const g  = groups[gIdx] || {};
+  const st = isSt(g.paper_type);
+  document.getElementById('moTitle').textContent = st ? `第 ${qNum} 题预览` : `Q${String(qNum).padStart(2,'0')} 预览`;
+  const b = document.getElementById('moBadge');
+  b.className = `badge ${g.paper_type||'mcq'}`; b.style.display='';
+  const bm = {'mcq':'🔢 Cambridge MCQ','structured':'📝 Cambridge 大题','edexcel':'📋 Edexcel','edexcel_mcq':'🔤 Edexcel MCQ'};
+  b.innerHTML = bm[g.paper_type] || '📋';
+
+  // 图书馆题目直接使用缓存 base64
+  const qObj = allQuestions.find(q => q.gIdx === gIdx && q.q_num === qNum);
+  if (qObj && qObj._img_b64) {
+    document.getElementById('prevImg').src = `data:image/jpeg;base64,${qObj._img_b64}`;
+  } else {
+    document.getElementById('prevImg').src = `/api/preview/${qNum}?dpi=150&session_id=${sessionId}&file_idx=${gIdx}&_t=${uploadToken}`;
+  }
+  document.getElementById('prevMo').classList.add('show');
+  updateMoNav();
+}
+function closePrev() { document.getElementById('prevMo').classList.remove('show'); }
+function updateMoNav() {
+  const vis = getVisibleQuestions();
+  const i   = vis.findIndex(q => q.q_num===curMoQ && q.gIdx===curMoGIdx);
+  document.getElementById('moPrev').disabled = i<=0;
+  document.getElementById('moNext').disabled = i>=vis.length-1;
+}
+function navMo(dir) {
+  const vis = getVisibleQuestions();
+  const i   = vis.findIndex(q => q.q_num===curMoQ && q.gIdx===curMoGIdx);
+  const ni  = i+dir; if(ni<0||ni>=vis.length) return;
+  curMoQ = vis[ni].q_num; curMoGIdx = vis[ni].gIdx;
+  const g  = groups[curMoGIdx] || {};
+  const st = isSt(g.paper_type);
+  document.getElementById('moTitle').textContent = st ? `第 ${curMoQ} 题预览` : `Q${String(curMoQ).padStart(2,'0')} 预览`;
+  // 图书馆题目使用缓存 base64
+  const qObj = allQuestions.find(q => q.gIdx === curMoGIdx && q.q_num === curMoQ);
+  if (qObj && qObj._img_b64) {
+    document.getElementById('prevImg').src = `data:image/jpeg;base64,${qObj._img_b64}`;
+  } else {
+    document.getElementById('prevImg').src = `/api/preview/${curMoQ}?dpi=150&session_id=${sessionId}&file_idx=${curMoGIdx}&_t=${uploadToken}`;
+  }
+  updateMoNav();
+}
+function dlFromMo() { if(curMoQ!=null) dlOne(curMoQ, curMoGIdx); }
+document.getElementById('prevMo').addEventListener('click', e => {
+  if(e.target===document.getElementById('prevMo')) closePrev();
+});
+
+// ══════════════════════════════════════════════════════════
+//  PDF EXPORT MODAL
+// ══════════════════════════════════════════════════════════
+function openPdfModal(scope) {
+  pdfExportScope = scope;
+  const nums = scope==='all' ? getVisibleQuestions() : [...selNums].map(uid => {
+    const [gi, qn] = uid.split('_').map(Number);
+    return allQuestions.find(q => q.gIdx===gi && q.q_num===qn);
+  }).filter(Boolean);
+
+  if (!nums.length) { toast('没有可导出的题目','err'); return; }
+  document.getElementById('pdfQCount').textContent = nums.length;
+  document.getElementById('pdfDpiShow').textContent = getDPI();
+  document.getElementById('pdfMo').classList.add('show');
+}
+function closePdfModal() { document.getElementById('pdfMo').classList.remove('show'); }
+
+async function doExportPdf() {
+  const filename = document.getElementById('pdfName').value.trim() || 'questions';
+  const layout   = document.getElementById('pdfLayout').value;
+  const dpi      = getDPI();
+
+  // 收集要导出的题目
+  let exportItems = [];
+  if (pdfExportScope === 'all') {
+    exportItems = getVisibleQuestions();
+  } else {
+    exportItems = [...selNums].map(uid => {
+      const [gi, qn] = uid.split('_').map(Number);
+      return allQuestions.find(q => q.gIdx===gi && q.q_num===qn);
+    }).filter(Boolean);
+  }
+
+  if (!exportItems.length) { toast('没有可导出的题目','err'); return; }
+
+  // 按 gIdx 分组（保持 exportItems 中的顺序）
+  const byGroup = {};
+  exportItems.forEach(q => {
+    if (!byGroup[q.gIdx]) byGroup[q.gIdx] = [];
+    byGroup[q.gIdx].push(q.q_num);
+  });
+
+  closePdfModal();
+
+  const gIdxList = Object.keys(byGroup).map(Number);
+  const totalQ   = exportItems.length;
+
+  // 全局有序列表（保留 sortOrder 排序，跨 gIdx）
+  const ordered_items = exportItems.map(q => ({ gIdx: q.gIdx, q_num: q.q_num }));
+
+  document.getElementById('ldProgWrap').style.display = '';
+  document.getElementById('ldProgFill').style.width = '0%';
+  document.getElementById('ldProgTxt').textContent = `0 / ${totalQ}`;
+  showLd(`正在生成合并 PDF（共 ${totalQ} 道题）…`);
+
+  try {
+    // ── 统一走合并模式（单文件也用合并接口，简洁统一）──
+    const sel_by_group = gIdxList.map(gi => ({ gIdx: gi, q_nums: byGroup[gi] }));
+
+    const startRes = await fetch('/api/export_pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        session_id: sessionId, merged: true,
+        sel_by_group, ordered_items, dpi, filename, layout,
+        cover_title: (document.getElementById('pdfCoverTitle')?.value||'').trim()
+      })
+    });
+    const startData = await startRes.json();
+    if (!startRes.ok || startData.error) throw new Error(startData.error || '任务启动失败');
+
+    const taskId = startData.task_id;
+
+    // 轮询进度
+    await new Promise((resolve, reject) => {
+      let failCount = 0; let secs = 0;
+      const poll = setInterval(async () => {
+        secs++;
+        if (secs > 300) { clearInterval(poll); reject(new Error('超时')); return; }
+        try {
+          const pr = await fetch(`/api/export_pdf/progress/${taskId}`);
+          if (!pr.ok) { failCount++; if(failCount>=8){clearInterval(poll);reject(new Error('进度查询失败'));} return; }
+          failCount = 0;
+          const pd = await pr.json();
+          if (pd.status==='error') { clearInterval(poll); reject(new Error(pd.error||'生成失败')); return; }
+          const pct = pd.total>0 ? Math.round(pd.progress/pd.total*100) : 0;
+          document.getElementById('ldProgFill').style.width = pct+'%';
+          document.getElementById('ldProgTxt').textContent = `${pd.progress} / ${pd.total}  (${pct}%)`;
+          document.getElementById('ldTxt').textContent = `正在生成 PDF… 已处理 ${pd.progress} 题`;
+          if (pd.status==='done') { clearInterval(poll); resolve(); }
+        } catch(e) { failCount++; if(failCount>=8){clearInterval(poll);reject(e);} }
+      }, 1000);
+    });
+
+    // 触发下载
+    document.getElementById('ldProgFill').style.width = '100%';
+    const a = document.createElement('a');
+    a.href = `/api/export_pdf/download/${taskId}`;
+    a.download = filename.endsWith('.pdf') ? filename : filename+'.pdf';
+    a.click();
+
+    hideLd();
+    document.getElementById('ldProgWrap').style.display = 'none';
+    toast(`PDF 已生成：${totalQ} 道题目，合并为一个文件`, 'ok');
+  } catch(e) {
+    hideLd();
+    document.getElementById('ldProgWrap').style.display = 'none';
+    toast('PDF 生成失败：'+e.message, 'err');
+  }
+}
+
+document.getElementById('pdfMo').addEventListener('click', e => {
+  if(e.target===document.getElementById('pdfMo')) closePdfModal();
+});
+
+// ══════════════════════════════════════════════════════════
+//  DOWNLOAD
+// ══════════════════════════════════════════════════════════
+async function dlOne(qNum, gIdx, e) {
+  if(e) e.stopPropagation();
+  const g  = groups[gIdx] || {};
+  const st = isSt(g.paper_type);
+  toast(`正在导出 ${st?'第'+qNum+'题':'Q'+String(qNum).padStart(2,'0')}…`, 'info', 2000);
+  const a  = document.createElement('a');
+  a.href   = `/api/download/${qNum}?dpi=${getDPI()}&format=${getFmt()}&session_id=${sessionId}&file_idx=${gIdx}`;
+  a.download = `Q${String(qNum).padStart(2,'0')}.${getFmt()}`;
+  a.click();
+}
+
+async function dlAll() {
+  if (!allQuestions.length) { toast('请先上传PDF','err'); return; }
+  showLd(`正在打包全部题目…`);
+  const a = document.createElement('a');
+  a.href = `/api/download_all?dpi=${getDPI()}&format=${getFmt()}&session_id=${sessionId}&file_idx=${activeGIdx}`;
+  a.download = 'all_questions.zip'; a.click();
+  setTimeout(hideLd, 3000);
+  toast('正在下载，请稍候…','ok');
+}
+
+async function dlSelected() {
+  if (!selNums.size) { toast('请先选择题目','err'); return; }
+  // 只导当前激活文件的选中题
+  const qNums = [...selNums]
+    .map(uid => { const [gi,qn]=uid.split('_').map(Number); return {gi,qn}; })
+    .filter(x => x.gi===activeGIdx)
+    .map(x => x.qn);
+  if (!qNums.length) { toast('所选题目不属于当前活跃文件，请切换文件后下载','err'); return; }
+  showLd(`正在打包 ${qNums.length} 道题目…`);
+  try {
+    const res = await fetch('/api/download_batch', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ questions:qNums, dpi:getDPI(), format:getFmt(),
+                             session_id:sessionId, file_idx:activeGIdx })
+    });
+    if (!res.ok) { const d=await res.json(); throw new Error(d.error); }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a'); a.href=url; a.download='selected.zip'; a.click();
+    URL.revokeObjectURL(url);
+    hideLd(); toast(`成功导出 ${qNums.length} 道题目`,'ok');
+  } catch(e) { hideLd(); toast('导出失败:'+e.message,'err'); }
+}
+
+// ══════════════════════════════════════════════════════════
+//  RESET
+// ══════════════════════════════════════════════════════════
+function reset() {
+  sessionStorage.removeItem('tiku_session');
+  window._activeSyllabusType = null;  // 重置考纲类型，下次由文件内容决定
+  sessionId=null; groups=[]; allQuestions=[]; selNums.clear();
+  filteredNums=null; activeDiffFilter=0; thumbQ=[]; thumbIng=0; activeGIdx=0;
+  document.getElementById('diffFilterWrap').style.display='none';
+  // 重置难度筛选按钮状态
+  document.querySelectorAll('.diff-star-btn').forEach(b => b.classList.remove('active'));
+  const clearBtn = document.querySelector('.diff-star-btn.clear-btn');
+  if(clearBtn) clearBtn.classList.add('active');
+  document.getElementById('qGridWrap').innerHTML='';
+  document.getElementById('empty').style.display='';
+  document.getElementById('statsCard').style.display='none';
+  document.getElementById('actCard').style.display='none';
+  document.getElementById('toolbar').style.display='none';
+  document.getElementById('fileTag').style.display='none';
+  document.getElementById('fileList').style.display='none';
+  document.getElementById('syllabusCard').style.display='none';
+  document.getElementById('fileIn').value='';
+  document.getElementById('filterHint').style.display='none';
+  dropEl.classList.remove('ok');
+  document.getElementById('typeBadge').style.display='none';
+  setPaperType('auto', document.querySelector('.pt-btn.auto'));
+  updateSelUI();
+}
+
+// ══════════════════════════════════════════════════════════
+//  KEYBOARD
+// ══════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (e.key==='Escape') { closePrev(); closePdfModal(); }
+  if (document.getElementById('prevMo').classList.contains('show')) {
+    if (e.key==='ArrowLeft')  navMo(-1);
+    if (e.key==='ArrowRight') navMo(1);
+  }
+});
+
+document.getElementById('dpiR').addEventListener('input', function() {
+  document.getElementById('dpiV').textContent = this.value+' dpi';
+});
+
+// 页面加载完成后恢复上次会话
+_autoRestore();
+
+// ══════════════════════════════════════════════════════════
+//  手动编辑题目知识点 / 难度
+// ══════════════════════════════════════════════════════════
+let _editMeta = { uid: null, gIdx: null, qNum: null, diff: null, topicId: null };
+
+function setDiffQuick(uid, gIdx, qNum, stars, e) {
+  if (e) e.stopPropagation();
+  // 直接调用 API 设置难度
+  fetch('/api/update_question_meta', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({session_id: sessionId, g_idx: gIdx, q_num: qNum,
+                          field: 'difficulty', value: stars})
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      // 更新内存中的 allQuestions
+      const q = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
+      if (q) q.difficulty = stars;
+      // 只刷新这张卡片
+      renderGrid();
+      toast(`Q${String(qNum).padStart(2,'0')} 难度已设为 ${stars} 星`, 'ok');
+    } else {
+      toast(d.error || '设置失败', 'err');
+    }
+  }).catch(() => toast('网络错误', 'err'));
+}
+
+function openEditMeta(uid, gIdx, qNum, focusField, e) {
+  if (e) e.stopPropagation();
+  const q = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
+  if (!q) return;
+
+  // 当前题目已有的topics（含is_core标记）
+  const existingTopics = Array.isArray(q.topics) ? q.topics : [];
+  const existingIds    = new Set(existingTopics.map(t => String(t.id)));
+  const coreIds        = new Set(existingTopics.filter(t => t.is_core).map(t => String(t.id)));
+
+  _editMeta = {
+    uid, gIdx, qNum,
+    diff:        q.difficulty || 3,
+    selectedIds: new Set(existingIds),
+    coreIds:     new Set(coreIds),
+    sessionTopics: null,  // 缓存已加载的考纲
+  };
+
+  document.getElementById('editMetaTitle').textContent =
+    `✏️ 编辑 Q${String(qNum).padStart(2,'0')}`;
+
+  // ── 难度按钮 ──
+  const diffNames = {1:'★ Starter',2:'★★ Basic',3:'★★★ Medium',4:'★★★★ Hard',5:'★★★★★ Expert'};
+  const diffColors = {1:'#10b981',2:'#3b82f6',3:'#f59e0b',4:'#f97316',5:'#ef4444'};
+  const starWrap = document.getElementById('editDiffStars');
+  starWrap.innerHTML = '';
+  for (let i = 1; i <= 5; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'diff-btn' + (i === _editMeta.diff ? ' active' : '');
+    btn.style.borderColor = i === _editMeta.diff ? diffColors[i] : '';
+    btn.style.background  = i === _editMeta.diff ? diffColors[i] : '';
+    btn.textContent = diffNames[i];
+    btn.dataset.val = i;
+    btn.onclick = function() {
+      _editMeta.diff = +this.dataset.val;
+      starWrap.querySelectorAll('.diff-btn').forEach((b,idx) => {
+        const active = +b.dataset.val === _editMeta.diff;
+        b.classList.toggle('active', active);
+        b.style.borderColor = active ? diffColors[+b.dataset.val] : '';
+        b.style.background  = active ? diffColors[+b.dataset.val] : '';
+        b.style.color       = active ? '#fff' : '';
+      });
+    };
+    starWrap.appendChild(btn);
+  }
+
+  // ── 知识点二级树 ──
+  const treeWrap = document.getElementById('editTopicTree');
+  treeWrap.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px">⏳ 加载中...</div>';
+
+  const grp = groups[gIdx] || {};
+  const unit = grp.maths_unit || null;
+  const apiUrl = unit ? `/api/syllabus/edexcel_maths?unit=${unit}` : '/api/syllabus/edexcel_maths';
+
+  fetch(apiUrl).then(r => r.json()).then(data => {
+    _editMeta.sessionTopics = data.topics || [];
+    _renderEditTopicTree(treeWrap);
+  }).catch(() => {
+    treeWrap.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:8px">加载考纲失败</div>';
+  });
+
+  // ── 加载预览图 ──
+  const prevImg  = document.getElementById('editPreviewImg');
+  const prevLoad = document.getElementById('editPreviewLoad');
+  prevImg.style.display = 'none';
+  prevLoad.style.display = '';
+  prevLoad.textContent = '⏳ 加载中...';
+  const tok = uploadToken;
+  const imgSrc = `/api/preview/${qNum}?dpi=150&session_id=${sessionId}&file_idx=${gIdx}&_t=${tok}`;
+  const tmpImg = new Image();
+  tmpImg.onload = () => { prevImg.src = tmpImg.src; prevImg.style.display=''; prevLoad.style.display='none'; };
+  tmpImg.onerror = () => { prevLoad.textContent = '⚠️ 预览加载失败'; };
+  tmpImg.src = imgSrc;
+
+  // 导航按钮：计算当前在可见列表中的位置
+  const vis = getVisibleQuestions();
+  const visIdx = vis.findIndex(x => x.gIdx === gIdx && x.q_num === qNum);
+  document.getElementById('editNavPrev').disabled = visIdx <= 0;
+  document.getElementById('editNavNext').disabled = visIdx < 0 || visIdx >= vis.length - 1;
+
+  document.getElementById('editMetaMo').style.display = 'flex';
+}
+
+function _renderEditTopicTree(treeWrap) {
+  treeWrap.innerHTML = '';
+  const topics = _editMeta.sessionTopics || [];
+  topics.forEach(chapter => {
+    const chId = String(chapter.id);
+    const subtopics = chapter.subtopics || [];
+    // 判断章节级别选中状态
+    const chSelected = _editMeta.selectedIds.has(chId) ||
+                       subtopics.some(s => _editMeta.selectedIds.has(String(s.id)));
+    const chCore     = _editMeta.coreIds.has(chId);
+
+    const chDiv = document.createElement('div');
+    chDiv.className = 'tree-chapter';
+
+    // 章节头
+    const hdr = document.createElement('div');
+    hdr.className = 'tree-chapter-hdr';
+    hdr.innerHTML = `
+      <input type="checkbox" class="tree-chapter-cb" id="ech-${chId}" data-id="${chId}"
+             ${chSelected ? 'checked' : ''}>
+      <span class="tree-chapter-id">${chId}</span>
+      <span class="tree-chapter-label">${chapter.title}</span>
+      <button class="tree-star-btn ${chCore ? 'starred' : ''}" data-id="${chId}" title="设为核心知识点">★</button>
+      <span class="tree-chapter-chev ${subtopics.length ? '' : 'hidden'}">▶</span>`;
+
+    // 章节复选框
+    hdr.querySelector('.tree-chapter-cb').addEventListener('change', function() {
+      if (this.checked) {
+        _editMeta.selectedIds.add(chId);
+        // 自动勾选所有子项
+        subList.querySelectorAll('.tree-sub-cb').forEach(cb => {
+          cb.checked = true;
+          _editMeta.selectedIds.add(cb.dataset.id);
+        });
+      } else {
+        _editMeta.selectedIds.delete(chId);
+        // 取消所有子项
+        subList.querySelectorAll('.tree-sub-cb').forEach(cb => {
+          cb.checked = false;
+          _editMeta.selectedIds.delete(cb.dataset.id);
+        });
+      }
+    });
+
+    // 星标按钮
+    hdr.querySelector('.tree-star-btn').addEventListener('click', function(e) {
+      e.stopPropagation();
+      const id = this.dataset.id;
+      if (_editMeta.coreIds.has(id)) {
+        _editMeta.coreIds.delete(id);
+        this.classList.remove('starred');
+      } else {
+        _editMeta.coreIds.add(id);
+        this.classList.add('starred');
+        // 自动选中该章节
+        _editMeta.selectedIds.add(id);
+        const cb = hdr.querySelector('.tree-chapter-cb');
+        if (cb) cb.checked = true;
+      }
+    });
+
+    // 展开/收起
+    const chev = hdr.querySelector('.tree-chapter-chev');
+    if (subtopics.length) {
+      chev.addEventListener('click', e => { e.stopPropagation(); toggleEditSub(chId); });
+      hdr.querySelector('.tree-chapter-label').addEventListener('click', e => {
+        e.stopPropagation(); toggleEditSub(chId);
+      });
+    }
+
+    chDiv.appendChild(hdr);
+
+    // 子项列表
+    const subList = document.createElement('div');
+    subList.className = 'tree-subs';
+    subList.id = `esub-${chId}`;
+
+    subtopics.forEach(sub => {
+      const subId = String(sub.id);
+      const subSelected = _editMeta.selectedIds.has(subId);
+      const subCore     = _editMeta.coreIds.has(subId);
+
+      const subItem = document.createElement('div');
+      subItem.className = 'tree-sub-item';
+      subItem.innerHTML = `
+        <input type="checkbox" class="tree-sub-cb" id="esub-${subId}" data-id="${subId}"
+               data-chapter="${chId}" ${subSelected ? 'checked' : ''}>
+        <span class="tree-sub-id">${subId}</span>
+        <span class="tree-sub-label">${sub.title}</span>
+        <button class="tree-sub-star ${subCore ? 'starred' : ''}" data-id="${subId}" title="核心知识点">★</button>`;
+
+      subItem.querySelector('.tree-sub-cb').addEventListener('change', function() {
+        if (this.checked) {
+          _editMeta.selectedIds.add(subId);
+          _editMeta.selectedIds.add(chId);
+          const chCb = hdr.querySelector('.tree-chapter-cb');
+          if (chCb) chCb.checked = true;
+        } else {
+          _editMeta.selectedIds.delete(subId);
+          // 若所有子项都未选，取消章节
+          const anySubSelected = Array.from(subList.querySelectorAll('.tree-sub-cb')).some(cb => cb.checked);
+          if (!anySubSelected) {
+            _editMeta.selectedIds.delete(chId);
+            const chCb = hdr.querySelector('.tree-chapter-cb');
+            if (chCb) chCb.checked = false;
+          }
+        }
+      });
+
+      subItem.querySelector('.tree-sub-star').addEventListener('click', function(e) {
+        e.stopPropagation();
+        const id = this.dataset.id;
+        if (_editMeta.coreIds.has(id)) {
+          _editMeta.coreIds.delete(id);
+          this.classList.remove('starred');
+        } else {
+          _editMeta.coreIds.add(id);
+          this.classList.add('starred');
+          // 自动选中
+          _editMeta.selectedIds.add(id);
+          _editMeta.selectedIds.add(chId);
+          subItem.querySelector('.tree-sub-cb').checked = true;
+          const chCb = hdr.querySelector('.tree-chapter-cb');
+          if (chCb) chCb.checked = true;
+        }
+      });
+
+      subList.appendChild(subItem);
+    });
+
+    chDiv.appendChild(subList);
+    treeWrap.appendChild(chDiv);
+  });
+}
+
+function toggleEditSub(chId) {
+  const sub  = document.getElementById(`esub-${chId}`);
+  const chev = document.querySelector(`#editTopicTree .tree-chapter-hdr [data-id="${chId}"] + * + * + * .tree-chapter-chev`);
+  // 用更可靠方式
+  if (!sub) return;
+  const open = sub.classList.toggle('open');
+  // 找对应chevron
+  const allChevs = document.querySelectorAll('#editTopicTree .tree-chapter-chev');
+  const allChapters = document.querySelectorAll('#editTopicTree .tree-chapter');
+  allChapters.forEach(ch => {
+    const s = ch.querySelector('.tree-subs');
+    const c = ch.querySelector('.tree-chapter-chev');
+    if (s && s.id === `esub-${chId}` && c) {
+      c.classList.toggle('open', open);
+    }
+  });
+}
+
+function clearAllTopicSel() {
+  _editMeta.selectedIds.clear();
+  _editMeta.coreIds.clear();
+  document.querySelectorAll('#editTopicTree input[type=checkbox]').forEach(cb => cb.checked = false);
+  document.querySelectorAll('#editTopicTree .tree-star-btn,.tree-sub-star').forEach(b => b.classList.remove('starred'));
+}
+
+function editNavQ(dir) {
+  const vis = getVisibleQuestions();
+  const cur = _editMeta;
+  const visIdx = vis.findIndex(x => x.gIdx === cur.gIdx && x.q_num === cur.qNum);
+  const next = vis[visIdx + dir];
+  if (next) {
+    // 先自动保存当前题
+    _applyEditMetaToMemory();
+    openEditMeta(`${next.gIdx}_${next.q_num}`, next.gIdx, next.q_num, null, null);
+  }
+}
+
+function closeEditMeta() {
+  document.getElementById('editMetaMo').style.display = 'none';
+}
+
+function _applyEditMetaToMemory() {
+  const { gIdx, qNum, diff, selectedIds, coreIds, sessionTopics } = _editMeta;
+  const q = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
+  if (!q) return;
+  q.difficulty = diff;
+  // 构建 topics 列表（选中的ID，带 is_core 标记）
+  const topicsArr = [];
+  if (sessionTopics) {
+    sessionTopics.forEach(ch => {
+      const chId = String(ch.id);
+      if (selectedIds.has(chId)) {
+        topicsArr.push({ id: chId, title: ch.title, score: 99, is_core: coreIds.has(chId) });
+      }
+      (ch.subtopics || []).forEach(sub => {
+        const subId = String(sub.id);
+        if (selectedIds.has(subId)) {
+          topicsArr.push({ id: subId, title: sub.title, parent_id: chId, score: 99, is_core: coreIds.has(subId) });
+        }
+      });
+    });
+  }
+  if (topicsArr.length) q.topics = topicsArr;
+}
+
+async function saveEditMeta() {
+  const { gIdx, qNum, diff, selectedIds, coreIds, sessionTopics } = _editMeta;
+  if (!sessionId) { toast('无效会话', 'err'); return; }
+
+  // 构建 topics 列表
+  const topicsArr = [];
+  if (sessionTopics) {
+    sessionTopics.forEach(ch => {
+      const chId = String(ch.id);
+      if (selectedIds.has(chId)) {
+        topicsArr.push({ id: chId, title: ch.title, score: 99, is_core: coreIds.has(chId) });
+      }
+      (ch.subtopics || []).forEach(sub => {
+        const subId = String(sub.id);
+        if (selectedIds.has(subId)) {
+          topicsArr.push({ id: subId, title: sub.title, parent_id: chId, score: 99, is_core: coreIds.has(subId) });
+        }
+      });
+    });
+  }
+
+  const promises = [
+    fetch('/api/update_question_meta', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: sessionId, g_idx: gIdx, q_num: qNum,
+                            field: 'difficulty', value: diff})
+    }).then(r => r.json()),
+    fetch('/api/update_question_meta', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: sessionId, g_idx: gIdx, q_num: qNum,
+                            field: 'topics', value: topicsArr.length ? topicsArr : []})
+    }).then(r => r.json()),
+  ];
+
+  try {
+    const results = await Promise.all(promises);
+    const failed = results.filter(r => !r.ok);
+    if (failed.length) {
+      toast('部分保存失败：' + failed.map(r => r.error).join(', '), 'err');
+    } else {
+      _applyEditMetaToMemory();
+      closeEditMeta();
+      renderGrid();
+      toast(`Q${String(qNum).padStart(2,'0')} 已保存`, 'ok');
+    }
+  } catch {
+    toast('网络错误', 'err');
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  导入已导出的题库 PDF
+// ══════════════════════════════════════════════════════════
+async function importExportedPdf(file) {
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+
+  // 重置文件输入，允许重复选择同一文件
+  document.getElementById('importFileIn').value = '';
+
+  toast('正在解析导入的 PDF...', 'info');
+
+  try {
+    const res = await fetch('/api/import_exported_pdf', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      toast(data.error || '导入失败', 'err'); return;
+    }
+
+    // 将导入结果整合进现有 groups（追加）
+    sessionId = data.session_id;
+    const g = {
+      filename:        data.filename,
+      source:          'imported',
+      paper_type:      'edexcel_maths',
+      maths_unit:      null,
+      questions:       data.questions,
+      total_questions: data.total_questions,
+    };
+    groups.push(g);
+
+    const gIdx = groups.length - 1;
+    data.questions.forEach(q => {
+      allQuestions.push({ ...q, gIdx, source: 'imported' });
+    });
+
+    renderGrid();
+    renderSyllabusCard();
+    document.getElementById('statsCard').style.display = '';
+    document.getElementById('actCard').style.display   = '';
+    document.getElementById('toolbar').style.display   = '';
+    document.getElementById('empty').style.display     = 'none';
+
+    toast(`✅ 已导入 ${data.total_questions} 道题目（来自 ${data.filename}）`, 'ok');
+  } catch(e) {
+    toast('导入失败：' + e.message, 'err');
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  题册图书馆（Library）— 保存 / 读取
+// ══════════════════════════════════════════════════════════
+
+// ── 全局变量：当前图书馆树形数据 ──
+let _libTree     = null;   // 从服务器拉取的树
+let _libBoards   = [];
+let _libSubjects = {};
+
+// 排序方式标签辅助函数（避免对象字面量双花括号触发 Jinja2 解析）
+function _sortLabel(s, long) {
+  if (s === 'chapter')   return long ? '按章节' : '按章节';
+  if (s === 'diff_asc')  return long ? '难度升序' : '难度↑';
+  if (s === 'diff_desc') return long ? '难度降序' : '难度↓';
+  return long ? '默认顺序' : s;
+}
+
+// ─────────────────────────────── 保存题册对话框 ───────────────────────────────
+async function openSaveLibDialog() {
+  if (!allQuestions.length) { toast('请先上传并解析 PDF', 'err'); return; }
+  const visibles = getVisibleQuestions();
+  if (!visibles.length) { toast('没有可见题目', 'err'); return; }
+
+  // 拉取考试局/学科列表
+  try {
+    const r = await fetch('/api/library/boards');
+    const d = await r.json();
+    _libBoards   = d.boards  || [];
+    _libSubjects = d.subjects|| {};
+  } catch(e) {
+    toast('获取考试局列表失败', 'err'); return;
+  }
+
+  // 填充考试局选项
+  const boardSel = document.getElementById('libSaveBoard');
+  boardSel.innerHTML = _libBoards.map(b => `<option value="${b}">${b}</option>`).join('');
+  _onSaveBoardChange();
+
+  // 默认题册名称：从当前文件/source推断
+  const activeG  = groups[activeGIdx] || {};
+  const examDate = allQuestions.find(q => q.exam_date)?.exam_date || '';
+  const defTitle = [activeG.maths_unit || '', examDate].filter(Boolean).join(' ') || '题册';
+  document.getElementById('libSaveTitle').value = defTitle;
+
+  // 默认考试局推断
+  const src = (activeG.source || '').toLowerCase();
+  if (src.includes('edexcel') || src.includes('edexcel_maths')) boardSel.value = 'Edexcel';
+  else if (src.includes('cambridge') || src === 'caie') boardSel.value = 'CAIE';
+  else if (src.includes('aqa')) boardSel.value = 'AQA';
+  _onSaveBoardChange();
+
+  // 显示题目数量
+  document.getElementById('libSaveCount').textContent = visibles.length;
+
+  // 显示排序方式
+  document.getElementById('libSaveSortHint').textContent = _sortLabel(sortOrder, true);
+
+  document.getElementById('libSaveModal').style.display = 'flex';
+}
+
+function _onSaveBoardChange() {
+  const board = document.getElementById('libSaveBoard').value;
+  const subs  = _libSubjects[board] || [];
+  const sel   = document.getElementById('libSaveSubject');
+  sel.innerHTML = subs.map(s => `<option value="${s}">${s}</option>`).join('');
+  // 默认选数学
+  const mathOpt = subs.find(s => s.includes('数学') && !s.includes('高数'));
+  if (mathOpt) sel.value = mathOpt;
+}
+
+async function confirmSaveLib() {
+  const title   = document.getElementById('libSaveTitle').value.trim() || '未命名题册';
+  const board   = document.getElementById('libSaveBoard').value;
+  const subject = document.getElementById('libSaveSubject').value;
+  if (!board || !subject) { toast('请选择考试局和学科', 'err'); return; }
+
+  closeSaveLibDialog();
+  const visibles = getVisibleQuestions();
+  const total = visibles.length;
+  if (!total) { toast('没有可见题目', 'err'); return; }
+
+  showLd(`正在保存题册（共 ${total} 题）…`);
+
+  try {
+    const activeG = groups[activeGIdx] || {};
+
+    // ── 新逻辑：直接把题目元数据 + session_id 发给服务端，由服务端裁图 ──
+    // 对于图库加载的题目（有 _img_b64），也传 b64，服务端优先使用
+    const questionsPayload = visibles.map(q => {
+      const entry = {
+        q_num:      q.q_num,
+        file_idx:   q.gIdx,
+        difficulty: q.difficulty,
+        topics:     q.topics || [],
+        exam_date:  q.exam_date || '',
+        source:     q.source   || '',
+      };
+      // 如果有缓存图片（图库题目），也传给服务端作为 fallback
+      if (q._img_b64) {
+        entry.img_bytes_b64 = q._img_b64;
+        entry.img_w         = q._img_w || 0;
+        entry.img_h         = q._img_h || 0;
+      }
+      return entry;
+    });
+
+    const res = await fetch('/api/library/save', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        session_id:    sessionId,
+        title,
+        board,
+        subject,
+        sort_order:    sortOrder,
+        maths_unit:    activeG.maths_unit  || '',
+        syllabus_type: activeG.paper_type  || 'edexcel_maths',
+        questions:     questionsPayload,
+      })
+    });
+
+    const d = await res.json();
+    hideLd();
+    if (!res.ok || !d.ok) { toast(d.error || '保存失败', 'err'); return; }
+
+    const msg = d.msg || `题册《${title}》已保存，共 ${d.count} 题`;
+    toast(`✅ ${msg}`, 'ok');
+    _libTree = null;  // 清缓存，下次重新拉取
+  } catch(e) {
+    hideLd(); toast('保存题册失败：' + e.message, 'err');
+  }
+}
+
+function closeSaveLibDialog() {
+  document.getElementById('libSaveModal').style.display = 'none';
+}
+
+// ─────────────────────────────── 读取题册对话框 ───────────────────────────────
+async function openLoadLibDialog() {
+  const modal = document.getElementById('libLoadModal');
+  modal.style.display = 'flex';
+  await refreshLibTree();
+}
+
+async function refreshLibTree() {
+  const container = document.getElementById('libTreeContainer');
+  container.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af">加载中…</div>';
+  try {
+    const r = await fetch('/api/library/list');
+    const d = await r.json();
+    _libTree = d.tree || [];
+    renderLibTree(_libTree);
+  } catch(e) {
+    container.innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">加载失败</div>';
+  }
+}
+
+function renderLibTree(tree) {
+  const container = document.getElementById('libTreeContainer');
+  let html = '';
+  let totalWbs = 0;
+
+  for (const boardNode of tree) {
+    const board = boardNode.board;
+    const hasAny = boardNode.subjects.some(s => s.workbooks.length > 0);
+    html += `<div class="lib-board-section">
+      <div class="lib-board-hdr" onclick="toggleLibBoard('${board}')">
+        <span class="lib-board-icon">${board==='Edexcel'?'🔷':board==='CAIE'?'🔶':'🔹'}</span>
+        <span class="lib-board-name">${board}</span>
+        <span class="lib-toggle-icon" id="lib-bico-${board}">▼</span>
+      </div>
+      <div class="lib-board-body" id="lib-board-${board}" style="display:${hasAny?'block':'none'}">`;
+
+    for (const subjNode of boardNode.subjects) {
+      if (!subjNode.workbooks.length) continue;
+      totalWbs += subjNode.workbooks.length;
+      html += `<div class="lib-subj-section">
+        <div class="lib-subj-hdr" onclick="toggleLibSubj('${board}_${subjNode.subject}')">
+          <span>📗 ${subjNode.subject}</span>
+          <span class="lib-subj-cnt">${subjNode.workbooks.length}</span>
+          <span class="lib-toggle-icon" id="lib-sico-${board}_${subjNode.subject}">▾</span>
+        </div>
+        <div class="lib-subj-body" id="lib-subj-${board}_${subjNode.subject}">`;
+
+      for (const wb of subjNode.workbooks) {
+        html += `<div class="lib-wb-item" onclick="selectLibWb(this,'${board}','${subjNode.subject}','${wb.id}')">
+          <div class="lib-wb-main">
+            <span class="lib-wb-title">${wb.title}</span>
+            <span class="lib-wb-cnt">${wb.count} 题</span>
+          </div>
+          <div class="lib-wb-meta">
+            ${wb.maths_unit ? `<span class="lib-wb-tag">${wb.maths_unit}</span>` : ''}
+            ${wb.sort_order && wb.sort_order!=='default' ? `<span class="lib-wb-tag">${_sortLabel(wb.sort_order)}</span>` : ''}
+            <span class="lib-wb-date">${wb.created_at}</span>
+          </div>
+        </div>
+        <div class="lib-wb-actions" id="lib-act-${wb.id}" style="display:none">
+          <button class="lib-act-btn lib-act-load" onclick="loadFromLib('${board}','${subjNode.subject}','${wb.id}','${wb.title.replace(/'/g,'\\\'') }')">
+            ✅ 读取题册
+          </button>
+          <button class="lib-act-btn lib-act-del" onclick="deleteFromLib(event,'${board}','${subjNode.subject}','${wb.id}')">
+            🗑️ 删除
+          </button>
+        </div>`;
+      }
+      html += `</div></div>`;  // lib-subj-body, lib-subj-section
+    }
+    html += `</div></div>`;  // lib-board-body, lib-board-section
+  }
+
+  if (!totalWbs) {
+    html = `<div style="text-align:center;padding:40px 20px;color:#9ca3af">
+      <div style="font-size:36px;margin-bottom:8px">📭</div>
+      <div>图书馆还没有题册</div>
+      <div style="font-size:12px;margin-top:6px">先保存一些题册吧</div>
+    </div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+let _selectedLibWb = null;
+
+function selectLibWb(el, board, subject, wbId) {
+  // 取消上一个选中
+  if (_selectedLibWb) {
+    const prev = document.getElementById(`lib-act-${_selectedLibWb}`);
+    const prevItem = document.querySelector(`.lib-wb-item.selected`);
+    if (prev) prev.style.display = 'none';
+    if (prevItem) prevItem.classList.remove('selected');
+  }
+  if (_selectedLibWb === wbId) {
+    _selectedLibWb = null;
+    return;
+  }
+  _selectedLibWb = wbId;
+  el.classList.add('selected');
+  const act = document.getElementById(`lib-act-${wbId}`);
+  if (act) act.style.display = 'flex';
+}
+
+function toggleLibBoard(board) {
+  const body = document.getElementById(`lib-board-${board}`);
+  const ico  = document.getElementById(`lib-bico-${board}`);
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  ico.textContent    = open ? '▶' : '▼';
+}
+
+function toggleLibSubj(key) {
+  const body = document.getElementById(`lib-subj-${key}`);
+  const ico  = document.getElementById(`lib-sico-${key}`);
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  ico.textContent    = open ? '▸' : '▾';
+}
+
+async function loadFromLib(board, subject, wbId, title) {
+  closeLoadLibDialog();
+  showLd(`正在读取题册《${title}》…`);
+  try {
+    const r = await fetch(`/api/library/load/${wbId}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}`);
+    const d = await r.json();
+    hideLd();
+    if (!r.ok || !d.ok) { toast(d.error || '读取失败', 'err'); return; }
+
+    _applyLoadedWorkbook(d);
+    toast(`✅ 题册《${d.title}》已读取，共 ${d.count} 题，可继续编辑`, 'ok');
+  } catch(e) {
+    hideLd(); toast('读取题册失败：' + e.message, 'err');
+  }
+}
+
+async function deleteFromLib(evt, board, subject, wbId) {
+  evt.stopPropagation();
+  if (!confirm('确认删除此题册？操作不可恢复。')) return;
+  try {
+    const r = await fetch(`/api/library/delete/${wbId}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}`, {method:'DELETE'});
+    const d = await r.json();
+    if (!d.ok) { toast(d.error || '删除失败', 'err'); return; }
+    toast('题册已删除', 'ok');
+    _libTree = null;
+    _selectedLibWb = null;
+    await refreshLibTree();
+  } catch(e) {
+    toast('删除失败：' + e.message, 'err');
+  }
+}
+
+function _applyLoadedWorkbook(d) {
+  // ── 构建一个新的 group（workbook 类型）并追加到当前 groups ──
+  const isAppend = allQuestions.length > 0;
+  const newGIdx  = isAppend ? groups.length : 0;
+
+  if (!isAppend) {
+    allQuestions = [];
+    groups       = [];
+    selNums      = new Set();
+  }
+
+  // 生成新的 session（若追加则保持原 session）
+  if (!isAppend) sessionId = 'lib_' + d.id;
+
+  // 构建 group
+  const g = {
+    filename:        d.title + '.json',
+    source:          'workbook',
+    paper_type:      d.syllabus_type || 'edexcel_maths',
+    maths_unit:      d.maths_unit || null,
+    exam_date:       '',
+    questions:       [],
+    total_questions: d.count,
+    // 保存原始排序意图
+    _sort_order:     d.sort_order || 'default',
+    _wb_id:          d.id,
+    _board:          d.board,
+    _subject:        d.subject,
+    _wb_title:       d.title,
+  };
+
+  // 追加题目
+  const baseSeq = allQuestions.length;
+  for (let i = 0; i < d.questions.length; i++) {
+    const q = d.questions[i];
+    const qObj = {
+      q_num:         q.q_num || (baseSeq + i + 1),
+      difficulty:    q.difficulty,
+      topics:        q.topics || [],
+      exam_date:     q.exam_date || '',
+      source:        q.source || 'workbook',
+      paper_type:    g.paper_type,
+      maths_unit:    g.maths_unit,
+      gIdx:          newGIdx,
+      // 图片缓存（base64）
+      _img_b64:      q.img_bytes_b64 || '',
+      _img_w:        q.img_w || 0,
+      _img_h:        q.img_h || 0,
+    };
+    allQuestions.push(qObj);
+    g.questions.push(qObj);
+  }
+
+  groups.push(g);
+  if (!isAppend) activeGIdx = 0;
+
+  // 恢复排序
+  const savedSort = d.sort_order || 'default';
+  if (savedSort !== 'default') {
+    sortOrder = savedSort;
+    // 更新排序按钮 UI
+    document.querySelectorAll('.sort-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.sort === savedSort);
+    });
+  }
+
+  renderGrid();
+  renderSyllabusCard();
+  document.getElementById('statsCard').style.display = '';
+  document.getElementById('actCard').style.display   = '';
+  document.getElementById('toolbar').style.display   = '';
+  document.getElementById('empty').style.display     = 'none';
+
+  // 更新保存按钮状态
+  const wbBtn = document.getElementById('btnSaveWb');
+  if (wbBtn) wbBtn.disabled = false;
+}
+
+function closeLoadLibDialog() {
+  document.getElementById('libLoadModal').style.display = 'none';
+  _selectedLibWb = null;
+}
+
+// ── preview_b64 override：workbook 题目使用缓存的 base64 ──
+// 在 saveWorkbook 调用前拦截，workbook 题目直接用 _img_b64
+const _origFetch = window.fetch;
+// （不 override fetch，改为在 confirmSaveLib 里特判 _img_b64）
+
+
+async function saveWorkbook() {
+  if (!allQuestions.length) { toast('请先上传并解析 PDF', 'err'); return; }
+
+  // 弹出标题输入框
+  const wbTitle = prompt('请输入题册标题（例如：数学Edexcel P3题册）：',
+                         '数学Edexcel 题册') || '题册';
+
+  // 收集所有可见题目的元数据 + 图片
+  const visibles = getVisibleQuestions();
+  if (!visibles.length) { toast('没有可见题目', 'err'); return; }
+
+  showLd(`正在生成题册 PDF（共 ${visibles.length} 题）…`);
+
+  try {
+    // 获取每题图片的 base64
+    const questionsMeta = [];
+    for (const q of visibles) {
+      // 从 /api/preview_b64 获取图片 base64
+      const previewRes = await fetch(`/api/preview_b64/${q.q_num}?dpi=120&session_id=${sessionId}&file_idx=${q.gIdx}`);
+      if (!previewRes.ok) continue;
+      const previewData = await previewRes.json();
+      if (previewData.error) continue;
+      const b64 = previewData.img_b64 || '';
+      if (!b64) continue;
+      questionsMeta.push({
+        q_num:         q.q_num,
+        difficulty:    q.difficulty,
+        topics:        q.topics || [],
+        img_bytes_b64: b64,
+        img_w:         previewData.img_w || 1000,
+        img_h:         previewData.img_h || 500,
+      });
+    }
+
+    if (!questionsMeta.length) { hideLd(); toast('获取题目图片失败', 'err'); return; }
+
+    // 获取 syllabus 和 unit 信息
+    const activeG = groups[activeGIdx] || {};
+    const syllabusType = activeG.paper_type || 'edexcel_maths';
+    const mathsUnit    = activeG.maths_unit || '';
+
+    const res = await fetch('/api/save_workbook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id:      sessionId,
+        workbook_title:  wbTitle,
+        syllabus_type:   syllabusType,
+        maths_unit:      mathsUnit,
+        questions_meta:  questionsMeta,
+      })
+    });
+
+    hideLd();
+    if (!res.ok) {
+      const d = await res.json();
+      toast(d.error || '生成题册失败', 'err'); return;
+    }
+
+    // 触发下载
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    const safeName = wbTitle.replace(/[\\/*?:"<>|]/g, '_');
+    a.download = `${safeName}.pdf`;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+
+    toast(`✅ 题册已保存：${safeName}.pdf`, 'ok');
+  } catch(e) {
+    hideLd(); toast('保存题册失败：' + e.message, 'err');
+  }
+}
+
+async function loadWorkbook(file) {
+  if (!file) return;
+  document.getElementById('loadWbFileIn').value = '';
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  toast('正在读取题册...', 'info');
+  showLd('正在解析题册 PDF…');
+
+  try {
+    const res  = await fetch('/api/load_workbook', { method: 'POST', body: fd });
+    const data = await res.json();
+    hideLd();
+    if (!res.ok || data.error) {
+      toast(data.error || '读取题册失败', 'err'); return;
+    }
+
+    // 清空当前状态，加载题册
+    allQuestions = [];
+    groups       = [];
+    selNums      = new Set();
+    sessionId    = data.session_id;
+
+    const g = {
+      filename:        data.filename,
+      source:          'workbook',
+      paper_type:      data.syllabus || 'edexcel_maths',
+      maths_unit:      data.maths_unit || null,
+      questions:       data.questions,
+      total_questions: data.total_questions,
+    };
+    groups.push(g);
+
+    const gIdx = 0;
+    data.questions.forEach(q => {
+      allQuestions.push({ ...q, gIdx, source: 'workbook' });
+    });
+
+    renderGrid();
+    renderSyllabusCard();
+    document.getElementById('statsCard').style.display = '';
+    document.getElementById('actCard').style.display   = '';
+    document.getElementById('toolbar').style.display   = '';
+    document.getElementById('empty').style.display     = 'none';
+
+    const wbName = data.workbook_title ? `《${data.workbook_title}》` : file.name;
+    toast(`✅ 题册 ${wbName} 已读取，共 ${data.total_questions} 道题`, 'ok');
+  } catch(e) {
+    hideLd(); toast('读取题册失败：' + e.message, 'err');
+  }
+}
+
+</script>
+
+<!-- ═══════════════ 题册图书馆 - 保存对话框 ═══════════════ -->
+<div id="libSaveModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:14px;width:460px;max-width:96vw;box-shadow:0 20px 50px rgba(0,0,0,.2);overflow:hidden">
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#7c3aed,#5b21b6);padding:18px 20px;color:#fff;display:flex;align-items:center;gap:10px">
+      <span style="font-size:22px">💾</span>
+      <div>
+        <div style="font-size:15px;font-weight:700">保存题册到图书馆</div>
+        <div style="font-size:11px;opacity:.8;margin-top:2px">题册将长期保存在服务器，随时可读取</div>
+      </div>
+      <button onclick="closeSaveLibDialog()" style="margin-left:auto;background:none;border:none;color:#fff;font-size:20px;cursor:pointer;opacity:.7">✕</button>
+    </div>
+    <!-- Body -->
+    <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
+      <!-- 题册名称 -->
+      <div>
+        <label style="font-size:12px;font-weight:700;color:#374151;margin-bottom:5px;display:block">📝 题册名称</label>
+        <input id="libSaveTitle" type="text" placeholder="例如：P3 Integration 专题"
+          style="width:100%;border:1.5px solid #d1d5db;border-radius:8px;padding:9px 12px;font-size:14px;outline:none;transition:.15s"
+          onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#d1d5db'">
+      </div>
+      <!-- 考试局 + 学科 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label style="font-size:12px;font-weight:700;color:#374151;margin-bottom:5px;display:block">🎓 考试局</label>
+          <select id="libSaveBoard" onchange="_onSaveBoardChange()"
+            style="width:100%;border:1.5px solid #d1d5db;border-radius:8px;padding:8px 10px;font-size:13px;outline:none;background:#fff;cursor:pointer">
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:#374151;margin-bottom:5px;display:block">📚 学科</label>
+          <select id="libSaveSubject"
+            style="width:100%;border:1.5px solid #d1d5db;border-radius:8px;padding:8px 10px;font-size:13px;outline:none;background:#fff;cursor:pointer">
+          </select>
+        </div>
+      </div>
+      <!-- 信息提示 -->
+      <div style="background:#f5f3ff;border-radius:8px;padding:10px 14px;font-size:12px;color:#5b21b6;display:flex;gap:10px;align-items:center">
+        <span style="font-size:18px">ℹ️</span>
+        <div>
+          将保存 <strong id="libSaveCount">0</strong> 道题目，
+          当前排序：<strong id="libSaveSortHint">默认</strong>
+        </div>
+      </div>
+    </div>
+    <!-- Footer -->
+    <div style="padding:0 20px 18px;display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeSaveLibDialog()"
+        style="padding:9px 18px;border-radius:8px;border:1.5px solid #d1d5db;background:#fff;font-size:13px;cursor:pointer;color:#374151">
+        取消
+      </button>
+      <button onclick="confirmSaveLib()"
+        style="padding:9px 22px;border-radius:8px;border:none;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;font-size:13px;font-weight:700;cursor:pointer">
+        💾 确认保存
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ 题册图书馆 - 读取对话框 ═══════════════ -->
+<div id="libLoadModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:14px;width:520px;max-width:96vw;max-height:88vh;box-shadow:0 20px 50px rgba(0,0,0,.2);display:flex;flex-direction:column;overflow:hidden">
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#065f46,#047857);padding:18px 20px;color:#fff;display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <span style="font-size:22px">📚</span>
+      <div>
+        <div style="font-size:15px;font-weight:700">题册图书馆</div>
+        <div style="font-size:11px;opacity:.8;margin-top:2px">点击题册选中，再点击"读取"按钮</div>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <button onclick="refreshLibTree()" title="刷新"
+          style="background:rgba(255,255,255,.2);border:none;color:#fff;font-size:14px;padding:5px 8px;border-radius:6px;cursor:pointer">🔄</button>
+        <button onclick="closeLoadLibDialog()"
+          style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;opacity:.7">✕</button>
+      </div>
+    </div>
+    <!-- Tree Body -->
+    <div id="libTreeContainer"
+      style="flex:1;overflow-y:auto;padding:12px 14px;min-height:200px">
+      <div style="text-align:center;padding:40px;color:#9ca3af">加载中…</div>
+    </div>
+    <!-- Footer -->
+    <div style="padding:12px 16px;border-top:1px solid #e5e7eb;background:#f9fafb;flex-shrink:0;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#6b7280">
+      <span>💡 读取后可继续上传新题目并混合编辑</span>
+      <button onclick="closeLoadLibDialog()"
+        style="padding:7px 16px;border-radius:8px;border:1.5px solid #d1d5db;background:#fff;font-size:12px;cursor:pointer">关闭</button>
+    </div>
+  </div>
+</div>
+
+<style>
+/* ── 题册图书馆树形样式 ── */
+.lib-board-section{margin-bottom:4px}
+.lib-board-hdr{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#f3f4f6;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px;transition:.15s;user-select:none}
+.lib-board-hdr:hover{background:#e5e7eb}
+.lib-board-icon{font-size:16px}
+.lib-board-name{flex:1}
+.lib-toggle-icon{font-size:11px;color:#9ca3af;transition:.2s}
+.lib-board-body{padding:4px 0 4px 10px}
+.lib-subj-section{margin-bottom:3px}
+.lib-subj-hdr{display:flex;align-items:center;gap:6px;padding:6px 10px;background:#fff;border:1px solid #e5e7eb;border-radius:7px;cursor:pointer;font-size:12px;transition:.15s;user-select:none}
+.lib-subj-hdr:hover{border-color:#a7f3d0;background:#f0fdf4}
+.lib-subj-cnt{background:#d1fae5;color:#065f46;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:auto}
+.lib-subj-body{padding:4px 0 4px 12px;display:flex;flex-direction:column;gap:3px}
+.lib-wb-item{border:1.5px solid #e5e7eb;border-radius:8px;padding:10px 12px;cursor:pointer;transition:.15s;background:#fff}
+.lib-wb-item:hover{border-color:#6ee7b7;background:#f0fdf4}
+.lib-wb-item.selected{border-color:#059669;background:#ecfdf5;box-shadow:0 0 0 2px rgba(5,150,105,.12)}
+.lib-wb-main{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.lib-wb-title{font-size:13px;font-weight:600;color:#1f2937;flex:1}
+.lib-wb-cnt{font-size:11px;background:#dbeafe;color:#1d4ed8;padding:1px 7px;border-radius:8px;white-space:nowrap;font-weight:600}
+.lib-wb-meta{display:flex;gap:5px;align-items:center}
+.lib-wb-tag{font-size:10px;background:#f3f4f6;color:#6b7280;padding:1px 6px;border-radius:5px}
+.lib-wb-date{font-size:10px;color:#9ca3af;margin-left:auto}
+.lib-wb-actions{padding:6px 12px 10px;display:flex;gap:8px}
+.lib-act-btn{flex:1;padding:7px;border-radius:7px;border:none;font-size:12px;font-weight:600;cursor:pointer;transition:.15s}
+.lib-act-load{background:#059669;color:#fff}
+.lib-act-load:hover{background:#047857}
+.lib-act-del{background:#fee2e2;color:#dc2626}
+.lib-act-del:hover{background:#fecaca}
+</style>
+</body>
+</html>

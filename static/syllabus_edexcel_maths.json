@@ -1,0 +1,689 @@
+{
+  "exam_board": "Pearson Edexcel",
+  "subject": "Mathematics / Pure Mathematics",
+  "code": "WMA/WPM",
+  "units": [
+    "P1",
+    "P2",
+    "P3",
+    "P4"
+  ],
+  "topics": [
+    {
+      "id": "P1-1",
+      "unit": "P1",
+      "title": "Algebra and functions",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P1-1.1",
+          "title": "Laws of indices for all rational exponents"
+        },
+        {
+          "id": "P1-1.2",
+          "title": "Surds and rationalisation"
+        },
+        {
+          "id": "P1-1.3",
+          "title": "Quadratic functions and graphs"
+        },
+        {
+          "id": "P1-1.4",
+          "title": "Discriminant of a quadratic function"
+        },
+        {
+          "id": "P1-1.5",
+          "title": "Completing the square and solving quadratics"
+        },
+        {
+          "id": "P1-1.6",
+          "title": "Simultaneous equations"
+        },
+        {
+          "id": "P1-1.7",
+          "title": "Linear and quadratic inequalities"
+        },
+        {
+          "id": "P1-1.8",
+          "title": "Graphical representation of inequalities"
+        },
+        {
+          "id": "P1-1.9",
+          "title": "Cubic functions and graphs"
+        },
+        {
+          "id": "P1-1.10",
+          "title": "Transformations of functions"
+        }
+      ]
+    },
+    {
+      "id": "P1-2",
+      "unit": "P1",
+      "title": "Coordinate geometry",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P1-2.1",
+          "title": "Equation of a straight line, gradient, midpoint"
+        },
+        {
+          "id": "P1-2.2",
+          "title": "Conditions for parallel and perpendicular lines"
+        },
+        {
+          "id": "P1-2.3",
+          "title": "Equation of a circle"
+        }
+      ]
+    },
+    {
+      "id": "P1-3",
+      "unit": "P1",
+      "title": "Sequences and series",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P1-3.1",
+          "title": "Arithmetic sequences and series, nth term"
+        },
+        {
+          "id": "P1-3.2",
+          "title": "Arithmetic series sum formula"
+        },
+        {
+          "id": "P1-3.3",
+          "title": "Geometric sequences and series"
+        },
+        {
+          "id": "P1-3.4",
+          "title": "Sum of a geometric series, sum to infinity"
+        },
+        {
+          "id": "P1-3.5",
+          "title": "Binomial expansion for positive integer n"
+        }
+      ]
+    },
+    {
+      "id": "P1-4",
+      "unit": "P1",
+      "title": "Trigonometry",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P1-4.1",
+          "title": "Sine, cosine, tangent for any angle"
+        },
+        {
+          "id": "P1-4.2",
+          "title": "Sine rule, cosine rule, area of triangle"
+        },
+        {
+          "id": "P1-4.3",
+          "title": "Trigonometric identities sin²+cos²=1, tan=sin/cos"
+        },
+        {
+          "id": "P1-4.4",
+          "title": "Solving trigonometric equations"
+        }
+      ]
+    },
+    {
+      "id": "P1-5",
+      "unit": "P1",
+      "title": "Exponentials and logarithms",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P1-5.1",
+          "title": "Laws of logarithms"
+        },
+        {
+          "id": "P1-5.2",
+          "title": "Solving equations with logarithms"
+        },
+        {
+          "id": "P1-5.3",
+          "title": "Natural logarithm and e^x"
+        }
+      ]
+    },
+    {
+      "id": "P1-6",
+      "unit": "P1",
+      "title": "Differentiation",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P1-6.1",
+          "title": "Derivative of x^n, sums and differences"
+        },
+        {
+          "id": "P1-6.2",
+          "title": "Gradient of a curve, tangent and normal"
+        },
+        {
+          "id": "P1-6.3",
+          "title": "Stationary points, increasing and decreasing functions"
+        },
+        {
+          "id": "P1-6.4",
+          "title": "Second derivative, classification of stationary points"
+        }
+      ]
+    },
+    {
+      "id": "P1-7",
+      "unit": "P1",
+      "title": "Integration",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P1-7.1",
+          "title": "Integration of x^n (n ≠ -1), indefinite integral"
+        },
+        {
+          "id": "P1-7.2",
+          "title": "Definite integrals and area under a curve"
+        },
+        {
+          "id": "P1-7.3",
+          "title": "Area between curves"
+        }
+      ]
+    },
+    {
+      "id": "P2-1",
+      "unit": "P2",
+      "title": "Proof",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P2-1.1",
+          "title": "Structure of mathematical proof"
+        },
+        {
+          "id": "P2-1.2",
+          "title": "Proof by exhaustion"
+        },
+        {
+          "id": "P2-1.3",
+          "title": "Disproof by counter example"
+        }
+      ]
+    },
+    {
+      "id": "P2-2",
+      "unit": "P2",
+      "title": "Algebra and functions",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P2-2.1",
+          "title": "Algebraic division, Factor Theorem, Remainder Theorem"
+        }
+      ]
+    },
+    {
+      "id": "P2-3",
+      "unit": "P2",
+      "title": "Coordinate geometry",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P2-3.1",
+          "title": "Circle geometry: equation, angle in semicircle, tangent"
+        }
+      ]
+    },
+    {
+      "id": "P2-4",
+      "unit": "P2",
+      "title": "Sequences and series",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P2-4.1",
+          "title": "Sequences: increasing, decreasing, periodic"
+        },
+        {
+          "id": "P2-4.2",
+          "title": "Sigma notation, recurrence relations"
+        }
+      ]
+    },
+    {
+      "id": "P2-5",
+      "unit": "P2",
+      "title": "Trigonometry",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P2-5.1",
+          "title": "Radian measure, arc length, sector area"
+        },
+        {
+          "id": "P2-5.2",
+          "title": "Exact values of sin, cos, tan for special angles"
+        },
+        {
+          "id": "P2-5.3",
+          "title": "Solving trigonometric equations in radians"
+        }
+      ]
+    },
+    {
+      "id": "P2-6",
+      "unit": "P2",
+      "title": "Exponentials and logarithms",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P2-6.1",
+          "title": "Graphs of y=a^x, y=e^x, transformations"
+        },
+        {
+          "id": "P2-6.2",
+          "title": "Solving equations of form e^(ax+b)=p, ln(ax+b)=q"
+        },
+        {
+          "id": "P2-6.3",
+          "title": "Logarithmic graphs: y=ax^n and y=kb^x"
+        }
+      ]
+    },
+    {
+      "id": "P2-7",
+      "unit": "P2",
+      "title": "Differentiation",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P2-7.1",
+          "title": "Differentiation of sin x, cos x"
+        },
+        {
+          "id": "P2-7.2",
+          "title": "Differentiation from first principles"
+        },
+        {
+          "id": "P2-7.3",
+          "title": "Chain rule"
+        }
+      ]
+    },
+    {
+      "id": "P2-8",
+      "unit": "P2",
+      "title": "Integration",
+      "level": "AS",
+      "subtopics": [
+        {
+          "id": "P2-8.1",
+          "title": "Integration of sin x, cos x, e^x, 1/x"
+        },
+        {
+          "id": "P2-8.2",
+          "title": "Integration of f(ax+b) by inspection"
+        },
+        {
+          "id": "P2-8.3",
+          "title": "Numerical integration: trapezium rule"
+        }
+      ]
+    },
+    {
+      "id": "P3-1",
+      "unit": "P3",
+      "title": "Algebraic Methods",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P3-1.1",
+          "title": "Arithmetic operations with algebraic fractions"
+        },
+        {
+          "id": "P3-1.2",
+          "title": "Improper fractions and algebraic division"
+        }
+      ]
+    },
+    {
+      "id": "P3-2",
+      "unit": "P3",
+      "title": "Functions and Graphs",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P3-2.1",
+          "title": "The modulus function"
+        },
+        {
+          "id": "P3-2.2",
+          "title": "Functions and mappings"
+        },
+        {
+          "id": "P3-2.3",
+          "title": "Composite functions"
+        },
+        {
+          "id": "P3-2.4",
+          "title": "Inverse functions"
+        },
+        {
+          "id": "P3-2.5",
+          "title": "y=|f(x)| and y=f(|x|)"
+        },
+        {
+          "id": "P3-2.6",
+          "title": "Combining transformations"
+        },
+        {
+          "id": "P3-2.7",
+          "title": "Solving modulus problems"
+        }
+      ]
+    },
+    {
+      "id": "P3-3",
+      "unit": "P3",
+      "title": "Trigonometric Functions",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P3-3.1",
+          "title": "Secant, cosecant and cotangent"
+        },
+        {
+          "id": "P3-3.2",
+          "title": "Graphs of sec x, cosec x and cot x"
+        },
+        {
+          "id": "P3-3.3",
+          "title": "Using sec x, cosec x and cot x"
+        },
+        {
+          "id": "P3-3.4",
+          "title": "Trigonometric identities"
+        },
+        {
+          "id": "P3-3.5",
+          "title": "Inverse trigonometric functions"
+        }
+      ]
+    },
+    {
+      "id": "P3-4",
+      "unit": "P3",
+      "title": "Trigonometric Addition Formulae",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P3-4.1",
+          "title": "Addition formulae"
+        },
+        {
+          "id": "P3-4.2",
+          "title": "Using the angle addition formulae"
+        },
+        {
+          "id": "P3-4.3",
+          "title": "Double-angle formulae"
+        },
+        {
+          "id": "P3-4.4",
+          "title": "Solving trigonometric equations"
+        },
+        {
+          "id": "P3-4.5",
+          "title": "Simplifying a·cos x ± b·sin x"
+        },
+        {
+          "id": "P3-4.6",
+          "title": "Proving trigonometric identities"
+        }
+      ]
+    },
+    {
+      "id": "P3-5",
+      "unit": "P3",
+      "title": "Exponentials and Logarithms",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P3-5.1",
+          "title": "Exponential functions"
+        },
+        {
+          "id": "P3-5.2",
+          "title": "y = e^(ax+b) + c"
+        },
+        {
+          "id": "P3-5.3",
+          "title": "Natural logarithms"
+        },
+        {
+          "id": "P3-5.4",
+          "title": "Logarithms and non-linear data"
+        },
+        {
+          "id": "P3-5.5",
+          "title": "Exponential modelling"
+        }
+      ]
+    },
+    {
+      "id": "P3-6",
+      "unit": "P3",
+      "title": "Differentiation",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P3-6.1",
+          "title": "Differentiating sin x and cos x"
+        },
+        {
+          "id": "P3-6.2",
+          "title": "Differentiating exponentials and logarithms"
+        },
+        {
+          "id": "P3-6.3",
+          "title": "The chain rule"
+        },
+        {
+          "id": "P3-6.4",
+          "title": "The product rule"
+        },
+        {
+          "id": "P3-6.5",
+          "title": "The quotient rule"
+        },
+        {
+          "id": "P3-6.6",
+          "title": "Differentiating trigonometric functions"
+        }
+      ]
+    },
+    {
+      "id": "P3-7",
+      "unit": "P3",
+      "title": "Integration",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P3-7.1",
+          "title": "Integrating standard functions"
+        },
+        {
+          "id": "P3-7.2",
+          "title": "Integrating f(ax + b)"
+        },
+        {
+          "id": "P3-7.3",
+          "title": "Using trigonometric identities"
+        },
+        {
+          "id": "P3-7.4",
+          "title": "Reverse chain rule"
+        }
+      ]
+    },
+    {
+      "id": "P3-8",
+      "unit": "P3",
+      "title": "Numerical Methods",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P3-8.1",
+          "title": "Locating roots"
+        },
+        {
+          "id": "P3-8.2",
+          "title": "Fixed point iteration"
+        }
+      ]
+    },
+    {
+      "id": "P4-1",
+      "unit": "P4",
+      "title": "Proof",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P4-1.1",
+          "title": "Proof by contradiction"
+        },
+        {
+          "id": "P4-1.2",
+          "title": "Scalar (dot) product, angle between vectors"
+        },
+        {
+          "id": "P4-1.3",
+          "title": "Vector equation of a straight line"
+        },
+        {
+          "id": "P4-1.4",
+          "title": "Equation of a plane, normal vector"
+        }
+      ]
+    },
+    {
+      "id": "P4-2",
+      "unit": "P4",
+      "title": "Algebra and functions",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P4-2.1",
+          "title": "Partial fractions (linear and repeated linear denominators)"
+        }
+      ]
+    },
+    {
+      "id": "P4-3",
+      "unit": "P4",
+      "title": "Coordinate geometry",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P4-3.1",
+          "title": "Parametric equations and conversion to Cartesian form"
+        }
+      ]
+    },
+    {
+      "id": "P4-4",
+      "unit": "P4",
+      "title": "Binomial expansion",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P4-4.1",
+          "title": "Binomial series for any rational n, expansion of (ax+b)^n"
+        }
+      ]
+    },
+    {
+      "id": "P4-5",
+      "unit": "P4",
+      "title": "Differentiation",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P4-5.1",
+          "title": "Implicit and parametric differentiation"
+        },
+        {
+          "id": "P4-5.2",
+          "title": "Formation of differential equations, connected rates of change"
+        }
+      ]
+    },
+    {
+      "id": "P4-6",
+      "unit": "P4",
+      "title": "Integration",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P4-6.1",
+          "title": "Volume of revolution (π∫y²dx)"
+        },
+        {
+          "id": "P4-6.2",
+          "title": "Integration by substitution and by parts"
+        },
+        {
+          "id": "P4-6.3",
+          "title": "Integration using partial fractions"
+        },
+        {
+          "id": "P4-6.4",
+          "title": "Separable differential equations (general and particular solutions)"
+        },
+        {
+          "id": "P4-6.5",
+          "title": "Area under parametric curves"
+        }
+      ]
+    },
+    {
+      "id": "P4-7",
+      "unit": "P4",
+      "title": "Vectors",
+      "level": "A2",
+      "subtopics": [
+        {
+          "id": "P4-7.1",
+          "title": "Vectors in 2D and 3D"
+        },
+        {
+          "id": "P4-7.2",
+          "title": "Magnitude of a vector, unit vector"
+        },
+        {
+          "id": "P4-7.3",
+          "title": "Vector addition, scalar multiplication"
+        },
+        {
+          "id": "P4-7.4",
+          "title": "Position vectors"
+        },
+        {
+          "id": "P4-7.5",
+          "title": "Distance between two points in 3D"
+        },
+        {
+          "id": "P4-7.6",
+          "title": "Vector equation of a line"
+        },
+        {
+          "id": "P4-7.7",
+          "title": "Scalar product and angle between two lines"
+        }
+      ]
+    }
+  ]
+}
