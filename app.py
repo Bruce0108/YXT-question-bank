@@ -2932,13 +2932,11 @@ def download_all():
 
 
 def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, out_path,
-                       preloaded_questions=None, cover_title='', include_answer=True):
+                       preloaded_questions=None, cover_title=''):
     """
     后台线程：生成 PDF，进度写文件持久化（gunicorn 多线程安全）。
-    preloaded_questions: 若已解析好，直接使用（多文件场景/workbook 场景）。
+    preloaded_questions: 若已解析好，直接使用（多文件场景）。
     cover_title: 封面标题，非空时在 PDF 首页插入封面。
-    save_path 为空字符串时视为 workbook/云端来源，src_doc=None，
-    题目通过 preloaded_questions 中的 img_bytes_b64 渲染。
     """
     def upd(prog, status='running', error=None):
         data = {'status': status, 'progress': prog,
@@ -2948,22 +2946,15 @@ def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, o
         _save_task(task_id, data)
 
     try:
-        # 判断是否为 workbook/云端来源（无 PDF 文件）
-        is_file_source = save_path and os.path.exists(save_path)
-
-        if is_file_source:
-            src_doc   = fitz.open(save_path)
-            questions = preloaded_questions if preloaded_questions is not None \
-                        else _detect_questions(src_doc, paper_type_val)
-        else:
-            src_doc   = None   # workbook/云端：_export_xxx 会走 img_bytes_b64 路径
-            questions = preloaded_questions or []
+        src_doc   = fitz.open(save_path)
+        questions = preloaded_questions if preloaded_questions is not None \
+                    else _detect_questions(src_doc, paper_type_val)
 
         PAGE_W, PAGE_H = 595, 842
         MARGIN, HEADER_H, GAP, FS = 36, 28, 12, 11
         out_doc = fitz.open()
 
-        # ── 封面页 ──
+        # ── 封面页（放在所有题目之前）──
         if cover_title:
             _generate_cover_page(out_doc, cover_title,
                                   page_w=PAGE_W, page_h=PAGE_H)
@@ -2971,23 +2962,16 @@ def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, o
         if layout == 'two_per_page':
             _export_two_per_page(out_doc, src_doc, questions, q_nums, dpi,
                                  paper_type_val, PAGE_W, PAGE_H, MARGIN,
-                                 HEADER_H, GAP, FS, progress_cb=lambda p: upd(p),
-                                 include_answer=include_answer)
+                                 HEADER_H, GAP, FS, progress_cb=lambda p: upd(p))
         else:
+            # one_per_page：MCQ类型自动走多题共页打包逻辑（_export_mcq_packed）
+            # 大题类型每题独页，逻辑由 _export_one_per_page 内部分派
             _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                                  paper_type_val, PAGE_W, PAGE_H, MARGIN,
-                                 HEADER_H, GAP, FS, progress_cb=lambda p: upd(p),
-                                 include_answer=include_answer)
+                                 HEADER_H, GAP, FS, progress_cb=lambda p: upd(p))
 
-        if src_doc:
-            src_doc.close()
-
-        # 安全检查：确保至少有1页
-        if out_doc.page_count == 0:
-            ep = out_doc.new_page(width=PAGE_W, height=PAGE_H)
-            ep.insert_text(fitz.Point(36, 100),
-                           '导出失败：没有可导出的题目页面。',
-                           fontsize=14, color=(0.8, 0, 0))
+        src_doc.close()
+        # 直接保存到磁盘，避免 tobytes() 将整个 PDF 载入内存
         out_doc.save(out_path, garbage=4, deflate=True)
         out_doc.close()
 
@@ -3008,42 +2992,6 @@ def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, o
         import traceback; traceback.print_exc()
         upd(0, status='error', error=str(e))
 
-
-def _export_b64_questions_to_pdf(out_doc, questions, q_nums,
-                                  PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
-                                  progress_cb=None, seq_start=0):
-    """
-    将题目 img_bytes_b64 直接渲染到 out_doc（用于题册类型，无原始 PDF 文件）。
-    每道题一页（one_per_page 模式）。
-    """
-    import base64 as _b64
-    q_map = {q['q_num']: q for q in questions}
-    for i, q_num in enumerate(q_nums):
-        q_obj = q_map.get(q_num)
-        if not q_obj:
-            continue
-        b64 = q_obj.get('img_bytes_b64', '')
-        if not b64:
-            continue
-        try:
-            img_bytes = _b64.b64decode(b64)
-            img_w = q_obj.get('img_w', 1) or 1
-            img_h = q_obj.get('img_h', 1) or 1
-            diff = q_obj.get('difficulty')
-            topics = q_obj.get('topics', [])
-            q_meta = {'difficulty': diff, 'topics': topics} if (diff is not None or topics) else None
-            label = f'Q{q_num:02d}'
-
-            page = out_doc.new_page(width=PAGE_W, height=PAGE_H)
-            _place_jpeg_on_page(
-                page, img_bytes, img_w, img_h,
-                fitz.Rect(MARGIN, MARGIN, PAGE_W - MARGIN, PAGE_H - MARGIN),
-                label, HEADER_H, GAP, FS, q_meta=q_meta
-            )
-        except Exception:
-            pass
-        if progress_cb:
-            progress_cb(seq_start + i + 1)
 
 
 def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_q,
@@ -3073,26 +3021,32 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
             _generate_cover_page(out_doc, cover_title,
                                   page_w=PAGE_W, page_h=PAGE_H)
 
-        # 构建 gIdx → ginfo 映射
-        group_map = {}
+        # 构建 gIdx → {src_doc, questions, paper_type} 的映射（延迟打开）
+        group_map = {}  # g_idx -> ginfo
         for ginfo in groups_info:
             group_map[ginfo['g_idx']] = ginfo
 
-        # 预打开有效 PDF 文件（path 非空且文件存在）
-        # path 为空串 → workbook/云端来源 → 走 img_bytes_b64 路径，src_doc=None
-        src_docs = {}
-        for ginfo in groups_info:
-            gi    = ginfo['g_idx']
-            gpath = ginfo.get('path', '')
-            if gpath and os.path.exists(gpath):
-                try:
-                    src_docs[gi] = fitz.open(gpath)
-                except Exception:
-                    pass
-
         if ordered_items:
             # ── 有序模式：按 ordered_items 全局顺序逐题输出 ──
-            ordered_by_group = {}
+            # 需要分组打开 src_doc（按 gIdx 缓存）
+            src_docs = {}  # g_idx -> fitz.Document
+            done_total = 0
+
+            # 按 gIdx 预打开文件
+            for ginfo in groups_info:
+                gi = ginfo['g_idx']
+                if os.path.exists(ginfo['path']):
+                    src_docs[gi] = fitz.open(ginfo['path'])
+
+            # 注意：MCQ 打包模式（多题共页）在全局顺序下需要特殊处理
+            # 策略：先按 gIdx 分组收集有序 q_nums，逐组调用 _export_xxx
+            # 但跨组题目顺序仍需全局维持 → 改为按 ordered_items 顺序，
+            # 每遇到 gIdx 切换时关闭上一组段落，开新组段落
+            # 简单可靠方案：全局按 ordered_items 顺序，以组为段依次处理
+            # （同组相邻题目保持连续；跨组切换时自然分段）
+
+            # 构建每个 gIdx 的有序 q_nums（保持 ordered_items 中的顺序）
+            ordered_by_group = {}  # g_idx -> [q_num, ...]（按 ordered_items 顺序）
             for item in ordered_items:
                 gi = item.get('gIdx', 0)
                 qn = item.get('q_num')
@@ -3102,27 +3056,27 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                     ordered_by_group[gi] = []
                 ordered_by_group[gi].append(qn)
 
+            # 按 ordered_items 中 gIdx 的首次出现顺序处理各组
             seen_gi = []
             for item in ordered_items:
                 gi = item.get('gIdx', 0)
                 if gi not in seen_gi:
                     seen_gi.append(gi)
 
-            done_total = 0
             for gi in seen_gi:
-                if gi not in group_map:
+                if gi not in group_map or gi not in src_docs:
                     continue
-                ginfo          = group_map[gi]
-                questions      = ginfo['questions']
-                paper_type     = ginfo['paper_type']
+                ginfo     = group_map[gi]
+                src_doc   = src_docs[gi]
+                questions = ginfo['questions']
+                paper_type = ginfo['paper_type']
                 q_nums_ordered = ordered_by_group.get(gi, [])
                 if not q_nums_ordered:
                     continue
 
-                # src_doc=None 时 _export_xxx 自动走 img_bytes_b64 路径
-                src_doc     = src_docs.get(gi)
                 done_before = done_total
-                def cb(p, _d=done_before): upd(_d + p)
+                def cb(p, _done=done_before):
+                    upd(_done + p)
 
                 if layout == 'two_per_page':
                     _export_two_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
@@ -3136,21 +3090,25 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                                          seq_start=done_total)
                 done_total += len(q_nums_ordered)
 
-        else:
-            # ── 降级模式：按 groups_info 顺序 ──
-            done_total = 0
-            for ginfo in groups_info:
-                questions  = ginfo['questions']
-                paper_type = ginfo['paper_type']
-                q_nums     = ginfo['q_nums']
-                gi         = ginfo['g_idx']
+            for sd in src_docs.values():
+                sd.close()
 
-                if not q_nums:
+        else:
+            # ── 降级模式：按 groups_info 顺序，每组内按 q_nums 原顺序 ──
+            done_total = 0
+            for gi, ginfo in enumerate(groups_info):
+                save_path  = ginfo['path']
+                paper_type = ginfo['paper_type']
+                questions  = ginfo['questions']
+                q_nums     = ginfo['q_nums']
+
+                if not q_nums or not os.path.exists(save_path):
                     continue
 
-                src_doc     = src_docs.get(gi)
+                src_doc = fitz.open(save_path)
                 done_before = done_total
-                def cb(p, _d=done_before): upd(_d + p)
+                def cb(p, _done=done_before):
+                    upd(_done + p)
 
                 if layout == 'two_per_page':
                     _export_two_per_page(out_doc, src_doc, questions, q_nums, dpi,
@@ -3162,20 +3120,9 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                                          paper_type, PAGE_W, PAGE_H, MARGIN,
                                          HEADER_H, GAP, FS, progress_cb=cb,
                                          seq_start=done_total)
+
+                src_doc.close()
                 done_total += len(q_nums)
-
-        for sd in src_docs.values():
-            try: sd.close()
-            except Exception: pass
-
-        # 安全检查：确保 out_doc 至少有1页
-        if out_doc.page_count == 0:
-            err_page = out_doc.new_page(width=PAGE_W, height=PAGE_H)
-            err_page.insert_text(
-                fitz.Point(36, 100),
-                '导出失败：所选题目均无可用图片数据。\n请确认题目已正确从云端或题册中导入。',
-                fontsize=14, color=(0.8, 0, 0)
-            )
 
         out_doc.save(out_path, garbage=4, deflate=True)
         out_doc.close()
@@ -3196,8 +3143,6 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
     except Exception as e:
         import traceback; traceback.print_exc()
         upd(0, status='error', error=str(e))
-
-
 @app.route('/api/export_pdf', methods=['POST'])
 def export_pdf():
     """
@@ -3217,7 +3162,6 @@ def export_pdf():
     sess_id   = data.get('session_id')
     merged    = data.get('merged', False)
     cover_title    = data.get('cover_title', '').strip()
-    include_answer = bool(data.get('include_answer', True))  # 功能2：是否含答案
 
     safe_name = re.sub(r'[\\/*?:"<>|]', '_', filename)
     if not safe_name.endswith('.pdf'):
@@ -3317,8 +3261,7 @@ def export_pdf():
     threading.Thread(
         target=_build_pdf_worker,
         args=(task_id, save_path, pt_val, q_nums, dpi, layout, out_path),
-        kwargs={'preloaded_questions': preloaded, 'cover_title': cover_title,
-                'include_answer': include_answer},
+        kwargs={'preloaded_questions': preloaded, 'cover_title': cover_title},
         daemon=True
     ).start()
 
@@ -4190,9 +4133,7 @@ def _draw_difficulty_stars(page, x_start, y_center, n_filled, n_total=5,
 
 def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
                          area_rect, label, header_h, gap, font_sz,
-                         show_header=False, q_meta=None, draw_logo=True,
-                         answer_jpeg=None, answer_w=None, answer_h=None,
-                         include_answer=True):
+                         show_header=False, q_meta=None, draw_logo=True):
     """
     把一段 JPEG 图像放入输出 PDF 页的 area_rect 区域。
     白色背景，干净排版：
@@ -4200,8 +4141,6 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
       - 无蓝色背景色块，仅用细线和文字颜色区分
       - 图片紧跟信息行下方，左对齐，宽度铺满
     q_meta: dict {difficulty, topics, exam_date} 或 None
-    answer_jpeg: Mark Scheme 答案图片 bytes，若提供且 include_answer=True 则追加在题目下方
-    include_answer: 控制是否渲染答案部分（功能2：隐藏/显示答案）
     """
     x0, y0, x1, y1 = area_rect.x0, area_rect.y0, area_rect.x1, area_rect.y1
 
@@ -4359,59 +4298,16 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
     img_area_w = x1 - x0
     img_area_h = y1 - img_y0 - gap
     if img_area_h < 10 or img_area_w < 10:
-        # 答案也无法放置，返回剩余答案数据供调用者处理
-        if answer_jpeg and include_answer and answer_w and answer_h:
-            return (answer_jpeg, answer_w, answer_h)
-        return None
+        return
 
-    # 宽度铺满（scale by width），图片顶对齐信息行，高度等比例延伸
-    # 若渲染后超出页面底部则裁切（多片题目由 _export_one_per_page 多页处理）
-    scale  = img_area_w / img_w
-    draw_w = img_area_w               # 精确铺满可用宽度
+    scale  = min(img_area_w / img_w, img_area_h / img_h)
+    draw_w = img_w * scale
     draw_h = img_h * scale
-    # 顶对齐：img_y0 紧贴信息行底部，不垂直居中
+    # 左对齐（与原版相同）
     img_rect = fitz.Rect(x0, img_y0, x0 + draw_w, img_y0 + draw_h)
 
     stream = io.BytesIO(jpeg_bytes)
     out_page.insert_image(img_rect, stream=stream)
-
-    # ── 答案图片（Mark Scheme），追加在题目下方 ──
-    if answer_jpeg and include_answer and answer_w and answer_h:
-        ans_y0 = img_y0 + draw_h   # 紧接题目图片底部
-
-        # 答案分隔条（浅绿背景 + "Answer" 文字）
-        ANS_BAR_H = 20        # 分隔条高度(pt)
-        ANS_GAP   = 4         # 答案图片与分隔条间距
-        C_ANS_BG  = (0.88, 0.97, 0.88)   # 浅绿背景
-        C_ANS_TXT = (0.10, 0.45, 0.15)   # 深绿文字
-        C_ANS_SEP = (0.55, 0.80, 0.55)   # 分隔线颜色
-
-        bar_y0 = ans_y0 + 6   # 与题目图片留6pt间距
-        bar_y1 = bar_y0 + ANS_BAR_H
-        ans_img_y0  = bar_y1 + ANS_GAP
-        ans_scale   = img_area_w / answer_w
-        ans_draw_w  = img_area_w
-        ans_draw_h  = answer_h * ans_scale
-
-        if ans_img_y0 + ans_draw_h <= y1 + 2:
-            # 同一页能放下：绘制分隔条 + 答案图片
-            bar_rect = fitz.Rect(x0, bar_y0, x1, bar_y1)
-            out_page.draw_rect(bar_rect, color=C_ANS_BG, fill=C_ANS_BG)
-            out_page.draw_line(fitz.Point(x0, bar_y0), fitz.Point(x1, bar_y0),
-                               color=C_ANS_SEP, width=1.0)
-            out_page.draw_line(fitz.Point(x0, bar_y1), fitz.Point(x1, bar_y1),
-                               color=C_ANS_SEP, width=0.5)
-            ans_text_y = bar_y0 + ANS_BAR_H - 6
-            out_page.insert_text((x0 + 8, ans_text_y), 'Answer / Mark Scheme',
-                                 fontsize=9, color=C_ANS_TXT, fontname='helv')
-            ans_rect = fitz.Rect(x0, ans_img_y0, x0 + ans_draw_w,
-                                 ans_img_y0 + ans_draw_h)
-            out_page.insert_image(ans_rect, stream=io.BytesIO(answer_jpeg))
-        else:
-            # 同一页放不下：返回答案数据，由调用者新建页面
-            return (answer_jpeg, answer_w, answer_h)
-
-    return None
 
 
 
@@ -4432,64 +4328,32 @@ def _estimate_slice_height_on_page(src_page, clip_rect, dpi, avail_w):
     # 按 avail_w 等比缩放
     display_scale = avail_w / px_w
     return px_h * display_scale
-
-
-def _place_answer_only_page(out_doc, ans_jpeg, ans_w, ans_h,
-                             PW, PH, M, label=''):
+def _estimate_slice_height_on_page(src_page, clip_rect, dpi, avail_w):
     """
-    当答案图片与题目无法共页时，单独新建一页放答案。
-    绘制浅绿分隔条 + 答案图片，充分利用整页空间。
+    快速估算一个源 PDF 片段渲染到输出页后的显示高度（pt），不产生像素数据。
+    用于 MCQ 打包布局的高度预算。
     """
-    page      = out_doc.new_page(width=PW, height=PH)
-    x0, y0    = M, M
-    x1, y1    = PW - M, PH - M
-    img_area_w = x1 - x0
+    scale     = dpi / 72.0
+    clip_w_pt = clip_rect.x1 - clip_rect.x0
+    clip_h_pt = clip_rect.y1 - clip_rect.y0
+    if clip_w_pt <= 0:
+        return 0
+    # 渲染后像素尺寸
+    px_w = clip_w_pt * scale
+    px_h = clip_h_pt * scale
+    # 按 avail_w 等比缩放
+    display_scale = avail_w / px_w
+    return px_h * display_scale
 
-    ANS_BAR_H = 22
-    ANS_GAP   = 6
-    C_ANS_BG  = (0.88, 0.97, 0.88)
-    C_ANS_TXT = (0.10, 0.45, 0.15)
-    C_ANS_SEP = (0.55, 0.80, 0.55)
-
-    bar_y0 = y0
-    bar_y1 = bar_y0 + ANS_BAR_H
-    bar_rect = fitz.Rect(x0, bar_y0, x1, bar_y1)
-    page.draw_rect(bar_rect, color=C_ANS_BG, fill=C_ANS_BG)
-    page.draw_line(fitz.Point(x0, bar_y0), fitz.Point(x1, bar_y0),
-                   color=C_ANS_SEP, width=1.0)
-    page.draw_line(fitz.Point(x0, bar_y1), fitz.Point(x1, bar_y1),
-                   color=C_ANS_SEP, width=0.5)
-    hdr_txt = f'Answer / Mark Scheme{(" — " + label) if label else ""}'
-    page.insert_text((x0 + 8, bar_y0 + ANS_BAR_H - 6), hdr_txt,
-                     fontsize=9, color=C_ANS_TXT, fontname='helv')
-
-    # 答案图片：按宽度填满，高度可超出页面则等比压缩
-    ans_img_y0 = bar_y1 + ANS_GAP
-    ans_scale  = img_area_w / ans_w
-    ans_draw_w = img_area_w
-    ans_draw_h = ans_h * ans_scale
-    max_h      = y1 - ans_img_y0
-    if ans_draw_h > max_h:
-        ans_draw_h = max_h
-    ans_rect = fitz.Rect(x0, ans_img_y0, x0 + ans_draw_w, ans_img_y0 + ans_draw_h)
-    page.insert_image(ans_rect, stream=io.BytesIO(ans_jpeg))
 
 
 def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                           paper_type, PW, PH, M, HH, GAP, FS, progress_cb=None,
-                          seq_start=0, include_answer=True):
+                          seq_start=0):
     """
     大题模式：每题独占一页（或多页）。
     seq_start: 全局导出序号起始值（0-based），用于头栏题号显示。
-    include_answer: 是否渲染答案部分（功能2：隐藏/显示答案）
-
-    支持两种数据来源（自动识别，无需外部判断）：
-      - 有 img_bytes_b64：直接用缓存图片渲染（workbook/云端来源）
-      - 无 img_bytes_b64：从 src_doc 裁切渲染（原始PDF来源）
-    src_doc 可以为 None，此时所有题目走 img_bytes_b64 路径。
     """
-    import base64 as _b64
-
     is_mcq_type = paper_type in ('mcq', 'edexcel_mcq')
 
     if is_mcq_type:
@@ -4501,96 +4365,46 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
 
     # ── 大题模式：每题独占一页（或多页切片）──
     AVAIL_W = PW - 2 * M
-    AVAIL_H = PH - 2 * M - 2 * GAP
+    AVAIL_H = PH - 2 * M - 2 * GAP   # 去掉标题栏高度，直接用全部可用高度
 
-    for done, q_num in enumerate(q_nums):
+    for done, q_num in enumerate(q_nums):  # 保持传入顺序，不再 sorted()
         q_idx = next((i for i, q in enumerate(questions) if q['q_num'] == q_num), None)
         if q_idx is None:
-            if progress_cb: progress_cb(seq_start + done + 1)
+            if progress_cb: progress_cb(done + 1)
             continue
 
-        q_obj      = questions[q_idx]
+        q_obj  = questions[q_idx]
+        # 用全局导出序号作为头栏题号，而非原始q_num
         export_seq = seq_start + done + 1
-        label      = f'第 {export_seq} 题' if paper_type == 'structured' else f'Q{export_seq:02d}'
+        label  = f'第 {export_seq} 题' if paper_type == 'structured' else f'Q{export_seq:02d}'
+        slices = _collect_question_slices(src_doc, questions, q_idx, paper_type)
 
-        # 构建本题 meta（难度+知识点+年份）
+        # 构建本题的 meta（难度+知识点+年份），供头栏绘制
+        q_meta = None
         diff      = q_obj.get('difficulty')
         topics    = q_obj.get('topics') or []
         exam_date = q_obj.get('exam_date', '')
-        q_meta    = {'difficulty': diff, 'topics': topics, 'exam_date': exam_date} \
-                    if (diff is not None or topics or exam_date) else None
-
-        # 提取答案数据（Mark Scheme）
-        ans_b64  = q_obj.get('answer_b64', '')
-        ans_jpeg = None
-        ans_w = ans_h = None
-        if ans_b64 and include_answer:
-            import base64 as _b64_ans
-            try:
-                ans_jpeg = _b64_ans.b64decode(ans_b64)
-                ans_w    = q_obj.get('answer_w') or 1
-                ans_h    = q_obj.get('answer_h') or 1
-            except Exception:
-                ans_jpeg = None
-
-        # ── 优先路径：题目已有缓存图片（workbook / 云端导入）──
-        cached_b64 = q_obj.get('img_bytes_b64', '')
-        if cached_b64:
-            try:
-                jpeg = _b64.b64decode(cached_b64)
-                img_w = q_obj.get('img_w') or 1
-                img_h = q_obj.get('img_h') or 1
-                page  = out_doc.new_page(width=PW, height=PH)
-                overflow_ans = _place_jpeg_on_page(page, jpeg, img_w, img_h,
-                                    fitz.Rect(M, M, PW - M, PH - M),
-                                    label, HH, GAP, FS, q_meta=q_meta,
-                                    answer_jpeg=ans_jpeg, answer_w=ans_w,
-                                    answer_h=ans_h, include_answer=include_answer)
-                if overflow_ans:
-                    _place_answer_only_page(out_doc, overflow_ans[0], overflow_ans[1],
-                                            overflow_ans[2], PW, PH, M, label=label)
-            except Exception as _e:
-                page = out_doc.new_page(width=PW, height=PH)
-                page.insert_text(fitz.Point(M, M + HH + GAP),
-                                 f'{label}: 图片渲染失败 ({_e})',
-                                 fontsize=FS, color=(0.8, 0, 0))
-            if progress_cb: progress_cb(seq_start + done + 1)
-            continue
-
-        # ── 正常路径：从 src_doc 裁切渲染 ──
-        if src_doc is None:
-            # 没有源文档也没有缓存图片，生成占位页
-            page = out_doc.new_page(width=PW, height=PH)
-            page.insert_text(fitz.Point(M, M + HH + GAP),
-                             f'{label}: 无图片数据（请重新导入）',
-                             fontsize=FS, color=(0.6, 0.3, 0))
-            if progress_cb: progress_cb(seq_start + done + 1)
-            continue
-
-        slices = _collect_question_slices(src_doc, questions, q_idx, paper_type)
+        if diff is not None or topics or exam_date:
+            q_meta = {'difficulty': diff, 'topics': topics, 'exam_date': exam_date}
 
         if not slices:
-            if progress_cb: progress_cb(seq_start + done + 1)
+            if progress_cb: progress_cb(done + 1)
             continue
 
         # 先渲染第一片，决定是否需要分页
         first_src_page, first_clip = slices[0]
         jpeg0, w0, h0 = _render_slice_to_jpeg(first_src_page, first_clip, dpi)
 
+        # 计算第一片在页面上的显示高度
         scale0    = AVAIL_W / w0
         fitted_h0 = h0 * scale0
 
         if len(slices) == 1 and fitted_h0 <= AVAIL_H:
             # ── 最简单情况：单片且放得下 ──
             page = out_doc.new_page(width=PW, height=PH)
-            overflow_ans = _place_jpeg_on_page(page, jpeg0, w0, h0,
+            _place_jpeg_on_page(page, jpeg0, w0, h0,
                                 fitz.Rect(M, M, PW-M, PH-M),
-                                label, HH, GAP, FS, q_meta=q_meta,
-                                answer_jpeg=ans_jpeg, answer_w=ans_w,
-                                answer_h=ans_h, include_answer=include_answer)
-            if overflow_ans:
-                _place_answer_only_page(out_doc, overflow_ans[0], overflow_ans[1],
-                                        overflow_ans[2], PW, PH, M, label=label)
+                                label, HH, GAP, FS, q_meta=q_meta)
         else:
             # ── 多片 或 单片但太高：逐片放到新 PDF 页 ──
             all_slices = slices[:]
@@ -4599,135 +4413,96 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                     jpeg, w, h = jpeg0, w0, h0
                 else:
                     jpeg, w, h = _render_slice_to_jpeg(src_page, clip, dpi)
+                # 每片单独一页（简单可靠）
+                # 只在第一片画头栏，后续片不重复
                 out_page = out_doc.new_page(width=PW, height=PH)
-                # 答案只放在最后一片（避免重复）
-                is_last = (si == len(all_slices) - 1)
-                overflow_ans = _place_jpeg_on_page(out_page, jpeg, w, h,
+                _place_jpeg_on_page(out_page, jpeg, w, h,
                                     fitz.Rect(M, M, PW-M, PH-M),
                                     label, HH, GAP, FS,
-                                    q_meta=(q_meta if si == 0 else None),
-                                    answer_jpeg=(ans_jpeg if is_last else None),
-                                    answer_w=ans_w, answer_h=ans_h,
-                                    include_answer=include_answer)
-                if overflow_ans and is_last:
-                    _place_answer_only_page(out_doc, overflow_ans[0], overflow_ans[1],
-                                            overflow_ans[2], PW, PH, M, label=label)
-                del jpeg
+                                    q_meta=(q_meta if si == 0 else None))
+                del jpeg  # 立即释放本片内存
 
-        if progress_cb: progress_cb(seq_start + done + 1)
-
-
+        if progress_cb: progress_cb(done + 1)
 def _export_mcq_packed(out_doc, src_doc, questions, q_nums, dpi,
                         paper_type, PW, PH, M, GAP, progress_cb=None,
-                        seq_start=0, include_answer=True):
+                        seq_start=0):
     """
     MCQ 多题共页打包布局。
-    支持两种数据来源（自动识别）：
-      - 有 img_bytes_b64：直接用缓存图片（workbook/云端来源）
-      - 无 img_bytes_b64：从 src_doc 裁切（原始PDF来源）
-    include_answer: 是否渲染答案部分（功能2）
+    策略：
+      - 每题只取第一个片段（MCQ 每题通常在单页内）
+      - 按顺序累积高度，当前页放不下时换新页
+      - 题目之间加小间隔 ITEM_GAP
     """
-    import base64 as _b64
     AVAIL_W  = PW - 2 * M
-    AVAIL_H  = PH - 2 * M
-    ITEM_GAP = 10
+    AVAIL_H  = PH - 2 * M          # 每页可用总高度
+    ITEM_GAP = 10                  # 题目间距（pt）
 
-    sorted_nums = list(q_nums)
+    sorted_nums = list(q_nums)   # 保持传入顺序，不再 sorted()
     cur_page    = None
-    cur_y       = M
+    cur_y       = M                # 当前页已使用的 y 位置
     done        = 0
 
     for q_num in sorted_nums:
         q_idx = next((i for i, q in enumerate(questions) if q['q_num'] == q_num), None)
         if q_idx is None:
             done += 1
-            if progress_cb: progress_cb(seq_start + done)
-            continue
-
-        q_obj        = questions[q_idx]
-        export_seq   = seq_start + done + 1
-        diff_mc      = q_obj.get('difficulty')
-        topics_mc    = q_obj.get('topics') or []
-        exam_date_mc = q_obj.get('exam_date', '')
-        q_meta_mc    = {'difficulty': diff_mc, 'topics': topics_mc, 'exam_date': exam_date_mc} \
-                       if (diff_mc is not None or topics_mc or exam_date_mc) else None
-
-        # ── 优先路径：题目已有缓存图片 ──
-        cached_b64 = q_obj.get('img_bytes_b64', '')
-        if cached_b64:
-            try:
-                jpeg  = _b64.b64decode(cached_b64)
-                w     = q_obj.get('img_w') or 1
-                h     = q_obj.get('img_h') or 1
-                scale_factor  = AVAIL_W / w
-                actual_draw_h = h * scale_factor
-                if actual_draw_h > AVAIL_H - 2 * GAP:
-                    actual_draw_h = AVAIL_H - 2 * GAP
-                est_h = actual_draw_h
-                if cur_page is None or (cur_y + est_h + ITEM_GAP > M + AVAIL_H and cur_y > M + 20):
-                    cur_page = out_doc.new_page(width=PW, height=PH)
-                    cur_y    = M
-                area = fitz.Rect(M, cur_y, PW - M, cur_y + actual_draw_h + 2 * GAP)
-                _place_jpeg_on_page(cur_page, jpeg, w, h, area,
-                                    f'Q{export_seq:02d}', 0, GAP, 11, q_meta=q_meta_mc)
-                cur_y += actual_draw_h + 2 * GAP + ITEM_GAP
-            except Exception:
-                pass
-            done += 1
-            if progress_cb: progress_cb(seq_start + done)
-            continue
-
-        # ── 正常路径：从 src_doc 裁切 ──
-        if src_doc is None:
-            done += 1
-            if progress_cb: progress_cb(seq_start + done)
+            if progress_cb: progress_cb(done)
             continue
 
         slices = _collect_question_slices(src_doc, questions, q_idx, paper_type)
         if not slices:
             done += 1
-            if progress_cb: progress_cb(seq_start + done)
+            if progress_cb: progress_cb(done)
             continue
 
+        # MCQ 只取第一片
         src_page, clip = slices[0]
-        est_h = _estimate_slice_height_on_page(src_page, clip, dpi, AVAIL_W)
-        est_h = max(est_h, 40)
 
+        # 先估算高度，决定是否换页
+        est_h = _estimate_slice_height_on_page(src_page, clip, dpi, AVAIL_W)
+        est_h = max(est_h, 40)   # 最小高度保障
+
+        # 如果当前页放不下（且不是刚开始的页），换新页
         if cur_page is None or (cur_y + est_h + ITEM_GAP > M + AVAIL_H and cur_y > M + 20):
             cur_page = out_doc.new_page(width=PW, height=PH)
             cur_y    = M
 
+        # 渲染并放置
         jpeg, w, h = _render_slice_to_jpeg(src_page, clip, dpi)
+
+        # 实际缩放高度（以像素 → pt 反算）
         scale_factor  = AVAIL_W / w
         actual_draw_h = h * scale_factor
+
+        # 限制单题最大高度（避免超大题目撑满整页）
         if actual_draw_h > AVAIL_H - 2 * GAP:
             actual_draw_h = AVAIL_H - 2 * GAP
 
+        export_seq = seq_start + done + 1
+        q_obj_mc = questions[q_idx]
+        diff_mc      = q_obj_mc.get('difficulty')
+        topics_mc    = q_obj_mc.get('topics') or []
+        exam_date_mc = q_obj_mc.get('exam_date', '')
+        q_meta_mc = {'difficulty': diff_mc, 'topics': topics_mc, 'exam_date': exam_date_mc} \
+                    if (diff_mc is not None or topics_mc or exam_date_mc) else None
         area = fitz.Rect(M, cur_y, PW - M, cur_y + actual_draw_h + 2 * GAP)
         _place_jpeg_on_page(cur_page, jpeg, w, h, area, f'Q{export_seq:02d}', 0, GAP, 11,
                             q_meta=q_meta_mc)
         del jpeg
+
         cur_y += actual_draw_h + 2 * GAP + ITEM_GAP
+
         done += 1
-        if progress_cb: progress_cb(seq_start + done)
-
-
+        if progress_cb: progress_cb(done)
 def _export_two_per_page(out_doc, src_doc, questions, q_nums, dpi,
                           paper_type, PW, PH, M, HH, GAP, FS, progress_cb=None,
                           seq_start=0):
-    """
-    每页左右两列各放一题（MCQ 适用，大题建议 one_per_page）。
-    支持两种数据来源（自动识别）：
-      - 有 img_bytes_b64：直接用缓存图片渲染（workbook/云端来源）
-      - 无 img_bytes_b64：从 src_doc 裁切渲染（原始PDF来源）
-    src_doc 可以为 None，此时所有题目走 img_bytes_b64 路径。
-    """
-    import base64 as _b64
+    """每页左右两列各放一题（MCQ 适用，大题建议 one_per_page）"""
     COL_GAP = 12
     COL_W   = (PW - 2 * M - COL_GAP) / 2
     COL_H   = PH - 2 * M
 
-    sorted_nums = list(q_nums)
+    sorted_nums = list(q_nums)   # 保持传入顺序，不再 sorted()
     done = 0
     for i in range(0, len(sorted_nums), 2):
         page = out_doc.new_page(width=PW, height=PH)
@@ -4735,46 +4510,28 @@ def _export_two_per_page(out_doc, src_doc, questions, q_nums, dpi,
             q_idx = next((j for j, q in enumerate(questions) if q['q_num'] == q_num), None)
             if q_idx is None:
                 done += 1
-                if progress_cb: progress_cb(seq_start + done)
+                if progress_cb: progress_cb(done)
                 continue
-            q_obj      = questions[q_idx]
+            q_obj  = questions[q_idx]
             export_seq = seq_start + done + 1
-            label      = f'Q{export_seq:02d}' if paper_type == 'mcq' else f'第{export_seq}题'
+            label  = f'Q{export_seq:02d}' if paper_type == 'mcq' else f'第{export_seq}题'
+            # 构建本题 meta
             diff      = q_obj.get('difficulty')
             topics    = q_obj.get('topics') or []
             exam_date = q_obj.get('exam_date', '')
-            q_meta    = {'difficulty': diff, 'topics': topics, 'exam_date': exam_date} \
-                        if (diff is not None or topics or exam_date) else None
-            x0   = M + col * (COL_W + COL_GAP)
-            area = fitz.Rect(x0, M, x0 + COL_W, M + COL_H)
-
-            # ── 优先路径：题目已有缓存图片（workbook / 云端导入）──
-            cached_b64 = q_obj.get('img_bytes_b64', '')
-            if cached_b64:
-                try:
-                    jpeg  = _b64.b64decode(cached_b64)
-                    img_w = q_obj.get('img_w') or 1
-                    img_h = q_obj.get('img_h') or 1
-                    _place_jpeg_on_page(page, jpeg, img_w, img_h, area,
-                                        label, HH, GAP, FS, q_meta=q_meta)
-                except Exception as _e:
-                    page.insert_text(fitz.Point(x0 + 4, M + HH + GAP),
-                                     f'{label}: 渲染失败', fontsize=FS, color=(0.8, 0, 0))
-                done += 1
-                if progress_cb: progress_cb(seq_start + done)
-                continue
-
-            # ── 正常路径：从 src_doc 裁切渲染 ──
-            if src_doc is not None:
-                slices = _collect_question_slices(src_doc, questions, q_idx, paper_type)
-                if slices:
-                    src_page, clip = slices[0]
-                    jpeg, w, h = _render_slice_to_jpeg(src_page, clip, dpi)
-                    _place_jpeg_on_page(page, jpeg, w, h, area,
-                                        label, HH, GAP, FS, q_meta=q_meta)
-                    del jpeg
+            q_meta = {'difficulty': diff, 'topics': topics, 'exam_date': exam_date} if (diff is not None or topics or exam_date) else None
+            # 取第一个片段即可（two_per_page 主要用于 MCQ，单页题）
+            slices = _collect_question_slices(src_doc, questions, q_idx, paper_type)
+            if slices:
+                src_page, clip = slices[0]
+                jpeg, w, h = _render_slice_to_jpeg(src_page, clip, dpi)
+                x0   = M + col * (COL_W + COL_GAP)
+                area = fitz.Rect(x0, M, x0 + COL_W, M + COL_H)
+                _place_jpeg_on_page(page, jpeg, w, h, area,
+                                    label, HH, GAP, FS, q_meta=q_meta)
+                del jpeg  # 立即释放
             done += 1
-            if progress_cb: progress_cb(seq_start + done)
+            if progress_cb: progress_cb(done)
 
 
 
@@ -4810,8 +4567,6 @@ _SUBJECTS_MAP = {
                 '化学 Chemistry','生物 Biology',        '经济 Economics',
                 '商业 Business', '会计 Accounting'],
 }
-
-
 def _lib_key_prefix(board: str, subject: str, wb_id: str = '') -> str:
     """返回图书馆存储 key 前缀（R2 key 或本地目录路径）。"""
     safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
