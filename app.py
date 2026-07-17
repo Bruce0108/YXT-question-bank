@@ -1950,7 +1950,12 @@ def _detect_edexcel_maths_ms_table(doc):
     返回：
       {q_num: [(page_idx, y_top, y_bottom, x_left, x_right), ...]}
     """
+    # WMA/WFM 系列表头：Question / Scheme / Marks（三列完整）
+    # WST/WMS 系列表头：Qu / Scheme / Marks（"Qu" 代替 "Question"）
+    # WME/WDM 系列表头：Question + Number（分两行）/ Scheme / Marks
     HDR_WORDS  = {'question', 'scheme', 'marks'}
+    # WST/WMS 系列备用：用 'qu' 替代 'question'
+    HDR_WORDS_QU = {'qu', 'scheme', 'marks'}
     # 总分行：优先匹配 "Total N"（更精确），其次 "(N marks)" / "(N)"
     TOTAL_PAT  = re.compile(r'^Total\s+\d+$', re.IGNORECASE)
     PAREN_PAT  = re.compile(r'^\(\s*\d+\s*(?:marks?)?\s*\)$', re.IGNORECASE)
@@ -1983,12 +1988,14 @@ def _detect_edexcel_maths_ms_table(doc):
             while j < n:
                 y0_j, y1_j, x0_j, x1_j, txt_j = tlines[j]
                 if y0_j > y0_i + 40: break
-                for hw in HDR_WORDS:
+                # 同时收集 HDR_WORDS 和 HDR_WORDS_QU 的词到 ww
+                for hw in HDR_WORDS | HDR_WORDS_QU:
                     if hw in txt_j: ww.add(hw)
                 wy0 = min(wy0, y0_j)
                 wy1 = max(wy1, y1_j)
                 j += 1
-            if HDR_WORDS <= ww:
+            # 满足完整表头（question/scheme/marks）或简化表头（qu/scheme/marks）
+            if HDR_WORDS <= ww or HDR_WORDS_QU <= ww:
                 header_blocks.append((pg_i, wy0, wy1))
                 i = j
             else:
@@ -2077,12 +2084,13 @@ def _detect_edexcel_maths_ms_table(doc):
             if pg_i < s_pg or pg_i > e_pg: continue
             if pg_i == e_pg and y0 >= e_y: continue
 
-            # ── 找题号：Question Number 列最左侧（x0 < 80）──
-            # 题号（"1","2(i)","7(a)"等）紧贴左边距，x0 约在 46-55 范围内
-            # 公式中的数字 x0 均 > 90，用严格 x 上限排除干扰
-            # 仅在表头页（hdr_pg）且 y ∈ [hdr_y0, hdr_y1] 范围内搜索
-            if q_num is None and x0 < 80:
-                if pg_i == hdr_pg and hdr_y0 - 2 <= y0 <= hdr_y1 + 2:
+            # ── 找题号：Question Number 列最左侧 ──
+            # WMA/WFM/WST 系列题号 x0 约在 46-55；WME/WDM 系列 x0 约在 90-97
+            # x0 < 110 可覆盖所有系列，同时过滤正文中更靠右的数字
+            # 搜索范围：表头页（hdr_pg），y ∈ [hdr_y0-2, hdr_y1+60]
+            # +60 容差：WME/WDM 表格中题号有时位于表头带之后（有注释行间隔）
+            if q_num is None and x0 < 110:
+                if pg_i == hdr_pg and hdr_y0 - 2 <= y0 <= hdr_y1 + 60:
                     m = Q_NUM_PAT.match(ltxt.strip())
                     if m:
                         cand = int(m.group(1))
