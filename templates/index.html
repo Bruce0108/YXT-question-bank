@@ -884,10 +884,22 @@
       </div>
       <!-- 右侧：题目预览图 -->
       <div class="preview-panel">
-        <div style="font-size:11px;color:#6b7280;margin-bottom:6px;font-weight:600">📷 题目预览</div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:6px;font-weight:600;display:flex;align-items:center;gap:8px">
+          <span>📷 题目预览</span>
+          <button id="editAnsToggleBtn" onclick="toggleEditAns()"
+            style="display:none;padding:3px 10px;font-size:11px;border-radius:5px;border:1px solid #bbf7d0;background:#f0fdf4;color:#15803d;cursor:pointer;font-weight:600">
+            👁 显示答案
+          </button>
+        </div>
         <div id="editPreviewWrap" style="text-align:center;flex:1;overflow:auto">
           <div id="editPreviewLoad" style="padding:40px;color:#94a3b8">⏳ 加载中...</div>
           <img id="editPreviewImg" src="" style="display:none;max-width:100%;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1)" alt="">
+          <!-- 答案区域（默认隐藏，有答案时由 openEditMeta 设置） -->
+          <div id="editAnsWrap" style="display:none;margin-top:10px">
+            <div style="height:3px;background:linear-gradient(90deg,#22c55e,#86efac);border-radius:2px;margin-bottom:6px"></div>
+            <div style="font-size:10px;color:#15803d;font-weight:600;margin-bottom:4px;text-align:left">✅ 答案 / Mark Scheme</div>
+            <img id="editAnsImg" src="" style="max-width:100%;border:1px solid #bbf7d0;border-radius:6px;box-shadow:0 1px 6px rgba(34,197,94,0.15)" alt="答案">
+          </div>
         </div>
       </div>
     </div>
@@ -1612,7 +1624,7 @@ function toggleAllAnswers() {
   // 判断当前全局状态：若所有有答案的卡片答案区都显示 → 则切换为隐藏；否则显示
   const allWraps = document.querySelectorAll('.qc-answer-wrap');
   if (!allWraps.length) return;
-  const anyHidden = Array.from(allWraps).some(el => el.style.display === 'none' || el.style.display === '');
+  const anyHidden = Array.from(allWraps).some(el => el.style.display === 'none');
   // 目标状态：若有任意隐藏的 → 全部显示；否则全部隐藏
   const shouldShow = anyHidden;
 
@@ -2463,6 +2475,23 @@ function openEditMeta(uid, gIdx, qNum, focusField, e) {
   tmpImg.onerror = () => { prevLoad.textContent = '⚠️ 预览加载失败'; };
   tmpImg.src = imgSrc;
 
+  // ── 答案区域初始化 ──
+  const ansToggleBtn = document.getElementById('editAnsToggleBtn');
+  const editAnsWrap  = document.getElementById('editAnsWrap');
+  const editAnsImg   = document.getElementById('editAnsImg');
+  if (q.answer_b64) {
+    editAnsImg.src = `data:image/jpeg;base64,${q.answer_b64}`;
+    editAnsWrap.style.display  = 'none';   // 默认隐藏
+    ansToggleBtn.style.display = '';       // 显示切换按钮
+    ansToggleBtn.textContent   = '👁 显示答案';
+    ansToggleBtn.style.background = '#f0fdf4';
+    ansToggleBtn.style.color      = '#15803d';
+    ansToggleBtn.style.border     = '1px solid #bbf7d0';
+  } else {
+    editAnsWrap.style.display  = 'none';
+    ansToggleBtn.style.display = 'none';   // 无答案时隐藏按钮
+  }
+
   // 导航按钮：计算当前在可见列表中的位置
   const vis = getVisibleQuestions();
   const visIdx = vis.findIndex(x => x.gIdx === gIdx && x.q_num === qNum);
@@ -2646,6 +2675,27 @@ function editNavQ(dir) {
 
 function closeEditMeta() {
   document.getElementById('editMetaMo').style.display = 'none';
+}
+
+// ── 编辑模态框内答案显示/隐藏切换 ──
+function toggleEditAns() {
+  const wrap = document.getElementById('editAnsWrap');
+  const btn  = document.getElementById('editAnsToggleBtn');
+  if (!wrap || !btn) return;
+  const showing = wrap.style.display !== 'none';
+  if (showing) {
+    wrap.style.display = 'none';
+    btn.textContent   = '👁 显示答案';
+    btn.style.background = '#f0fdf4';
+    btn.style.color      = '#15803d';
+    btn.style.border     = '1px solid #bbf7d0';
+  } else {
+    wrap.style.display = '';
+    btn.textContent   = '🙈 隐藏答案';
+    btn.style.background = '#fef9c3';
+    btn.style.color      = '#854d0e';
+    btn.style.border     = '1px solid #fef08a';
+  }
 }
 
 function _applyEditMetaToMemory() {
