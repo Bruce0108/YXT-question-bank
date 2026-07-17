@@ -1934,218 +1934,194 @@ def _detect_edexcel_maths_ms_table(doc):
     """
     扫描 Edexcel Maths Mark Scheme PDF，按题切割答案区域。
 
-    切割逻辑（根据样板图标注）：
-      ┌──────────────────────────────────────────────────┐  ← 表头行 y0（蓝色，切割顶部）
-      │ Question Number │    Scheme     │     Marks      │
-      ├─────────────────┴───────────────┴────────────────┤
-      │ 1.(a)  │  ... 公式 ...                  │ M1 A1  │  ← 红色题号 "1" → q_num=1
-      │        │  ...                           │ A1*    │
-      │        │                            (3) │        │
-      │  (b)   │  ...                           │ M1 A1  │
-      │        │                        (9 marks)│       │  ← 绿色总分行（切割底部）
-      └────────────────────────────────────────────────--┘  ← 总分行 y1（y_bot）
-      Notes ...  ← 表格外，不截
+    切割规则（严格按样板图三色标注）：
+      - y_top = 表头行（蓝色：Question Number / Scheme / Marks）的 y0
+      - q_num = 表头之后 Question Number 列（左列）第一个数字开头的文本，取首数字
+                真实格式例：'1', '2(i)', '3(a)', '4(a)', '7(a)' → q_num = 1/2/3/4/7
+      - y_bot = 该表格区间内 Marks 列最后一个 "Total N" 行的 y1
+                （"Total N" 比 "(N marks)" 更可靠，两者都检测，优先 Total）
+      - Notes 文字在表格外部（Total 行之后），不截取
 
-    关键规则：
-      - y_top = 表头行（Question Number/Scheme/Marks）的 y0
-      - y_bot = 该题总分行 "(N marks)" 的 y1
-      - q_num = 表格内 Question Number 列第一个纯数字/数字开头的文本
-      - 一个 MS 文件中每道题对应一张独立的表格（或共享同一表头）
+    本文件结构（WMA13 Jan2021 Mark Scheme）：
+      - 每道题单独一页（或连续两页），每页顶部有独立的表头
+      - 总分标识为 "Total N"（如 "Total 3", "Total 6"），在 Marks 列右侧
+      - 子题小计为 "(N)"，总分为 "Total N"
 
     返回：
       {q_num: [(page_idx, y_top, y_bottom, x_left, x_right), ...]}
     """
-    import re as _re
+    HDR_WORDS  = {'question', 'scheme', 'marks'}
+    # 总分行：优先匹配 "Total N"（更精确），其次 "(N marks)" / "(N)"
+    TOTAL_PAT  = re.compile(r'^Total\s+\d+$', re.IGNORECASE)
+    PAREN_PAT  = re.compile(r'^\(\s*\d+\s*(?:marks?)?\s*\)$', re.IGNORECASE)
+    # 题号：行首 1-2 位数字（后可接任意字符，包括 "(i)", "(a)" 等）
+    Q_NUM_PAT  = re.compile(r'^(\d{1,2})\b')
 
-    HDR_WORDS   = {'question', 'scheme', 'marks'}
-    # 总分行：(3), (9 marks), (7 marks), (12 marks) 等
-    TOTAL_PAT   = _re.compile(r'^\(\s*\d+\s*(?:marks?)?\s*\)$', re.IGNORECASE)
-    # 题号：行首 1-2 位数字，后接 "." / " " / "(" 或行尾
-    Q_NUM_PAT   = _re.compile(r'^(\d{1,2})[.\s(]')
-    Q_NUM_ONLY  = _re.compile(r'^(\d{1,2})$')
-
-    # ── 第一步：找每一个表头块 (header_y0, header_y1, page_idx) ──
-    # 每个表头块 = 在 y 跨度 40pt 内同时出现 question + scheme + marks 的一组行
-    header_blocks = []   # [(page_idx, hdr_y0, hdr_y1)]
-
+    # ── Step 1：找每页的表头块 (page_idx, hdr_y0, hdr_y1) ──
+    header_blocks = []
     for pg_i in range(doc.page_count):
         page = doc[pg_i]
         try:
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
             continue
-
-        text_lines = []
+        tlines = []
         for b in blocks:
-            if b.get('type') != 0:
-                continue
+            if b.get('type') != 0: continue
             for line in b.get('lines', []):
                 ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
-                if not ltxt:
-                    continue
-                bbox = line['bbox']
-                text_lines.append((bbox[1], bbox[3], bbox[0], bbox[2], ltxt))
-        text_lines.sort(key=lambda x: x[0])
-
-        n = len(text_lines)
+                if ltxt:
+                    tlines.append((line['bbox'][1], line['bbox'][3],
+                                   line['bbox'][0], line['bbox'][2], ltxt))
+        tlines.sort(key=lambda x: x[0])
+        n = len(tlines)
         i = 0
         while i < n:
-            y0_i = text_lines[i][0]
-            window_words = set()
-            window_y0    = y0_i
-            window_y1    = text_lines[i][1]
-            for j in range(i, n):
-                y0_j, y1_j = text_lines[j][0], text_lines[j][1]
-                txt_j = text_lines[j][4]
-                if y0_j > y0_i + 40:
-                    break
+            y0_i = tlines[i][0]
+            ww = set(); wy0 = y0_i; wy1 = tlines[i][1]
+            j = i
+            while j < n:
+                y0_j, y1_j, x0_j, x1_j, txt_j = tlines[j]
+                if y0_j > y0_i + 40: break
                 for hw in HDR_WORDS:
-                    if hw in txt_j:
-                        window_words.add(hw)
-                window_y0 = min(window_y0, y0_j)
-                window_y1 = max(window_y1, y1_j)
-            if HDR_WORDS <= window_words:
-                header_blocks.append((pg_i, window_y0, window_y1))
-                i = j + 1   # 跳过已处理的行
-                # 同页可能有多个表头（例如每题一个），继续扫
+                    if hw in txt_j: ww.add(hw)
+                wy0 = min(wy0, y0_j)
+                wy1 = max(wy1, y1_j)
+                j += 1
+            if HDR_WORDS <= ww:
+                header_blocks.append((pg_i, wy0, wy1))
+                i = j
             else:
                 i += 1
 
     if not header_blocks:
         return {}
 
-    # ── 第二步：收集全部文本行（从第一个表头页开始）──
+    # ── Step 2：收集全部文本行（从第一个表头页开始）──
     first_pg = header_blocks[0][0]
-
-    # all_lines: (page_idx, y0, y1, x0, x1, text)  ← 保留 x1 以便判断列位置
-    all_lines = []
+    all_lines = []   # (pg_i, y0, y1, x0, x1, text)
     for pg_i in range(first_pg, doc.page_count):
         page = doc[pg_i]
-        ph   = page.rect.height
+        ph = page.rect.height
         try:
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
             continue
         for b in blocks:
-            if b.get('type') != 0:
-                continue
+            if b.get('type') != 0: continue
             for line in b.get('lines', []):
                 bbox = line['bbox']
                 y0, y1, x0, x1 = bbox[1], bbox[3], bbox[0], bbox[2]
-                if y0 > ph - 28:
-                    continue
+                if y0 > ph - 28: continue
                 ltxt = ''.join(s['text'] for s in line['spans']).strip()
-                if not ltxt:
-                    continue
-                all_lines.append((pg_i, y0, y1, x0, x1, ltxt))
+                if ltxt:
+                    all_lines.append((pg_i, y0, y1, x0, x1, ltxt))
 
-    # ── 第三步：确定 Question Number 列 和 Marks 列的 x 边界 ──
-    # 从表头块扫描 "scheme" 文字 x0 作为 Question 列右边界
-    # 从表头块扫描 "marks"  文字 x0 作为 Marks  列左边界
-    pw_default  = doc[0].rect.width
-    q_col_max_x = pw_default * 0.20   # 默认：页宽 20%
-    marks_col_x = pw_default * 0.70   # 默认：页宽 70%
+    # ── Step 3：动态确定列宽 ──
+    # Question Number 列右边界 = "Scheme" 文字 x0（在表头中）
+    # Marks 列左边界 = "Marks" 文字 x0（在表头中）
+    pw_def = doc[0].rect.width
+    q_col_max_x = pw_def * 0.20   # 默认 20% 页宽
+    marks_col_x = pw_def * 0.75   # 默认 75% 页宽
 
-    for pg_i, hy0, hy1 in header_blocks:
+    for pg_i, hy0, hy1 in header_blocks[:3]:   # 用前3个表头取平均
         page = doc[pg_i]
-        pw   = page.rect.width
+        pw = page.rect.width
         try:
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
             continue
         for b in blocks:
-            if b.get('type') != 0:
-                continue
+            if b.get('type') != 0: continue
             for line in b.get('lines', []):
                 ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
                 bbox = line['bbox']
                 y0_l = bbox[1]
-                if not (hy0 - 2 <= y0_l <= hy1 + 2):
-                    continue
-                # scheme 列：文本含 "scheme"，x0 在中间区域
+                if not (hy0 - 2 <= y0_l <= hy1 + 4): continue
+                # Scheme 列：含 "scheme"，不含 "question"
                 if 'scheme' in ltxt and 'question' not in ltxt:
-                    q_col_max_x = max(q_col_max_x, bbox[0] + 5)
-                # marks 列：文本仅为 "marks"，在右侧
+                    q_col_max_x = max(q_col_max_x, bbox[0] + 8)
+                # Marks 列：仅含 "marks"，在右侧 55% 以后
                 if ltxt.strip() == 'marks' and bbox[0] > pw * 0.55:
                     marks_col_x = min(marks_col_x, bbox[0] - 5)
-        break   # 只用第一个表头块定列宽
 
-    q_col_max_x = min(q_col_max_x, 200)
-    marks_col_x = max(marks_col_x, pw_default * 0.55)
+    q_col_max_x = min(q_col_max_x, 220)
+    marks_col_x = max(marks_col_x, pw_def * 0.60)
 
-    # ── 第四步：为每个表头块确定对应的 q_num 和总分行 y_bot ──
-    # 策略：
-    #   - q_num  = 表头块之后，Question Number 列（x0 < q_col_max_x）中第一个数字文本
-    #   - y_bot  = 表头块之后，Marks 列（x0 >= marks_col_x）中最后一个匹配 TOTAL_PAT 的行的 y1
-    #   - 搜索范围：从本表头 hdr_y1 起，到下一个表头 hdr_y0 前（或页末）
-
-    # 构建表头块的搜索区间
-    search_regions = []   # [(pg_i, start_y, end_pg, end_y)]
+    # ── Step 4：为每个表头块确定 q_num + 总分行 y_bot ──
+    # 搜索区间：
+    #   q_num     搜索：从 hdr_y0 开始（题号在表头带内，与 Question/Scheme/Marks 同行区间）
+    #   总分行    搜索：从 hdr_y1 开始（避免把表头 "Marks" 文字误认为总分）
+    #   两者结束：下一表头 hdr_y0（或页末）
+    search_regions = []
     for idx, (pg_i, hy0, hy1) in enumerate(header_blocks):
         if idx + 1 < len(header_blocks):
-            next_pg, next_hy0, _ = header_blocks[idx + 1]
-            search_regions.append((pg_i, hy1, next_pg, next_hy0))
+            n_pg, n_hy0, _ = header_blocks[idx + 1]
+            search_regions.append((pg_i, hy0, hy1, n_pg, n_hy0))
         else:
-            last_pg = doc.page_count - 1
-            search_regions.append((pg_i, hy1, last_pg, doc[last_pg].rect.height - 28))
+            lp = doc.page_count - 1
+            search_regions.append((pg_i, hy0, hy1, lp, doc[lp].rect.height - 28))
 
-    answers = {}   # {q_num: [(pg_i, y_top, y_bot, x_left, x_right)]}
+    answers = {}
 
-    for (hdr_pg, hdr_y0, hdr_y1), (s_pg, s_y, e_pg, e_y) in zip(header_blocks, search_regions):
-        page_w = doc[hdr_pg].rect.width
+    for (hdr_pg, hdr_y0, hdr_y1), (s_pg, q_start_y, total_start_y, e_pg, e_y) in \
+            zip(header_blocks, search_regions):
 
-        # 在搜索区间内找 q_num 和总分行
-        q_num    = None
-        best_total_pg = None
-        best_total_y1 = None
+        q_num          = None
+        best_total_pg  = None
+        best_total_y1  = None
+        best_paren_pg  = None
+        best_paren_y1  = None
 
         for pg_i, y0, y1, x0, x1, ltxt in all_lines:
-            # 范围：从表头 y1 开始
-            if pg_i < s_pg or pg_i > e_pg:
-                continue
-            if pg_i == s_pg and y0 < s_y - 2:
-                continue
-            if pg_i == e_pg and y0 >= e_y:
-                continue
+            if pg_i < s_pg or pg_i > e_pg: continue
+            if pg_i == e_pg and y0 >= e_y: continue
 
-            # 找 q_num（Question Number 列，第一个数字文本）
-            if q_num is None and x0 < q_col_max_x:
-                stripped = ltxt.strip()
-                m = Q_NUM_PAT.match(stripped) or Q_NUM_ONLY.match(stripped)
-                if m:
-                    cand = int(m.group(1))
-                    if 1 <= cand <= 30:
-                        q_num = cand
+            # ── 找题号：Question Number 列最左侧（x0 < 80）──
+            # 题号（"1","2(i)","7(a)"等）紧贴左边距，x0 约在 46-55 范围内
+            # 公式中的数字 x0 均 > 90，用严格 x 上限排除干扰
+            # 仅在表头页（hdr_pg）且 y ∈ [hdr_y0, hdr_y1] 范围内搜索
+            if q_num is None and x0 < 80:
+                if pg_i == hdr_pg and hdr_y0 - 2 <= y0 <= hdr_y1 + 2:
+                    m = Q_NUM_PAT.match(ltxt.strip())
+                    if m:
+                        cand = int(m.group(1))
+                        if 1 <= cand <= 30:
+                            q_num = cand
 
-            # 找总分行（Marks 列）
-            if x0 >= marks_col_x - 15:
-                if TOTAL_PAT.match(ltxt.strip()):
-                    best_total_pg = pg_i
-                    best_total_y1 = y1   # 取最后一个
+            # ── 找总分行：Marks 列（x0 >= marks_col_x - 20）──
+            # 从 hdr_y1 开始搜索（避免表头 "Marks" 文字干扰）
+            if x0 >= marks_col_x - 20:
+                if pg_i > s_pg or y0 >= total_start_y - 2:   # 从 hdr_y1 开始
+                    s = ltxt.strip()
+                    if TOTAL_PAT.match(s):    # "Total N" → 最优先
+                        best_total_pg = pg_i
+                        best_total_y1 = y1
+                    if PAREN_PAT.match(s):    # "(N marks)" / "(N)" → 备用
+                        best_paren_pg = pg_i
+                        best_paren_y1 = y1
 
         if q_num is None:
-            continue   # 找不到题号，跳过
+            continue
 
-        if best_total_pg is None:
-            # 找不到总分行：用搜索区间末尾作为底部
-            best_total_pg = e_pg
-            best_total_y1 = e_y
+        # 优先用 "Total N" 行；其次用最后一个 "(N)" 行
+        if best_total_pg is not None:
+            end_pg, end_y = best_total_pg, best_total_y1 + 4
+        elif best_paren_pg is not None:
+            end_pg, end_y = best_paren_pg, best_paren_y1 + 4
+        else:
+            end_pg, end_y = e_pg, e_y
 
-        y_bot = best_total_y1 + 4   # 留 4pt 底部空白
-
-        # 生成切片：y_top = 表头行 y0，y_bot = 总分行 y1
+        # ── Step 5：生成切片 ──
         slices = []
-        for pg_i in range(hdr_pg, best_total_pg + 1):
+        for pg_i in range(hdr_pg, end_pg + 1):
             page = doc[pg_i]
-            ph   = page.rect.height
-            pw   = page.rect.width
-
-            top    = hdr_y0 if pg_i == hdr_pg else 28   # 续页从页顶开始
-            bottom = y_bot  if pg_i == best_total_pg else (ph - 28)
-
-            left  = 24
-            right = pw - 24
-
+            ph = page.rect.height
+            pw = page.rect.width
+            top    = hdr_y0 if pg_i == hdr_pg else 26
+            bottom = end_y  if pg_i == end_pg  else (ph - 28)
+            left   = 24
+            right  = pw - 24
             if bottom > top + 6:
                 slices.append((pg_i, top, bottom, left, right))
 
