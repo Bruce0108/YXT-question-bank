@@ -3799,10 +3799,12 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
     if img_area_h < 10 or img_area_w < 10:
         return
 
-    scale  = min(img_area_w / img_w, img_area_h / img_h)
-    draw_w = img_w * scale
+    # 宽度铺满（scale by width），图片顶对齐信息行，高度等比例延伸
+    # 若渲染后超出页面底部则裁切（多片题目由 _export_one_per_page 多页处理）
+    scale  = img_area_w / img_w
+    draw_w = img_area_w               # 精确铺满可用宽度
     draw_h = img_h * scale
-    # 左对齐（与原版相同）
+    # 顶对齐：img_y0 紧贴信息行底部，不垂直居中
     img_rect = fitz.Rect(x0, img_y0, x0 + draw_w, img_y0 + draw_h)
 
     stream = io.BytesIO(jpeg_bytes)
