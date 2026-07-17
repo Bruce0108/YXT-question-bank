@@ -2453,6 +2453,43 @@ def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, o
         upd(0, status='error', error=str(e))
 
 
+def _export_b64_questions_to_pdf(out_doc, questions, q_nums,
+                                  PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
+                                  progress_cb=None, seq_start=0):
+    """
+    将题目 img_bytes_b64 直接渲染到 out_doc（用于题册类型，无原始 PDF 文件）。
+    每道题一页（one_per_page 模式）。
+    """
+    import base64 as _b64
+    q_map = {q['q_num']: q for q in questions}
+    for i, q_num in enumerate(q_nums):
+        q_obj = q_map.get(q_num)
+        if not q_obj:
+            continue
+        b64 = q_obj.get('img_bytes_b64', '')
+        if not b64:
+            continue
+        try:
+            img_bytes = _b64.b64decode(b64)
+            img_w = q_obj.get('img_w', 1) or 1
+            img_h = q_obj.get('img_h', 1) or 1
+            diff = q_obj.get('difficulty')
+            topics = q_obj.get('topics', [])
+            q_meta = {'difficulty': diff, 'topics': topics} if (diff is not None or topics) else None
+            label = f'Q{q_num:02d}'
+
+            page = out_doc.new_page(width=PAGE_W, height=PAGE_H)
+            _place_jpeg_on_page(
+                page, img_bytes, img_w, img_h,
+                fitz.Rect(MARGIN, MARGIN, PAGE_W - MARGIN, PAGE_H - MARGIN),
+                label, HEADER_H, GAP, FS, q_meta=q_meta
+            )
+        except Exception:
+            pass
+        if progress_cb:
+            progress_cb(seq_start + i + 1)
+
+
 def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_q,
                               cover_title='', ordered_items=None):
     """
@@ -2526,7 +2563,6 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                 if gi not in group_map or gi not in src_docs:
                     continue
                 ginfo     = group_map[gi]
-                src_doc   = src_docs[gi]
                 questions = ginfo['questions']
                 paper_type = ginfo['paper_type']
                 q_nums_ordered = ordered_by_group.get(gi, [])
@@ -2537,16 +2573,25 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                 def cb(p, _done=done_before):
                     upd(_done + p)
 
-                if layout == 'two_per_page':
-                    _export_two_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
-                                         paper_type, PAGE_W, PAGE_H, MARGIN,
-                                         HEADER_H, GAP, FS, progress_cb=cb,
-                                         seq_start=done_total)
-                else:
-                    _export_one_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
-                                         paper_type, PAGE_W, PAGE_H, MARGIN,
-                                         HEADER_H, GAP, FS, progress_cb=cb,
-                                         seq_start=done_total)
+                # 题册类型（无PDF文件，使用img_bytes_b64直接渲染）
+                is_workbook = not ginfo['path'] or not os.path.exists(ginfo['path'])
+                if is_workbook:
+                    _export_b64_questions_to_pdf(
+                        out_doc, questions, q_nums_ordered,
+                        PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
+                        progress_cb=cb, seq_start=done_total)
+                elif gi in src_docs:
+                    src_doc = src_docs[gi]
+                    if layout == 'two_per_page':
+                        _export_two_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
+                                             paper_type, PAGE_W, PAGE_H, MARGIN,
+                                             HEADER_H, GAP, FS, progress_cb=cb,
+                                             seq_start=done_total)
+                    else:
+                        _export_one_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
+                                             paper_type, PAGE_W, PAGE_H, MARGIN,
+                                             HEADER_H, GAP, FS, progress_cb=cb,
+                                             seq_start=done_total)
                 done_total += len(q_nums_ordered)
 
             for sd in src_docs.values():
@@ -2561,7 +2606,20 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                 questions  = ginfo['questions']
                 q_nums     = ginfo['q_nums']
 
-                if not q_nums or not os.path.exists(save_path):
+                if not q_nums:
+                    continue
+
+                # 题册类型（无PDF文件，使用img_bytes_b64直接渲染）
+                is_workbook = not save_path or not os.path.exists(save_path)
+                if is_workbook:
+                    done_before = done_total
+                    def cb_b64(p, _done=done_before):
+                        upd(_done + p)
+                    _export_b64_questions_to_pdf(
+                        out_doc, questions, q_nums,
+                        PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
+                        progress_cb=cb_b64, seq_start=done_total)
+                    done_total += len(q_nums)
                     continue
 
                 src_doc = fitz.open(save_path)
@@ -4277,6 +4335,46 @@ def library_save():
 
 
 
+def _register_workbook_session(wb_id: str, manifest: dict, questions_out: list) -> str:
+    """
+    将已加载的题册注册为一个虚拟 session，使 export_pdf 等接口可以使用。
+    每道题的图片以 img_bytes_b64 存入 questions，
+    export_pdf / preview_b64 会优先读取这个字段而不尝试打开 PDF。
+    返回新的 session_id（'wb_' + wb_id）。
+    """
+    import base64 as _b64
+    sess_id = f'wb_{wb_id}'
+    # 构建虚拟 group（没有真实 PDF 路径，只有图片 base64）
+    virt_questions = []
+    for i, q in enumerate(questions_out):
+        virt_questions.append({
+            'q_num':         q.get('q_num', i + 1),
+            'page_idx':      0,
+            'difficulty':    q.get('difficulty'),
+            'topics':        q.get('topics', []),
+            'exam_date':     q.get('exam_date', ''),
+            'source':        q.get('source', 'workbook'),
+            'img_bytes_b64': q.get('img_bytes_b64', ''),
+            'img_w':         q.get('img_w', 0),
+            'img_h':         q.get('img_h', 0),
+        })
+    virt_group = {
+        'filename':        manifest.get('title', wb_id) + '.pdf',
+        'path':            '',                        # 无真实 PDF
+        'r2_key':          '',
+        'source':          'workbook',
+        'paper_type':      manifest.get('syllabus_type', 'edexcel_maths'),
+        'maths_unit':      manifest.get('maths_unit', None),
+        'exam_date':       '',
+        'questions':       virt_questions,
+        'total_questions': len(virt_questions),
+        'total_pages':     0,
+    }
+    with _multi_sessions_lock:
+        _multi_sessions[sess_id] = [virt_group]
+    return sess_id
+
+
 @app.route('/api/library/load/<wb_id>', methods=['GET'])
 def library_load(wb_id):
     """
@@ -4341,6 +4439,7 @@ def library_load(wb_id):
     return jsonify({
         'ok':           True,
         'id':           wb_id,
+        'session_id':   _register_workbook_session(wb_id, manifest, questions_out),
         'title':        manifest.get('title', ''),
         'board':        manifest.get('board', board),
         'subject':      manifest.get('subject', subject),
@@ -5144,6 +5243,142 @@ def cloud_library_push_from_session():
     与 save_questions 的区别：此接口支持更丰富的批量配置。
     """
     return cloud_library_save_questions()
+
+
+# ── API: 获取云端题库可用年份列表 ──
+@app.route('/api/cloud_library/years', methods=['GET'])
+def cloud_library_years():
+    """
+    返回云端题库中所有题目涉及的年份列表（从 exam_date 中提取）。
+    可选参数：subject, board
+    """
+    subject = request.args.get('subject', '')
+    board   = request.args.get('board', '')
+
+    all_keys = _list_cloud_questions(subject, board, '', '')
+    years = set()
+    for key in all_keys:
+        q = _load_cloud_question(key)
+        if q:
+            exam_date = q.get('exam_date', '')
+            if exam_date:
+                # 从 "October 2023" / "2023" / "2023-10" 等格式提取年份
+                import re as _re
+                m = _re.search(r'(20\d{2}|19\d{2})', str(exam_date))
+                if m:
+                    years.add(m.group(1))
+    return jsonify({'years': sorted(years, reverse=True)})
+
+
+# ── API: 从云端图库导入题目到 session ──
+@app.route('/api/cloud_library/import_to_session', methods=['POST'])
+def cloud_library_import_to_session():
+    """
+    按学科、考试局、年份筛选云端题目，返回一个新 session_id 供后续操作。
+    请求体：{subject, board, years: [str] (空=全部)}
+    返回：{session_id, groups, total_questions}
+    """
+    import base64 as _b64
+    data    = request.json or {}
+    subject = data.get('subject', '')
+    board   = data.get('board', '')
+    years   = data.get('years', [])   # 空列表 = 全部年份
+
+    if not subject or not board:
+        return jsonify({'error': '必须提供 subject 和 board'}), 400
+
+    all_keys = _list_cloud_questions(subject, board, '', '')
+    if not all_keys:
+        return jsonify({'error': f'云端题库中没有 {subject} / {board} 的题目'}), 404
+
+    # 过滤年份
+    selected_qs = []
+    for key in all_keys:
+        q = _load_cloud_question(key)
+        if not q:
+            continue
+        if years:
+            exam_date = str(q.get('exam_date', ''))
+            import re as _re
+            m = _re.search(r'(20\d{2}|19\d{2})', exam_date)
+            year_found = m.group(1) if m else ''
+            if year_found not in years:
+                continue
+        selected_qs.append(q)
+
+    if not selected_qs:
+        return jsonify({'error': '按所选年份过滤后没有题目'}), 404
+
+    # 加载每题图片（base64），构建虚拟题目列表
+    virt_questions = []
+    for i, q in enumerate(selected_qs):
+        qid = q.get('qid', '')
+        b64 = ''
+        if qid:
+            img_key = _cloud_img_key(qid)
+            try:
+                if storage.is_r2_mode():
+                    raw = storage.load_bytes(img_key)
+                    if raw:
+                        b64 = _b64.b64encode(raw).decode()
+                else:
+                    if os.path.isfile(img_key):
+                        with open(img_key, 'rb') as f:
+                            b64 = _b64.b64encode(f.read()).decode()
+            except Exception:
+                pass
+
+        virt_questions.append({
+            'q_num':         i + 1,
+            'page_idx':      0,
+            'difficulty':    q.get('difficulty'),
+            'topics':        q.get('topics', []),
+            'exam_date':     q.get('exam_date', ''),
+            'source':        q.get('source', 'cloud'),
+            'paper_type':    q.get('paper_type', 'structured'),
+            'maths_unit':    q.get('maths_unit', ''),
+            'subject':       q.get('subject', subject),
+            'board':         q.get('board', board),
+            'topic1':        q.get('topic1', ''),
+            'topic2':        q.get('topic2', ''),
+            'img_bytes_b64': b64,
+            'img_w':         0,
+            'img_h':         0,
+            '_cloud_qid':    qid,   # 保留原始云端 ID
+        })
+
+    # 注册为虚拟 session
+    session_id = str(uuid.uuid4())
+    virt_group = {
+        'filename':        f'{subject}_{board}_云端导入.pdf',
+        'path':            '',
+        'r2_key':          '',
+        'source':          'cloud',
+        'paper_type':      selected_qs[0].get('paper_type', 'structured') if selected_qs else 'structured',
+        'maths_unit':      None,
+        'exam_date':       '',
+        'questions':       virt_questions,
+        'total_questions': len(virt_questions),
+        'total_pages':     0,
+    }
+    with _multi_sessions_lock:
+        _multi_sessions[session_id] = [virt_group]
+
+    return jsonify({
+        'session_id':      session_id,
+        'total_questions': len(virt_questions),
+        'groups': [{
+            'filename':        virt_group['filename'],
+            'source':          virt_group['source'],
+            'paper_type':      virt_group['paper_type'],
+            'maths_unit':      None,
+            'exam_date':       '',
+            'questions':       virt_questions,
+            'total_questions': len(virt_questions),
+            'total_pages':     0,
+            'error':           None,
+        }]
+    })
 
 
 if __name__ == '__main__':

@@ -400,14 +400,12 @@
         <input type="file" id="fileIn" accept=".pdf" multiple>
       </div>
 
-      <!-- 导入已导出 PDF 按钮 -->
+      <!-- 从云端图库导入 -->
       <div style="margin-top:8px">
         <button class="btn btn-outline btn-sm" style="width:100%;border-style:dashed;color:#0369a1"
-                onclick="document.getElementById('importFileIn').click()">
-          📥 导入已导出的题库 PDF（重新读取）
+                onclick="openCloudImportDialog()">
+          ☁️ 从云端图库导入题目
         </button>
-        <input type="file" id="importFileIn" accept=".pdf" style="display:none"
-               onchange="importExportedPdf(this.files[0])">
       </div>
 
       <!-- 保存/读取题册 -->
@@ -745,6 +743,78 @@
     <div class="mo-ft">
       <button class="btn btn-outline" onclick="closeModal('clearCloudMo')">取消</button>
       <button class="btn" style="background:#dc2626;color:#fff" onclick="doClearAll()">确认清空</button>
+    </div>
+  </div>
+</div>
+
+<!-- 从云端图库导入 Modal -->
+<div class="mo" id="cloudImportMo">
+  <div class="mo-box" style="max-width:480px">
+    <div class="mo-hdr">
+      <h3>☁️ 从云端图库导入题目</h3>
+      <button class="mo-cls" onclick="closeModal('cloudImportMo')">✕</button>
+    </div>
+    <div class="mo-body" style="padding:20px;max-height:70vh;overflow-y:auto">
+
+      <!-- 学科（单选） -->
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:6px">📚 学科（单选）</label>
+        <select id="ciSubject" style="width:100%;border:1px solid var(--g200);border-radius:8px;padding:8px 12px;font-size:13px;background:#fff;outline:none"
+                onchange="loadCloudImportYears()">
+          <option value="">— 请选择学科 —</option>
+          <option value="数学 Maths">数学 Maths</option>
+          <option value="物理 Physics">物理 Physics</option>
+          <option value="化学 Chemistry">化学 Chemistry</option>
+          <option value="生物 Biology">生物 Biology</option>
+          <option value="高数 Further Maths">高数 Further Maths</option>
+          <option value="经济 Economics">经济 Economics</option>
+          <option value="商业 Business">商业 Business</option>
+          <option value="会计 Accounting">会计 Accounting</option>
+        </select>
+      </div>
+
+      <!-- 考试局（单选） -->
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:6px">🏛️ 考试局（单选）</label>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px" id="ciBoards">
+          <button class="cloud-board-btn" data-board="CAIE" onclick="ciSelectBoard(this)">CAIE</button>
+          <button class="cloud-board-btn" data-board="Edexcel" onclick="ciSelectBoard(this)">Edexcel</button>
+          <button class="cloud-board-btn" data-board="AQA" onclick="ciSelectBoard(this)">AQA</button>
+          <button class="cloud-board-btn" data-board="OCR" onclick="ciSelectBoard(this)">OCR</button>
+          <button class="cloud-board-btn" data-board="IB" onclick="ciSelectBoard(this)">IB</button>
+          <button class="cloud-board-btn" data-board="AP" onclick="ciSelectBoard(this)">AP</button>
+        </div>
+      </div>
+
+      <!-- 年份（多选，动态加载） -->
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:6px">
+          📅 年份（多选，不选则导入全部）
+          <button onclick="ciSelectAllYears()" style="margin-left:8px;font-size:10px;color:#0369a1;background:none;border:none;cursor:pointer;padding:0">全选</button>
+          <button onclick="ciClearYears()" style="margin-left:4px;font-size:10px;color:#dc2626;background:none;border:none;cursor:pointer;padding:0">清除</button>
+        </label>
+        <div id="ciYears" style="display:flex;flex-wrap:wrap;gap:6px;min-height:32px;padding:4px;background:var(--g50);border-radius:6px;border:1px solid var(--g200)">
+          <span style="color:var(--g400);font-size:12px;padding:4px">先选择学科和考试局</span>
+        </div>
+      </div>
+
+      <!-- 统计提示 -->
+      <div id="ciCountHint" style="font-size:12px;color:var(--g500);text-align:center;padding:6px;display:none"></div>
+
+      <!-- 进度条 -->
+      <div id="ciProgWrap" style="display:none;margin-top:12px">
+        <div style="height:6px;background:var(--g200);border-radius:3px;overflow:hidden;margin-bottom:8px">
+          <div id="ciProgFill" style="height:100%;background:linear-gradient(90deg,#0ea5e9,#6366f1);border-radius:3px;transition:width .4s;width:0%"></div>
+        </div>
+        <div id="ciProgTxt" style="font-size:12px;color:var(--g600);text-align:center">导入中...</div>
+      </div>
+    </div>
+    <div class="mo-ft">
+      <button class="btn btn-outline" onclick="closeModal('cloudImportMo')">取消</button>
+      <button class="btn" id="btnDoCloudImport" onclick="doCloudImport()"
+              style="background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;font-weight:700">
+        ☁️ 导入题目
+      </button>
     </div>
   </div>
 </div>
@@ -2008,35 +2078,104 @@ async function dlOne(qNum, gIdx, e) {
 
 async function dlAll() {
   if (!allQuestions.length) { toast('请先上传PDF','err'); return; }
-  showLd(`正在打包全部题目…`);
-  const a = document.createElement('a');
-  a.href = `/api/download_all?dpi=${getDPI()}&format=${getFmt()}&session_id=${sessionId}&file_idx=${activeGIdx}`;
-  a.download = 'all_questions.zip'; a.click();
-  setTimeout(hideLd, 3000);
-  toast('正在下载，请稍候…','ok');
+  // 按 gIdx 分组全部题目（支持多文件）
+  const byGroup = {};
+  allQuestions.forEach(q => {
+    if (!byGroup[q.gIdx]) byGroup[q.gIdx] = [];
+    byGroup[q.gIdx].push(q.q_num);
+  });
+  const sel_by_group = Object.entries(byGroup).map(([gi, qns]) => ({gIdx: Number(gi), q_nums: qns}));
+  const ordered_items = allQuestions.map(q => ({gIdx: q.gIdx, q_num: q.q_num}));
+
+  showLd(`正在打包全部 ${allQuestions.length} 道题目…`);
+  try {
+    const startRes = await fetch('/api/export_pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        session_id: sessionId, merged: true,
+        sel_by_group, ordered_items, dpi: getDPI(),
+        filename: 'all_questions', layout: 'one_per_page'
+      })
+    });
+    const startData = await startRes.json();
+    if (!startRes.ok || startData.error) throw new Error(startData.error || '任务启动失败');
+    const taskId = startData.task_id;
+
+    await new Promise((resolve, reject) => {
+      let failCount = 0, secs = 0;
+      const poll = setInterval(async () => {
+        secs++;
+        if (secs > 300) { clearInterval(poll); reject(new Error('超时')); return; }
+        try {
+          const pr = await fetch(`/api/export_pdf/progress/${taskId}`);
+          if (!pr.ok) { failCount++; if(failCount>=5){clearInterval(poll);reject(new Error('进度查询失败'));} return; }
+          failCount = 0;
+          const pd = await pr.json();
+          if (pd.status === 'done') { clearInterval(poll); resolve(); }
+          else if (pd.status === 'error') { clearInterval(poll); reject(new Error(pd.error||'导出失败')); }
+        } catch(e) { failCount++; if(failCount>=5){clearInterval(poll);reject(new Error('网络错误'));} }
+      }, 1000);
+    });
+    const a = document.createElement('a');
+    a.href = `/api/export_pdf/download/${taskId}`;
+    a.download = 'all_questions.pdf'; a.click();
+    hideLd(); toast('正在下载，请稍候…','ok');
+  } catch(e) { hideLd(); toast('导出失败:'+e.message,'err'); }
 }
 
 async function dlSelected() {
   if (!selNums.size) { toast('请先选择题目','err'); return; }
-  // 只导当前激活文件的选中题
-  const qNums = [...selNums]
-    .map(uid => { const [gi,qn]=uid.split('_').map(Number); return {gi,qn}; })
-    .filter(x => x.gi===activeGIdx)
-    .map(x => x.qn);
-  if (!qNums.length) { toast('所选题目不属于当前活跃文件，请切换文件后下载','err'); return; }
-  showLd(`正在打包 ${qNums.length} 道题目…`);
+  // 按 gIdx 分组所有选中题目（支持多文件跨文件下载）
+  const byGroup = {};
+  [...selNums].forEach(uid => {
+    const [gi, qn] = uid.split('_').map(Number);
+    if (!byGroup[gi]) byGroup[gi] = [];
+    byGroup[gi].push(qn);
+  });
+
+  const totalSel = selNums.size;
+  showLd(`正在打包 ${totalSel} 道题目…`);
   try {
-    const res = await fetch('/api/download_batch', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ questions:qNums, dpi:getDPI(), format:getFmt(),
-                             session_id:sessionId, file_idx:activeGIdx })
+    // 统一走合并导出接口（复用 export_pdf 的合并模式）
+    const sel_by_group = Object.entries(byGroup).map(([gi, qns]) => ({gIdx: Number(gi), q_nums: qns}));
+    const ordered_items = [...selNums].map(uid => {
+      const [gi, qn] = uid.split('_').map(Number);
+      return {gIdx: gi, q_num: qn};
     });
-    if (!res.ok) { const d=await res.json(); throw new Error(d.error); }
-    const blob = await res.blob();
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a'); a.href=url; a.download='selected.zip'; a.click();
-    URL.revokeObjectURL(url);
-    hideLd(); toast(`成功导出 ${qNums.length} 道题目`,'ok');
+
+    const startRes = await fetch('/api/export_pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        session_id: sessionId, merged: true,
+        sel_by_group, ordered_items, dpi: getDPI(),
+        filename: 'selected_questions', layout: 'one_per_page'
+      })
+    });
+    const startData = await startRes.json();
+    if (!startRes.ok || startData.error) throw new Error(startData.error || '任务启动失败');
+    const taskId = startData.task_id;
+
+    // 轮询进度
+    await new Promise((resolve, reject) => {
+      let failCount = 0, secs = 0;
+      const poll = setInterval(async () => {
+        secs++;
+        if (secs > 120) { clearInterval(poll); reject(new Error('超时')); return; }
+        try {
+          const pr = await fetch(`/api/export_pdf/progress/${taskId}`);
+          if (!pr.ok) { failCount++; if(failCount>=5){clearInterval(poll);reject(new Error('进度查询失败'));} return; }
+          failCount = 0;
+          const pd = await pr.json();
+          if (pd.status === 'done') { clearInterval(poll); resolve(); }
+          else if (pd.status === 'error') { clearInterval(poll); reject(new Error(pd.error||'导出失败')); }
+        } catch(e) { failCount++; if(failCount>=5){clearInterval(poll);reject(new Error('网络错误'));} }
+      }, 1000);
+    });
+
+    const a = document.createElement('a');
+    a.href = `/api/export_pdf/download/${taskId}`;
+    a.download = 'selected_questions.pdf'; a.click();
+    hideLd(); toast(`成功导出 ${totalSel} 道题目（PDF格式）`,'ok');
   } catch(e) { hideLd(); toast('导出失败:'+e.message,'err'); }
 }
 
@@ -2797,8 +2936,8 @@ function _applyLoadedWorkbook(d) {
     selNums      = new Set();
   }
 
-  // 生成新的 session（若追加则保持原 session）
-  if (!isAppend) sessionId = 'lib_' + d.id;
+  // 使用后端返回的 session_id（已注册到 _multi_sessions，支持 PDF 导出）
+  if (!isAppend) sessionId = d.session_id || ('lib_' + d.id);
 
   // 构建 group
   const g = {
@@ -3164,8 +3303,8 @@ async function refreshCloudStats() {
     document.getElementById('cloudTotalCnt').textContent = (d.total ?? 0).toLocaleString();
     _cloudTreeData = null;
     await loadCloudTree();
-    showToast('统计已更新', 'ok');
-  } catch(e) { showToast('刷新失败: ' + e.message, 'err'); }
+    toast('统计已更新', 'ok');
+  } catch(e) { toast('刷新失败: ' + e.message, 'err'); }
   finally { btn.disabled = false; btn.textContent = '🔄 刷新统计'; }
 }
 
@@ -3447,11 +3586,11 @@ async function deleteCloudQuestion(qid, subject, board, topic1, topic2, e) {
       _cloudQTotal--;
       document.getElementById('cloudQTotal').textContent = `共 ${_cloudQTotal} 题`;
       document.getElementById('cloudTotalCnt').textContent = (_cloudQTotal > 0 ? _cloudQTotal : '—').toString();
-      showToast('题目已删除', 'ok');
+      toast('题目已删除', 'ok');
       // 失效本地缓存统计
       setTimeout(loadCloudStats, 500);
     }
-  } catch(err) { showToast('删除失败: ' + err.message, 'err'); }
+  } catch(err) { toast('删除失败: ' + err.message, 'err'); }
 }
 
 // ── 清空题库 ──
@@ -3469,15 +3608,15 @@ async function doClearAll() {
     const d = await r.json();
     if (d.ok) {
       closeModal('clearCloudMo');
-      showToast('云端题库已清空', 'ok');
+      toast('云端题库已清空', 'ok');
       _cloudTreeData = null;
       _cloudTreeLoaded = false;
       document.getElementById('cloudTotalCnt').textContent = '0';
       await loadCloudTree();
     } else {
-      showToast(d.error || '清空失败', 'err');
+      toast(d.error || '清空失败', 'err');
     }
-  } catch(e) { showToast('清空失败: ' + e.message, 'err'); }
+  } catch(e) { toast('清空失败: ' + e.message, 'err'); }
 }
 
 // ─────────────────────────────────────────
@@ -3490,7 +3629,7 @@ let _cloudTopicsCache = {}; // board+subject -> [{id, title, subtopics}]
 async function openCloudSaveDialog() {
   const selQ = getSelectedQuestions(); // 复用现有函数
   if (!selQ || selQ.length === 0) {
-    showToast('请先选中题目', 'err'); return;
+    toast('请先选中题目', 'err'); return;
   }
   document.getElementById('cloudSaveCount').textContent = selQ.length;
 
@@ -3591,7 +3730,7 @@ async function doCloudSave() {
   const topic2  = document.getElementById('cloudSaveTopic2').value;
 
   const selQ = getSelectedQuestions();
-  if (!selQ || selQ.length === 0) { showToast('无选中题目', 'err'); return; }
+  if (!selQ || selQ.length === 0) { toast('无选中题目', 'err'); return; }
 
   // 构建 payload（为每题附加云端题库分类信息）
   const questions = selQ.map(q => {
@@ -3630,7 +3769,7 @@ async function doCloudSave() {
 
     if (d.saved !== undefined) {
       progTxt.textContent = `✅ 成功保存 ${d.saved} 题${d.failed > 0 ? `，${d.failed} 题失败` : ''}`;
-      showToast(`已保存 ${d.saved} 道题目到云端题库`, 'ok');
+      toast(`已保存 ${d.saved} 道题目到云端题库`, 'ok');
       // 刷新统计
       setTimeout(() => {
         loadCloudStats();
@@ -3639,11 +3778,11 @@ async function doCloudSave() {
       setTimeout(() => closeModal('cloudSaveMo'), 1500);
     } else {
       progTxt.textContent = '❌ ' + (d.error || '保存失败');
-      showToast(d.error || '保存失败', 'err');
+      toast(d.error || '保存失败', 'err');
     }
   } catch(e) {
     progTxt.textContent = '❌ 网络错误: ' + e.message;
-    showToast('保存失败: ' + e.message, 'err');
+    toast('保存失败: ' + e.message, 'err');
   } finally {
     document.getElementById('btnDoCloudSave').disabled = false;
   }
@@ -3722,6 +3861,175 @@ function updateCloudSaveBtn() {
 // ── Modal helper ──
 function closeModal(id) {
   document.getElementById(id).classList.remove('show');
+}
+
+// ══════════════════════════════════════════════════════════
+//  从云端图库导入
+// ══════════════════════════════════════════════════════════
+let _ciBoard = '';
+let _ciYearsSelected = new Set();
+
+function openCloudImportDialog() {
+  _ciBoard = '';
+  _ciYearsSelected.clear();
+  // 重置UI
+  document.querySelectorAll('#ciBoards .cloud-board-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('ciSubject').value = '';
+  document.getElementById('ciYears').innerHTML = '<span style="color:var(--g400);font-size:12px;padding:4px">先选择学科和考试局</span>';
+  document.getElementById('ciCountHint').style.display = 'none';
+  document.getElementById('ciProgWrap').style.display = 'none';
+  document.getElementById('btnDoCloudImport').disabled = false;
+  document.getElementById('cloudImportMo').classList.add('show');
+}
+
+function ciSelectBoard(btn) {
+  document.querySelectorAll('#ciBoards .cloud-board-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _ciBoard = btn.dataset.board;
+  loadCloudImportYears();
+}
+
+async function loadCloudImportYears() {
+  const subject = document.getElementById('ciSubject').value;
+  if (!subject || !_ciBoard) return;
+
+  const yearsEl = document.getElementById('ciYears');
+  yearsEl.innerHTML = '<span style="color:var(--g400);font-size:12px;padding:4px">⏳ 加载年份...</span>';
+  _ciYearsSelected.clear();
+
+  try {
+    const r = await fetch(`/api/cloud_library/years?subject=${encodeURIComponent(subject)}&board=${encodeURIComponent(_ciBoard)}`);
+    const d = await r.json();
+    const years = d.years || [];
+
+    if (years.length === 0) {
+      yearsEl.innerHTML = '<span style="color:#dc2626;font-size:12px;padding:4px">⚠️ 该学科/考试局暂无题目</span>';
+      return;
+    }
+
+    yearsEl.innerHTML = years.map(y =>
+      `<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;padding:4px 10px;border-radius:16px;border:1px solid var(--g200);font-size:12px;background:#fff;user-select:none">
+        <input type="checkbox" value="${y}" onchange="ciYearToggle(this)" style="width:12px;height:12px;accent-color:#6366f1">
+        ${y}
+      </label>`
+    ).join('');
+
+    // 更新数量提示
+    updateCiCountHint();
+  } catch(e) {
+    yearsEl.innerHTML = `<span style="color:#dc2626;font-size:12px;padding:4px">加载失败: ${e.message}</span>`;
+  }
+}
+
+function ciYearToggle(cb) {
+  if (cb.checked) _ciYearsSelected.add(cb.value);
+  else _ciYearsSelected.delete(cb.value);
+  updateCiCountHint();
+}
+
+function ciSelectAllYears() {
+  document.querySelectorAll('#ciYears input[type=checkbox]').forEach(cb => {
+    cb.checked = true;
+    _ciYearsSelected.add(cb.value);
+  });
+  updateCiCountHint();
+}
+
+function ciClearYears() {
+  document.querySelectorAll('#ciYears input[type=checkbox]').forEach(cb => {
+    cb.checked = false;
+  });
+  _ciYearsSelected.clear();
+  updateCiCountHint();
+}
+
+function updateCiCountHint() {
+  const hint = document.getElementById('ciCountHint');
+  const yList = [..._ciYearsSelected];
+  if (yList.length === 0) {
+    hint.textContent = '将导入全部年份的题目';
+  } else {
+    hint.textContent = `已选 ${yList.length} 个年份：${yList.sort().join('、')}`;
+  }
+  hint.style.display = 'block';
+}
+
+async function doCloudImport() {
+  const subject = document.getElementById('ciSubject').value;
+  if (!subject) { toast('请选择学科', 'err'); return; }
+  if (!_ciBoard) { toast('请选择考试局', 'err'); return; }
+
+  const years = [..._ciYearsSelected];
+  document.getElementById('btnDoCloudImport').disabled = true;
+  document.getElementById('ciProgWrap').style.display = 'block';
+  document.getElementById('ciProgFill').style.width = '20%';
+  document.getElementById('ciProgTxt').textContent = '正在从云端加载题目...';
+
+  try {
+    const r = await fetch('/api/cloud_library/import_to_session', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ subject, board: _ciBoard, years })
+    });
+    const d = await r.json();
+
+    if (!r.ok || d.error) {
+      document.getElementById('ciProgTxt').textContent = '❌ ' + (d.error || '导入失败');
+      toast(d.error || '导入失败', 'err');
+      return;
+    }
+
+    document.getElementById('ciProgFill').style.width = '100%';
+    document.getElementById('ciProgTxt').textContent = `✅ 成功加载 ${d.total_questions} 道题目`;
+
+    // 注册到当前 session（同 upload 响应处理逻辑）
+    const isAppend = allQuestions.length > 0;
+    const baseGIdx = isAppend ? groups.length : 0;
+
+    if (!isAppend) {
+      groups = [];
+      allQuestions = [];
+      selNums = new Set();
+      filteredNums = null;
+    }
+
+    sessionId = d.session_id;
+    const grpData = d.groups[0];
+
+    // 把 img_bytes_b64 → _img_b64 供渲染
+    grpData.questions.forEach((q, i) => {
+      allQuestions.push({
+        ...q,
+        gIdx:       baseGIdx,
+        source:     'cloud',
+        paper_type: grpData.paper_type,
+        maths_unit: null,
+        exam_date:  q.exam_date || '',
+        _img_b64:   q.img_bytes_b64 || '',
+      });
+    });
+    groups.push({
+      ...grpData,
+      questions: grpData.questions.map(q => ({
+        ...q,
+        _img_b64: q.img_bytes_b64 || '',
+      })),
+    });
+
+    _saveSession();
+    renderFileList();
+    renderGrid();
+    renderStats();
+
+    toast(`☁️ 已从云端导入 ${d.total_questions} 道题目（${subject} / ${_ciBoard}）`, 'ok');
+
+    setTimeout(() => closeModal('cloudImportMo'), 1200);
+  } catch(e) {
+    document.getElementById('ciProgTxt').textContent = '❌ 网络错误: ' + e.message;
+    toast('导入失败: ' + e.message, 'err');
+  } finally {
+    document.getElementById('btnDoCloudImport').disabled = false;
+  }
 }
 
 // ── 初始化页面布局 ──
