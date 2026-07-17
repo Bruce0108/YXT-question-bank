@@ -186,8 +186,8 @@
   .qt-ld.st-h{height:190px}
   .qt-ld:not(.st-h){height:152px}
   .spin{animation:spin 1s linear infinite;display:inline-block;font-size:20px}
-  .qc-act{padding:6px 9px 8px;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:auto auto;gap:5px}
-  .qc-act .btn-sm{min-width:0;width:100%;padding:5px 2px;font-size:11.5px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .qc-act{padding:6px 9px 8px;display:flex;gap:5px}
+  .qc-act .btn-sm{flex:1;min-width:0;padding:5px 3px;font-size:11.5px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* 全局答案切换按钮 */
   #btnToggleAllAns{font-size:12px;padding:4px 10px;border-radius:8px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
   #btnToggleAllAns.all-shown{background:#fef9c3;color:#854d0e;border-color:#fef08a}
@@ -1527,11 +1527,6 @@ function renderGrid() {
           <img class="qc-answer-img" src="data:image/jpeg;base64,${q.answer_b64}"
                alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">
         </div>` : '';
-      const ansToggleHtml = hasAnswer ? `
-        <button class="btn btn-sm btn-ans-toggle" id="ansbtn-${uid}"
-                style="flex:1;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0"
-                onclick="toggleAnswer('${uid}',event)">👁 显示答案</button>` : '';
-
       card.innerHTML = `
         <div class="qc-hdr">
           <span class="q-badge${st?' st':''}">${st?'第':'Q'}${q.q_num}${st?'题':''}</span>
@@ -1547,19 +1542,15 @@ function renderGrid() {
              onerror="this.style.display='none';document.getElementById('tld-${uid}').innerHTML='⚠️'">
         ${answerHtml}
         <div class="qc-act">
-          <!-- 第一行 -->
           <button class="btn btn-outline btn-sm" onclick="openPrev(${q.q_num},${q.gIdx},event)">🔍 预览</button>
           ${hasAnswer
             ? `<button class="btn btn-sm btn-ans-toggle" id="ansbtn-${uid}"
                 style="background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0"
                 onclick="toggleAnswer('${uid}',event)">👁 答案</button>`
-            : `<button class="btn btn-sm" style="background:#f5f5f5;color:#bbb;cursor:default" disabled>👁 答案</button>`
+            : ''
           }
           <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},null,event)">✏️ 编辑</button>
-          <!-- 第二行 -->
           <button class="btn btn-primary btn-sm" onclick="dlOne(${q.q_num},${q.gIdx},event)">⬇️ 下载</button>
-          <button class="btn btn-sm" style="background:#f5f0ff;color:#7c3aed;border:1px solid #e9d5ff" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},'difficulty',event)">★ 难度</button>
-          <button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd" onclick="toggleSel('${uid}')">📋 选择</button>
         </div>`;
       card.addEventListener('click', e => { if(e.target.tagName==='BUTTON') return; toggleSel(uid); });
       grid.appendChild(card);

@@ -1926,12 +1926,260 @@ def _extract_unit_from_filename(filename: str) -> str | None:
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Edexcel Maths Mark Scheme — 表格式答案提取
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_edexcel_maths_ms_table(doc):
+    """
+    扫描 Edexcel Maths Mark Scheme PDF，定位包含 Question/Scheme/Marks 表格头的页面。
+
+    Edexcel Maths MS 结构：
+      - 每页或若干页有一个表格，表头行包含 "Question"、"Scheme"、"Marks" 三列
+      - 表头行之后的每一行对应一道题（q_num, y_start, y_end, page_idx）
+      - 同一题的答案可能跨多行甚至多页（直到下一个 q_num 出现）
+
+    返回：
+      {q_num: [(page_idx, y_top, y_bottom), ...]}  ── 每题的答案区切片列表
+    """
+    # 表头关键词（不区分大小写）
+    HDR_WORDS = {'question', 'scheme', 'marks'}
+    # 题号模式：纯数字 "1" "12" 或 "1(a)" "1a" 等（取首数字作 q_num）
+    Q_NUM_PAT = re.compile(r'^(\d{1,2})')
+
+    # 第一步：找所有含 Question/Scheme/Marks 表头的页面及其 y 坐标
+    # 返回 [(page_idx, header_y_bottom)]
+    header_positions = []
+    for pg_i in range(doc.page_count):
+        page = doc[pg_i]
+        ph   = page.rect.height
+        try:
+            blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
+        except Exception:
+            continue
+
+        # 收集本页所有文本 block，按 y0 排序
+        text_lines = []   # (y0, y1, x0, text_lower)
+        for b in blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
+                ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
+                if not ltxt:
+                    continue
+                bbox = line['bbox']
+                text_lines.append((bbox[1], bbox[3], bbox[0], ltxt))
+
+        text_lines.sort(key=lambda x: x[0])
+
+        # 滑动窗口：查找同一"行带"（y差<15pt）中同时含 question+scheme+marks 的行
+        # 采用更宽松策略：在连续 3 行内（y跨度 < 30pt）找到三个关键词
+        n = len(text_lines)
+        for i in range(n):
+            y0_i, y1_i, x0_i, txt_i = text_lines[i]
+            # 收集从 i 开始 y 范围内 30pt 的行
+            window_words = set()
+            window_y1 = y1_i
+            for j in range(i, n):
+                y0_j, y1_j, x0_j, txt_j = text_lines[j]
+                if y0_j > y0_i + 30:
+                    break
+                for hw in HDR_WORDS:
+                    if hw in txt_j:
+                        window_words.add(hw)
+                window_y1 = max(window_y1, y1_j)
+            if HDR_WORDS <= window_words:
+                header_positions.append((pg_i, window_y1))
+                break   # 本页只需找一次
+
+    if not header_positions:
+        return {}
+
+    # 第二步：在每个 header_positions 对应的区域之后，按题号扫描答案行
+    # 构建全局答案边界：{q_num: [(page_idx, y_top, y_bottom), ...]}
+    answers = {}   # {q_num: [(page_idx, y_top, y_bot)]}
+
+    # 为便于处理跨页，先把所有"感兴趣的页"上的文本行收集起来
+    # 从第一个 header 页开始
+    first_hdr_pg = header_positions[0][0]
+
+    # 构建 (page_idx, y0, y1, x0, raw_text) 全局列表（从表头页开始）
+    all_content = []   # (page_idx, y0, y1, x0, text)
+    hdr_set = {pg: hy for pg, hy in header_positions}
+
+    for pg_i in range(first_hdr_pg, doc.page_count):
+        page = doc[pg_i]
+        ph   = page.rect.height
+        try:
+            blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
+        except Exception:
+            continue
+
+        # 本页答案内容的起始 y（header 之后，或页面顶部）
+        content_y_start = hdr_set.get(pg_i, 0)
+
+        for b in blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
+                bbox  = line['bbox']
+                y0, y1, x0 = bbox[1], bbox[3], bbox[0]
+                if y0 < content_y_start - 2:   # 在 header 上方，跳过
+                    continue
+                if y0 > ph - 30:   # 页脚页码区域跳过
+                    continue
+                ltxt = ''.join(s['text'] for s in line['spans']).strip()
+                if not ltxt:
+                    continue
+                all_content.append((pg_i, y0, y1, x0, ltxt))
+
+    # 第三步：在 all_content 中找题号行，划定每题答案区
+    # 题号行特征：x0 较小（左列）且首字符是数字
+    # Edexcel MS 表格：Question 列 x0 通常 < 80pt
+    Q_COL_MAX_X = 90   # Question 列右边界（pt），超过此值不认为是题号列
+
+    q_boundaries = []  # [(q_num, page_idx, y_top)]
+    for idx, (pg_i, y0, y1, x0, ltxt) in enumerate(all_content):
+        if x0 > Q_COL_MAX_X:
+            continue
+        m = Q_NUM_PAT.match(ltxt)
+        if not m:
+            continue
+        q_num = int(m.group(1))
+        if not (1 <= q_num <= 20):
+            continue
+        # 避免重复（同一题号只取第一次出现）
+        existing = [b for b in q_boundaries if b[0] == q_num]
+        if existing:
+            continue
+        # 额外过滤：确认同一行或相邻列有 Scheme 内容（x > Q_COL_MAX_X）
+        # 即本行或 y 相近行中有 x > Q_COL_MAX_X 的内容
+        nearby = [c for c in all_content
+                  if c[0] == pg_i and abs(c[1] - y0) < 15 and c[3] > Q_COL_MAX_X]
+        if not nearby:
+            continue
+        q_boundaries.append((q_num, pg_i, y0))
+
+    if not q_boundaries:
+        return {}
+
+    q_boundaries.sort(key=lambda x: x[0])
+
+    # 第四步：根据题号边界，为每题确定答案区切片
+    for i, (q_num, pg_start, y_top) in enumerate(q_boundaries):
+        # 本题结束：下一题开始处，或文档末尾
+        if i + 1 < len(q_boundaries):
+            next_q_num, next_pg, next_y = q_boundaries[i + 1]
+        else:
+            next_pg  = doc.page_count - 1
+            next_y   = doc[next_pg].rect.height - 30
+
+        slices = []
+        for pg_i in range(pg_start, next_pg + 1):
+            page = doc[pg_i]
+            ph   = page.rect.height
+            pw   = page.rect.width
+
+            top    = y_top if pg_i == pg_start else (hdr_set.get(pg_i, 36))
+            bottom = next_y if pg_i == next_pg else (ph - 30)
+
+            # 横向：从左边距到右边距（MS 表格通常铺满页面）
+            left  = 28
+            right = pw - 28
+
+            if bottom > top + 8:
+                slices.append((pg_i, top, bottom, left, right))
+
+        if slices:
+            answers[q_num] = slices
+
+    return answers
+
+
+def _render_ms_answers_from_table(ms_doc, dpi=150):
+    """
+    用 _detect_edexcel_maths_ms_table() 定位答案区，渲染为 JPEG base64。
+    返回 {q_num: {'b64': str, 'w': int, 'h': int}}。
+    若表格检测失败（返回空），调用方可退回旧逻辑。
+    """
+    import base64 as _b64
+    from PIL import Image as _PILImg
+
+    table_slices = _detect_edexcel_maths_ms_table(ms_doc)
+    if not table_slices:
+        return {}
+
+    result = {}
+    scale  = dpi / 72.0
+    mat    = fitz.Matrix(scale, scale)
+
+    for q_num, slices in table_slices.items():
+        parts = []
+        total_w, total_h = 0, 0
+        try:
+            for (pg_i, y_top, y_bot, x_left, x_right) in slices:
+                page = ms_doc[pg_i]
+                clip = fitz.Rect(x_left, y_top, x_right, y_bot)
+                pix  = page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csRGB)
+                w, h = pix.width, pix.height
+                data = _pixmap_to_jpeg_bytes(pix)
+                del pix
+                parts.append((data, w, h))
+                total_w = max(total_w, w)
+                total_h += h
+
+            if not parts:
+                continue
+
+            if len(parts) == 1:
+                jpeg_out, cw, ch = parts[0]
+            else:
+                canvas = _PILImg.new('RGB', (total_w, total_h), (255, 255, 255))
+                y_off  = 0
+                for (jpeg_part, pw, ph) in parts:
+                    img_part = _PILImg.open(io.BytesIO(jpeg_part))
+                    if pw != total_w:
+                        img_part = img_part.resize(
+                            (total_w, int(ph * total_w / pw)), _PILImg.LANCZOS)
+                        ph = img_part.size[1]
+                    canvas.paste(img_part, (0, y_off))
+                    y_off += ph
+                buf = io.BytesIO()
+                canvas.save(buf, format='JPEG', quality=88)
+                jpeg_out = buf.getvalue()
+                cw, ch   = total_w, y_off
+
+            result[q_num] = {
+                'b64': _b64.b64encode(jpeg_out).decode('utf-8'),
+                'w':   cw,
+                'h':   ch,
+            }
+        except Exception:
+            pass
+
+    return result
+
+
 def _render_ms_questions_b64(ms_doc, ms_questions, paper_type, dpi=150):
     """
     渲染 Mark Scheme 中所有题目为 JPEG base64。
     返回 {q_num: {'b64': str, 'w': int, 'h': int}} 字典。
+
+    策略（优先级）：
+      1. 对 edexcel_maths：先尝试表格式检测（Question/Scheme/Marks 表头）
+         → _render_ms_answers_from_table()
+      2. 若表格检测失败，退回到旧逻辑：_collect_question_slices + 垂直拼接
     """
     import base64 as _b64
+
+    # ── 优先：Edexcel Maths 表格式 MS ──
+    if paper_type == 'edexcel_maths':
+        table_result = _render_ms_answers_from_table(ms_doc, dpi=dpi)
+        if table_result:
+            return table_result
+        # 表格检测失败时继续走下面的旧逻辑
+
+    # ── 旧逻辑：逐题切片渲染 ──
     result = {}
     for q_idx, q in enumerate(ms_questions):
         q_num = q.get('q_num')
@@ -1980,6 +2228,7 @@ def _render_ms_questions_b64(ms_doc, ms_questions, paper_type, dpi=150):
         except Exception:
             pass
     return result
+
 
 
 @app.route('/api/upload_multi', methods=['POST'])
