@@ -357,23 +357,22 @@ def detect_edexcel_maths_questions(doc):
     """
     检测 Edexcel IAL Pure Mathematics (WMA13/P3 类) 试卷的题号边界。
 
-    题号块格式（三种）：
-      1. 'N.\t题干文字'  — tab 分隔，如 '1.\tA curve has equation'
-      2. 'N.  题干文字'  — 双空格，如 '7.  y'（含图的题）
-      3. 'N.'           — 独立块（前后有公式图块）
+    WMA13 实际PDF结构（通过span-level分析确认）：
+      - 题号和题干被合并在同一个 block 里，例如：
+          block txt = "blank\\n1.\\t The function f is defined by"
+          block x0=54.5, y0=48.7（因为第一行是"blank"）
+      - 因此必须用 get_text('dict') 逐 span 扫描，而不能用 get_text('blocks')
+      - 题号 span 特征：
+          * 文字是 "N." 或 "N"（Q7无句点，为特殊情况）
+          * x0 ∈ [48, 72]，y0 ∈ [40, 95]（左边距，页面顶部）
+          * 紧接span是 "\\t 题干文字" 或下一行是题干
+      - 续页：行文字匹配 "Question N continued"，跳过本页
 
-    位置特征：
-      - x0 ≈ 42.5，范围 35~65
-      - y0 通常 55~160（顶部区域）
-      - 续页：'Question N continued' 不作为题号
-
-    每题只取题目页（含题干+marks），不包含答题续页。
     返回 questions 列表，每项含 q_num / page_idx / y_start / x_start。
     """
-    # 匹配三种题号格式
-    Q_PAT_ALONE  = re.compile(r'^(\d{1,2})\.\s*$')          # '2.'
-    Q_PAT_TAB    = re.compile(r'^(\d{1,2})\.\t')             # '1.\tFind'
-    Q_PAT_SPACE  = re.compile(r'^(\d{1,2})\.\s{2,}')        # '7.  y'（2个以上空格）
+    # span级题号匹配：'N.' 或 'N'（纯数字）
+    Q_SPAN_DOT   = re.compile(r'^(\d{1,2})\.$')    # '1.' '10.'
+    Q_SPAN_PLAIN = re.compile(r'^(\d{1,2})$')       # '7'（无句点）
     CONTINUED_PAT = re.compile(r'^Question\s+\d+\s+continued', re.IGNORECASE)
 
     questions = []
@@ -381,39 +380,60 @@ def detect_edexcel_maths_questions(doc):
 
     for pg_i in range(1, doc.page_count):   # 跳过封面（第0页）
         page = doc[pg_i]
-        blocks = page.get_text('blocks')
+        # 使用 dict 模式，逐 span 扫描，精确定位题号
+        try:
+            blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
+        except Exception:
+            blocks = []
+
+        found_q = False
         for b in blocks:
-            x0, y0, x1, y1, txt, bno, btype = b
-            if btype != 0:
+            if b.get('type') != 0:
                 continue
-            ts = txt.strip()
-            if not ts:
-                continue
-            # 排除续页行
-            if CONTINUED_PAT.match(ts):
-                break   # 续页标记是第一个内容块，无需继续扫描本页
-            # 匹配题号
-            m = (Q_PAT_ALONE.match(ts) or
-                 Q_PAT_TAB.match(ts) or
-                 Q_PAT_SPACE.match(ts))
-            if not m:
-                continue
-            # 位置过滤：x 在题号列，y 在页面顶部区域
-            if not (35 <= x0 <= 65 and 45 <= y0 <= 180):
-                continue
-            q_num = int(m.group(1))
-            if not (1 <= q_num <= 30):
-                continue
-            if q_num in seen_nums:
-                continue
-            seen_nums.add(q_num)
-            questions.append({
-                'q_num':    q_num,
-                'page_idx': pg_i,
-                'y_start':  y0,
-                'x_start':  x0,
-            })
-            break  # 每页只取第一个题号块
+            for line in b.get('lines', []):
+                # 先检查整行文字是否为续页标记
+                line_txt = ''.join(s['text'] for s in line['spans']).strip()
+                if CONTINUED_PAT.match(line_txt):
+                    found_q = True  # 标记为续页，跳过本页
+                    break
+
+                # 逐span检查题号
+                for span in line['spans']:
+                    txt = span['text'].strip()
+                    if not txt:
+                        continue
+                    bbox = span['bbox']  # (x0, y0, x1, y1)
+                    x0, y0 = bbox[0], bbox[1]
+
+                    # 位置过滤：x∈[48,72]（左边距题号列），y∈[40,95]（页面顶部）
+                    if not (48 <= x0 <= 72 and 40 <= y0 <= 95):
+                        continue
+
+                    # 匹配题号：带句点 "N." 或不带句点 "N"
+                    m = Q_SPAN_DOT.match(txt) or Q_SPAN_PLAIN.match(txt)
+                    if not m:
+                        continue
+
+                    q_num = int(m.group(1))
+                    if not (1 <= q_num <= 30):
+                        continue
+                    if q_num in seen_nums:
+                        continue
+
+                    seen_nums.add(q_num)
+                    questions.append({
+                        'q_num':    q_num,
+                        'page_idx': pg_i,
+                        'y_start':  y0,
+                        'x_start':  x0,
+                    })
+                    found_q = True
+                    break  # 本行找到题号，不再继续本行其他span
+
+                if found_q:
+                    break  # 本页已找到题号（或续页标记），跳出block循环
+            if found_q:
+                break  # 本页处理完毕
 
     questions.sort(key=lambda x: x['q_num'])
     return questions
@@ -2431,6 +2451,12 @@ def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, o
                                  HEADER_H, GAP, FS, progress_cb=lambda p: upd(p))
 
         src_doc.close()
+        # 安全检查：确保至少有1页
+        if out_doc.page_count == 0:
+            ep = out_doc.new_page(width=PAGE_W, height=PAGE_H)
+            ep.insert_text(fitz.Point(36, 100),
+                           '导出失败：没有可导出的题目页面。',
+                           fontsize=14, color=(0.8, 0, 0))
         # 直接保存到磁盘，避免 tobytes() 将整个 PDF 载入内存
         out_doc.save(out_path, garbage=4, deflate=True)
         out_doc.close()
@@ -2640,6 +2666,16 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
 
                 src_doc.close()
                 done_total += len(q_nums)
+
+        # 安全检查：确保 out_doc 至少有1页，避免 "cannot save with zero pages" 错误
+        if out_doc.page_count == 0:
+            # 插入一个错误说明页
+            err_page = out_doc.new_page(width=PAGE_W, height=PAGE_H)
+            err_page.insert_text(
+                fitz.Point(36, 100),
+                '导出失败：所选题目均无可用图片数据。\n请确认题目已正确从云端或题册中导入。',
+                fontsize=14, color=(0.8, 0, 0)
+            )
 
         out_doc.save(out_path, garbage=4, deflate=True)
         out_doc.close()
