@@ -1952,8 +1952,8 @@ def _detect_edexcel_maths_ms_table(doc):
     关键特征：
       - 题号 "1." 或 "1. (a)" 在 Question Number 列（最左列），x0 较小
       - 子题 "(b)", "(c) (i)" 等也在 Question Number 列，但不以数字开头
-      - 同一题的边界：从 "N." 或 "N. (a)" 行起 → 到下一个 "N+1." 行前
-      - Notes 等内容在 Scheme 列，包含在本题范围内
+      - 切割范围：从本题第一行(y_top) → 到本题总分行 "(N marks)"/"(N)" 的 y1
+      - Notes 文字在表格外部，不在切割范围内
 
     返回：
       {q_num: [(page_idx, y_top, y_bottom, x_left, x_right), ...]}
@@ -2107,29 +2107,105 @@ def _detect_edexcel_maths_ms_table(doc):
     # 按题号排序（而非出现顺序，以防 PDF 乱序）
     q_boundaries.sort(key=lambda x: x[0])
 
-    # ── 第四步：根据题号边界生成每题的渲染切片 ──
+    # ── 第四步：为每题找表格真实底部 ──
+    # 规则：只截表格主体（Question/Scheme/Marks 三列），不包含 Notes。
+    # 表格底部 = 该题"总分行"的 y1，即 Marks 列出现 "(N marks)" 或 "(N)" 的最后一行。
+    # 总分行特征：
+    #   - 文本匹配 r'^\(\d+\s*(marks?)?\)$'  → "(3)", "(9 marks)", "(7 marks)" 等
+    #   - 位置在 Marks 列（x0 较大，靠右）
+    #   - 在本题 y_top 之后、下一题 y_top 之前
+
+    TOTAL_PAT = re.compile(r'^\(\s*\d+\s*(?:marks?)?\s*\)$', re.IGNORECASE)
+
+    # 确定 Marks 列的左边界（即 Scheme 列右边界）
+    # 通过表头行找含 "marks" 文字的行的 x0
+    marks_col_x = None
+    for pg_i, hy in header_positions:
+        page = doc[pg_i]
+        try:
+            blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
+        except Exception:
+            continue
+        for b in blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
+                ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
+                # "marks" 列：文本仅含 marks，且 x0 在页面右侧 1/3
+                page_pw = doc[pg_i].rect.width
+                bbox = line['bbox']
+                if ltxt == 'marks' and bbox[0] > page_pw * 0.6:
+                    marks_col_x = bbox[0]
+                    break
+            if marks_col_x is not None:
+                break
+        if marks_col_x is not None:
+            break
+
+    # 如果没找到，用页面宽度的 70% 作为估算
+    if marks_col_x is None:
+        pw_default = doc[0].rect.width
+        marks_col_x = pw_default * 0.70
+
+    def _find_table_bottom_for_q(q_num, pg_start, y_top, next_pg_bound, next_y_bound):
+        """
+        在 all_content 中，从 (pg_start, y_top) 开始到 (next_pg_bound, next_y_bound)，
+        找 Marks 列中最后一个总分行 "(N marks)" 或 "(N)" 的 y1。
+        返回 (page_idx, y_bottom)，如果找不到则返回 (next_pg_bound, next_y_bound)。
+        """
+        best_pg  = None
+        best_y1  = None
+
+        for pg_i, y0, y1, x0, ltxt in all_content:
+            # 范围限制：在本题区间内
+            if pg_i < pg_start or pg_i > next_pg_bound:
+                continue
+            if pg_i == pg_start and y0 < y_top:
+                continue
+            if pg_i == next_pg_bound and y0 >= next_y_bound:
+                continue
+
+            # 必须在 Marks 列（x0 >= marks_col_x - 20）
+            if x0 < marks_col_x - 20:
+                continue
+
+            # 文本匹配总分行
+            if TOTAL_PAT.match(ltxt.strip()):
+                best_pg = pg_i
+                best_y1 = y1  # 持续更新，取最后一个（最后一个总分行）
+
+        if best_pg is not None:
+            return (best_pg, best_y1 + 4)   # +4pt 留少量底部间距
+
+        # 找不到总分行：回退到下一题题号行（此情况较少，保底）
+        return (next_pg_bound, next_y_bound)
+
+    # ── 第五步：根据题号边界 + 表格底部生成渲染切片 ──
     answers = {}
 
     for i, (q_num, pg_start, y_top) in enumerate(q_boundaries):
-        # 本题结束位置：下一题题号行的 y_top，或文档末尾
+        # 确定"搜索上界"：下一题的 y_top（用于限定查找范围）
         if i + 1 < len(q_boundaries):
-            next_q_num, next_pg, next_y = q_boundaries[i + 1]
+            nb_pg, nb_y = q_boundaries[i + 1][1], q_boundaries[i + 1][2]
         else:
-            next_pg = doc.page_count - 1
-            next_y  = doc[next_pg].rect.height - 28
+            nb_pg = doc.page_count - 1
+            nb_y  = doc[nb_pg].rect.height - 28
+
+        # 找本题表格真实底部
+        end_pg, end_y = _find_table_bottom_for_q(q_num, pg_start, y_top, nb_pg, nb_y)
 
         slices = []
-        for pg_i in range(pg_start, next_pg + 1):
+        for pg_i in range(pg_start, end_pg + 1):
             page = doc[pg_i]
             ph   = page.rect.height
             pw   = page.rect.width
 
-            # 本页起始 y：首页用 y_top，续页从表头之后开始（避免把新页表头也截进来）
+            # 起始 y：首页用 y_top，续页从表头之后开始
             top = y_top if pg_i == pg_start else hdr_set.get(pg_i, 36)
-            # 本页结束 y：末页用 next_y，中间页用页底（去掉页脚）
-            bottom = next_y if pg_i == next_pg else (ph - 28)
+            # 结束 y：末页用 end_y，中间页用页底
+            bottom = end_y if pg_i == end_pg else (ph - 28)
 
-            # 横向：从页面左边距到右边距（表格铺满页面）
+            # 横向：页面全宽（表格铺满）
             left  = 26
             right = pw - 26
 
