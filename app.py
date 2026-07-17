@@ -263,10 +263,19 @@ def detect_edexcel_questions(doc):
 # ============================================================
 # Edexcel Maths 试卷代码 → unit 映射
 _EDEXCEL_MATHS_CODE_MAP = {
+    # Pure Mathematics (IAL)
     'WMA11': 'P1', 'WMA12': 'P2', 'WMA13': 'P3', 'WMA14': 'P4',
+    # Further Pure Mathematics (IAL)
     'WFM01': 'FP1', 'WFM02': 'FP2', 'WFM03': 'FP3',
+    # Statistics (IAL) — WST prefix
+    'WST01': 'S1',  'WST02': 'S2',
+    # Legacy WMS prefix (some older papers)
     'WMS01': 'S1',  'WMS02': 'S2',
+    # Mechanics (IAL)
     'WME01': 'M1',  'WME02': 'M2',
+    # Decision Mathematics (IAL)
+    'WDM11': 'D1',
+    # Legacy WDM prefix
     'WDM01': 'D1',
 }
 
@@ -285,7 +294,7 @@ def detect_edexcel_maths_unit(doc) -> str:
         text = doc[pg_i].get_text()
 
         # 优先：试卷代码（最准确）
-        m = re.search(r'(WMA\d{2}|WFM\d{2}|WMS\d{2}|WME\d{2}|WDM\d{2})', text)
+        m = re.search(r'(WMA\d{2}|WFM\d{2}|WMS\d{2}|WME\d{2}|WDM\d{2}|WST\d{2})', text)
         if m:
             code = m.group(1)
             unit = _EDEXCEL_MATHS_CODE_MAP.get(code)
@@ -309,6 +318,10 @@ def detect_edexcel_maths_unit(doc) -> str:
         if m5:
             return f'M{m5.group(1)}'
 
+        m6b = re.search(r'Decision Mathematics\s+D([1-9])', text)
+        if m6b:
+            return f'D{m6b.group(1)}'
+
         # 兜底：孤立 P1/P2/P3/P4 标识
         m6 = re.search(r'\bPure Mathematics\b.*?\bP([1-4])\b', text, re.DOTALL)
         if m6:
@@ -325,12 +338,13 @@ def detect_paper_source(doc) -> str:
     """
     for pg_i in range(min(3, doc.page_count)):
         text = doc[pg_i].get_text()
-        # 优先检测 Edexcel Maths：WMA/WFM/WPM 系列纯数试卷
-        if re.search(r'WMA\d{2}/\d{2}|WFM\d{2}/\d{2}|WPM\d{2}/\d{2}', text):
+        # 优先检测 Edexcel Maths：WMA/WFM/WST/WME/WDM 系列试卷
+        if re.search(r'WMA\d{2}/\d{2}|WFM\d{2}/\d{2}|WPM\d{2}/\d{2}|WST\d{2}/\d{2}|WME\d{2}/\d{2}|WDM\d{2}/\d{2}', text):
             return 'edexcel_maths'
-        if ('Pure Mathematics' in text or 'Further Mathematics' in text) and \
+        if ('Pure Mathematics' in text or 'Further Mathematics' in text or
+                'Statistics' in text or 'Mechanics' in text or 'Decision Mathematics' in text) and \
            ('Pearson' in text or 'Edexcel' in text):
-            if re.search(r'P[1-4]|Unit [1-4]|Pure Math', text):
+            if re.search(r'P[1-4]|FP[12]|S[12]|M[12]|D1|Unit [1-4]|Pure Math', text):
                 return 'edexcel_maths'
 
     keywords_edexcel = ['Pearson', 'Edexcel', 'GCSE', 'IAL', 'International Advanced',
@@ -1875,11 +1889,96 @@ def get_edexcel_maths_syllabus():
     return jsonify(data)
 
 
+def _is_markscheme_filename(filename: str) -> bool:
+    """判断文件名是否为 Mark Scheme（支持多种命名格式）"""
+    fn = filename.lower()
+    return ('markscheme' in fn or 'mark_scheme' in fn or
+            'mark scheme' in fn or '_ms_' in fn or
+            fn.endswith('_ms.pdf') or '-ms-' in fn or '-ms.' in fn)
+
+
+def _extract_unit_from_filename(filename: str) -> str | None:
+    """
+    从文件名提取单元代码，例如：
+      Markscheme-Unit1(WMA11)-June2023.pdf  → 'WMA11'
+      Questionpaper-Unit3(WMA13)-Oct2022.pdf → 'WMA13'
+      WST01_QP_June2023.pdf → 'WST01'
+    返回映射后的 unit 字符串（P1/P2/S1 等）或 None。
+    """
+    m = re.search(r'\((W[A-Z]{2}\d{2})\)', filename, re.IGNORECASE)
+    if m:
+        code = m.group(1).upper()
+        return _EDEXCEL_MATHS_CODE_MAP.get(code)
+    m2 = re.search(r'\b(W[A-Z]{2}\d{2})\b', filename, re.IGNORECASE)
+    if m2:
+        code = m2.group(1).upper()
+        return _EDEXCEL_MATHS_CODE_MAP.get(code)
+    return None
+
+
+def _render_ms_questions_b64(ms_doc, ms_questions, paper_type, dpi=150):
+    """
+    渲染 Mark Scheme 中所有题目为 JPEG base64。
+    返回 {q_num: {'b64': str, 'w': int, 'h': int}} 字典。
+    """
+    import base64 as _b64
+    result = {}
+    for q_idx, q in enumerate(ms_questions):
+        q_num = q.get('q_num')
+        if q_num is None:
+            continue
+        try:
+            slices = _collect_question_slices(ms_doc, ms_questions, q_idx, paper_type)
+            if not slices:
+                continue
+            # 将所有切片垂直拼接为一张图
+            from PIL import Image as _PILImg
+            parts = []
+            total_w, total_h = 0, 0
+            for src_page, clip in slices:
+                jpeg, w, h = _render_slice_to_jpeg(src_page, clip, dpi)
+                parts.append((jpeg, w, h))
+                total_w = max(total_w, w)
+                total_h += h
+            if not parts:
+                continue
+            if len(parts) == 1:
+                jpeg_combined, cw, ch = parts[0]
+            else:
+                # 垂直拼接多片
+                canvas = _PILImg.new('RGB', (total_w, total_h), (255, 255, 255))
+                y_off = 0
+                for (jpeg_part, pw, ph) in parts:
+                    img_part = _PILImg.open(io.BytesIO(jpeg_part))
+                    # 若宽度不等则缩放对齐
+                    if pw != total_w:
+                        img_part = img_part.resize(
+                            (total_w, int(ph * total_w / pw)), _PILImg.LANCZOS)
+                        ph = img_part.size[1]
+                    canvas.paste(img_part, (0, y_off))
+                    y_off += ph
+                buf = io.BytesIO()
+                canvas.save(buf, format='JPEG', quality=85)
+                jpeg_combined = buf.getvalue()
+                cw, ch = total_w, y_off
+
+            result[q_num] = {
+                'b64': _b64.b64encode(jpeg_combined).decode('utf-8'),
+                'w': cw,
+                'h': ch
+            }
+        except Exception:
+            pass
+    return result
+
+
 @app.route('/api/upload_multi', methods=['POST'])
 def upload_multi():
     """
     多文件上传接口。
-    支持同时上传多个PDF，自动逐一检测题型和考试局，按文件分组返回。
+    支持同时上传多个PDF（QP + Mark Scheme混合），自动识别文件类型并关联。
+    - 文件名含 'Markscheme'/'mark_scheme' 的识别为 MS，与同 unit QP 匹配
+    - MS 匹配成功后，为每道 QP 题目添加 answer_b64/answer_w/answer_h
     前端传 files[] 数组（multipart），可附带 paper_type 覆盖。
     返回: {session_id, groups: [{source, paper_type, filename, total_questions, questions}]}
     """
@@ -1894,39 +1993,52 @@ def upload_multi():
 
     paper_type_hint = request.form.get('paper_type', 'auto')
     session_id = str(uuid.uuid4())
-    groups = []
+
+    # ── 第一遍：保存所有文件，分类为 QP 和 MS ──
+    qp_groups   = []   # 正常题目卷
+    ms_registry = []   # Mark Scheme 信息列表
 
     for file in files:
         if not file.filename or not allowed_file(file.filename):
             continue
         safe = secure_filename(file.filename)
-        # 先保存到本地临时目录（fitz 需要本地文件）
-        tmp_path  = storage.local_tmp_path(f'{session_id}_{safe}')
+        tmp_path = storage.local_tmp_path(f'{session_id}_{safe}')
         file.save(tmp_path)
-        # 同时上传到 R2（R2 模式）或本地 uploads/multi/（本地模式）
-        r2_key    = f'multi/{session_id}_{safe}'
+        r2_key = f'multi/{session_id}_{safe}'
         storage.upload_from_local(tmp_path, r2_key)
-        save_path = tmp_path  # fitz 始终用本地临时文件
+
+        is_ms = _is_markscheme_filename(file.filename)
 
         try:
-            doc = fitz.open(save_path)
+            doc = fitz.open(tmp_path)
             if paper_type_hint == 'auto':
                 pt = detect_paper_type(doc)
             else:
                 pt = paper_type_hint
 
-            source = detect_paper_source(doc)
-            questions = _detect_questions(doc, pt)
-
-            # ── 检测具体 unit（Edexcel Maths 专用）──
+            source     = detect_paper_source(doc)
             maths_unit = None
             if source == 'edexcel_maths':
-                maths_unit = detect_edexcel_maths_unit(doc)
+                # 先从文件名取 unit（更可靠），fallback 到内容检测
+                maths_unit = (_extract_unit_from_filename(file.filename) or
+                              detect_edexcel_maths_unit(doc))
 
-            # ── 从文件名提取年份（用于难度评级）──
-            paper_year = _extract_year_from_filename(file.filename)
+            if is_ms:
+                # Mark Scheme：检测题目边界，渲染答案图片
+                ms_questions = _detect_questions(doc, pt)
+                ms_answers   = _render_ms_questions_b64(doc, ms_questions, pt, dpi=150)
+                ms_registry.append({
+                    'filename':   file.filename,
+                    'unit':       maths_unit,
+                    'source':     source,
+                    'answers':    ms_answers,  # {q_num: {b64, w, h}}
+                })
+                doc.close()
+                continue  # MS 不加入 qp_groups
 
-            # ── 从PDF内容或文件名提取考试日期标签 ──
+            # ── 正常题目卷处理 ──
+            questions = _detect_questions(doc, pt)
+            paper_year      = _extract_year_from_filename(file.filename)
             exam_date_label = _extract_exam_date_label(doc, file.filename)
 
             # ── 知识点标注 + 难度评级 ──
@@ -1937,62 +2049,97 @@ def upload_multi():
                         q['topics'] = tag_question_topics(txt, 'cambridge')
                     except Exception:
                         q['topics'] = []
-                    q['difficulty'] = None  # Cambridge 暂无难度数据
+                    q['difficulty'] = None
             elif source == 'edexcel_maths':
-                # 只用该 unit 的规则（若 unit 已知）
                 for q_idx, q in enumerate(questions):
                     try:
                         txt = _extract_question_text(doc, questions, q_idx, pt)
-                        # 从题目文字中提取分值分布，用于权重加成
                         marks_hint = _extract_marks_hint(txt, unit_filter=maths_unit)
                         q['topics'] = tag_question_topics(txt, 'edexcel_maths',
                                                           unit_filter=maths_unit,
                                                           marks_hint=marks_hint)
                     except Exception:
                         q['topics'] = []
-                    # 难度评级（1–5，仅 P3 有数据）
                     q_num = q.get('q_num') or (q_idx + 1)
                     q['difficulty'] = rate_question_difficulty(
-                        q_num=q_num,
-                        year=paper_year,
-                        source=source,
-                        maths_unit=maths_unit
+                        q_num=q_num, year=paper_year,
+                        source=source, maths_unit=maths_unit
                     )
             else:
                 for q in questions:
                     q['topics'] = []
                     q['difficulty'] = None
 
-            # ── 把考试日期写入每道题（供导出头栏使用）──
             for q in questions:
                 q['exam_date'] = exam_date_label
 
             doc.close()
 
-            groups.append({
-                'filename':       file.filename,
-                'path':           save_path,    # 本地临时路径（fitz 使用）
-                'r2_key':         r2_key,        # 存储 key（R2 模式用于持久化）
-                'source':         source,
-                'paper_type':     pt,
-                'maths_unit':     maths_unit,   # 'P1'|'P2'|'P3'|'P4'|None
-                'exam_date':      exam_date_label,  # e.g. "October 2023" or ""
-                'questions':      questions,
+            qp_groups.append({
+                'filename':        file.filename,
+                'path':            tmp_path,
+                'r2_key':          r2_key,
+                'source':          source,
+                'paper_type':      pt,
+                'maths_unit':      maths_unit,
+                'exam_date':       exam_date_label,
+                'questions':       questions,
                 'total_questions': len(questions),
-                'total_pages':    fitz.open(save_path).page_count
+                'total_pages':     fitz.open(tmp_path).page_count,
+                'has_ms':          False,   # 更新后会设为 True
             })
+
         except Exception as e:
-            groups.append({
-                'filename': file.filename,
-                'path':     save_path,
-                'r2_key':   r2_key,
-                'source':   'unknown',
-                'paper_type': 'unknown',
-                'maths_unit': None,
-                'questions': [],
+            qp_groups.append({
+                'filename':        file.filename,
+                'path':            tmp_path,
+                'r2_key':          r2_key,
+                'source':          'unknown',
+                'paper_type':      'unknown',
+                'maths_unit':      None,
+                'questions':       [],
                 'total_questions': 0,
-                'error': str(e)
+                'has_ms':          False,
+                'error':           str(e)
             })
+
+    # ── 第二遍：将 MS 答案注入对应 QP 题目 ──
+    for ms_info in ms_registry:
+        ms_unit    = ms_info['unit']
+        ms_answers = ms_info['answers']
+        ms_source  = ms_info['source']
+        matched = False
+        for grp in qp_groups:
+            # 匹配条件：① 同一单元代码 或 ② 均为同一来源且只有一份 QP
+            if (ms_unit and grp.get('maths_unit') == ms_unit) or \
+               (not ms_unit and grp['source'] == ms_source and len(qp_groups) == 1):
+                for q in grp['questions']:
+                    q_num = q.get('q_num')
+                    if q_num in ms_answers:
+                        ans = ms_answers[q_num]
+                        q['answer_b64'] = ans['b64']
+                        q['answer_w']   = ans['w']
+                        q['answer_h']   = ans['h']
+                grp['has_ms']   = True
+                grp['ms_file']  = ms_info['filename']
+                matched = True
+                break
+        if not matched:
+            # 没找到精确匹配：尝试按题号直接注入给第一个 QP 组
+            for grp in qp_groups:
+                if grp['source'] in (ms_source, 'edexcel_maths', 'edexcel'):
+                    for q in grp['questions']:
+                        q_num = q.get('q_num')
+                        if q_num in ms_answers:
+                            ans = ms_answers[q_num]
+                            q['answer_b64'] = ans['b64']
+                            q['answer_w']   = ans['w']
+                            q['answer_h']   = ans['h']
+                    grp['has_ms']  = True
+                    grp['ms_file'] = ms_info['filename']
+                    break
+
+    groups = qp_groups
 
     if not groups:
         return jsonify({'error': '没有有效的PDF文件'}), 400
@@ -2019,8 +2166,10 @@ def upload_multi():
             'filename':        g['filename'],
             'source':          g['source'],
             'paper_type':      g['paper_type'],
-            'maths_unit':      g.get('maths_unit'),   # 'P1'|'P2'|'P3'|'P4'|None
-            'exam_date':       g.get('exam_date', ''),  # e.g. "October 2023"
+            'maths_unit':      g.get('maths_unit'),
+            'exam_date':       g.get('exam_date', ''),
+            'has_ms':          g.get('has_ms', False),
+            'ms_file':         g.get('ms_file', ''),
             'questions':       g['questions'],
             'total_questions': g['total_questions'],
             'total_pages':     g.get('total_pages', 0),
@@ -2412,7 +2561,7 @@ def download_all():
 
 
 def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, out_path,
-                       preloaded_questions=None, cover_title=''):
+                       preloaded_questions=None, cover_title='', include_answer=True):
     """
     后台线程：生成 PDF，进度写文件持久化（gunicorn 多线程安全）。
     preloaded_questions: 若已解析好，直接使用（多文件场景/workbook 场景）。
@@ -2451,11 +2600,13 @@ def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, o
         if layout == 'two_per_page':
             _export_two_per_page(out_doc, src_doc, questions, q_nums, dpi,
                                  paper_type_val, PAGE_W, PAGE_H, MARGIN,
-                                 HEADER_H, GAP, FS, progress_cb=lambda p: upd(p))
+                                 HEADER_H, GAP, FS, progress_cb=lambda p: upd(p),
+                                 include_answer=include_answer)
         else:
             _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                                  paper_type_val, PAGE_W, PAGE_H, MARGIN,
-                                 HEADER_H, GAP, FS, progress_cb=lambda p: upd(p))
+                                 HEADER_H, GAP, FS, progress_cb=lambda p: upd(p),
+                                 include_answer=include_answer)
 
         if src_doc:
             src_doc.close()
@@ -2694,7 +2845,8 @@ def export_pdf():
     layout    = data.get('layout', 'one_per_page')
     sess_id   = data.get('session_id')
     merged    = data.get('merged', False)
-    cover_title = data.get('cover_title', '').strip()   # 封面标题（可选）
+    cover_title    = data.get('cover_title', '').strip()
+    include_answer = bool(data.get('include_answer', True))  # 功能2：是否含答案
 
     safe_name = re.sub(r'[\\/*?:"<>|]', '_', filename)
     if not safe_name.endswith('.pdf'):
@@ -2794,7 +2946,8 @@ def export_pdf():
     threading.Thread(
         target=_build_pdf_worker,
         args=(task_id, save_path, pt_val, q_nums, dpi, layout, out_path),
-        kwargs={'preloaded_questions': preloaded, 'cover_title': cover_title},
+        kwargs={'preloaded_questions': preloaded, 'cover_title': cover_title,
+                'include_answer': include_answer},
         daemon=True
     ).start()
 
@@ -3632,7 +3785,9 @@ def _draw_difficulty_stars(page, x_start, y_center, n_filled, n_total=5,
 
 def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
                          area_rect, label, header_h, gap, font_sz,
-                         show_header=False, q_meta=None, draw_logo=True):
+                         show_header=False, q_meta=None, draw_logo=True,
+                         answer_jpeg=None, answer_w=None, answer_h=None,
+                         include_answer=True):
     """
     把一段 JPEG 图像放入输出 PDF 页的 area_rect 区域。
     白色背景，干净排版：
@@ -3640,6 +3795,8 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
       - 无蓝色背景色块，仅用细线和文字颜色区分
       - 图片紧跟信息行下方，左对齐，宽度铺满
     q_meta: dict {difficulty, topics, exam_date} 或 None
+    answer_jpeg: Mark Scheme 答案图片 bytes，若提供且 include_answer=True 则追加在题目下方
+    include_answer: 控制是否渲染答案部分（功能2：隐藏/显示答案）
     """
     x0, y0, x1, y1 = area_rect.x0, area_rect.y0, area_rect.x1, area_rect.y1
 
@@ -3810,6 +3967,39 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
     stream = io.BytesIO(jpeg_bytes)
     out_page.insert_image(img_rect, stream=stream)
 
+    # ── 答案图片（Mark Scheme），追加在题目下方 ──
+    if answer_jpeg and include_answer and answer_w and answer_h:
+        ans_y0 = img_y0 + draw_h   # 紧接题目图片底部
+
+        # 答案分隔条（浅绿背景 + "Answer" 文字）
+        ANS_BAR_H = 20        # 分隔条高度(pt)
+        ANS_GAP   = 4         # 答案图片与分隔条间距
+        C_ANS_BG  = (0.88, 0.97, 0.88)   # 浅绿背景
+        C_ANS_TXT = (0.10, 0.45, 0.15)   # 深绿文字
+        C_ANS_SEP = (0.55, 0.80, 0.55)   # 分隔线颜色
+
+        bar_y0 = ans_y0 + 6   # 与题目图片留6pt间距
+        bar_y1 = bar_y0 + ANS_BAR_H
+        bar_rect = fitz.Rect(x0, bar_y0, x1, bar_y1)
+        out_page.draw_rect(bar_rect, color=C_ANS_BG, fill=C_ANS_BG)
+        out_page.draw_line(fitz.Point(x0, bar_y0), fitz.Point(x1, bar_y0),
+                           color=C_ANS_SEP, width=1.0)
+        out_page.draw_line(fitz.Point(x0, bar_y1), fitz.Point(x1, bar_y1),
+                           color=C_ANS_SEP, width=0.5)
+        ans_text_y = bar_y0 + ANS_BAR_H - 6
+        out_page.insert_text((x0 + 8, ans_text_y), 'Answer / Mark Scheme',
+                             fontsize=9, color=C_ANS_TXT, fontname='helv')
+
+        # 答案图片
+        ans_img_y0  = bar_y1 + ANS_GAP
+        ans_scale   = img_area_w / answer_w
+        ans_draw_w  = img_area_w
+        ans_draw_h  = answer_h * ans_scale
+        if ans_img_y0 + ans_draw_h <= y1 + 2:   # 放得下
+            ans_rect = fitz.Rect(x0, ans_img_y0, x0 + ans_draw_w,
+                                 ans_img_y0 + ans_draw_h)
+            out_page.insert_image(ans_rect, stream=io.BytesIO(answer_jpeg))
+
 
 
 
@@ -3833,10 +4023,11 @@ def _estimate_slice_height_on_page(src_page, clip_rect, dpi, avail_w):
 
 def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                           paper_type, PW, PH, M, HH, GAP, FS, progress_cb=None,
-                          seq_start=0):
+                          seq_start=0, include_answer=True):
     """
     大题模式：每题独占一页（或多页）。
     seq_start: 全局导出序号起始值（0-based），用于头栏题号显示。
+    include_answer: 是否渲染答案部分（功能2：隐藏/显示答案）
 
     支持两种数据来源（自动识别，无需外部判断）：
       - 有 img_bytes_b64：直接用缓存图片渲染（workbook/云端来源）
@@ -3875,6 +4066,19 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
         q_meta    = {'difficulty': diff, 'topics': topics, 'exam_date': exam_date} \
                     if (diff is not None or topics or exam_date) else None
 
+        # 提取答案数据（Mark Scheme）
+        ans_b64  = q_obj.get('answer_b64', '')
+        ans_jpeg = None
+        ans_w = ans_h = None
+        if ans_b64 and include_answer:
+            import base64 as _b64_ans
+            try:
+                ans_jpeg = _b64_ans.b64decode(ans_b64)
+                ans_w    = q_obj.get('answer_w') or 1
+                ans_h    = q_obj.get('answer_h') or 1
+            except Exception:
+                ans_jpeg = None
+
         # ── 优先路径：题目已有缓存图片（workbook / 云端导入）──
         cached_b64 = q_obj.get('img_bytes_b64', '')
         if cached_b64:
@@ -3885,7 +4089,9 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                 page  = out_doc.new_page(width=PW, height=PH)
                 _place_jpeg_on_page(page, jpeg, img_w, img_h,
                                     fitz.Rect(M, M, PW - M, PH - M),
-                                    label, HH, GAP, FS, q_meta=q_meta)
+                                    label, HH, GAP, FS, q_meta=q_meta,
+                                    answer_jpeg=ans_jpeg, answer_w=ans_w,
+                                    answer_h=ans_h, include_answer=include_answer)
             except Exception as _e:
                 page = out_doc.new_page(width=PW, height=PH)
                 page.insert_text(fitz.Point(M, M + HH + GAP),
@@ -3922,7 +4128,9 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
             page = out_doc.new_page(width=PW, height=PH)
             _place_jpeg_on_page(page, jpeg0, w0, h0,
                                 fitz.Rect(M, M, PW-M, PH-M),
-                                label, HH, GAP, FS, q_meta=q_meta)
+                                label, HH, GAP, FS, q_meta=q_meta,
+                                answer_jpeg=ans_jpeg, answer_w=ans_w,
+                                answer_h=ans_h, include_answer=include_answer)
         else:
             # ── 多片 或 单片但太高：逐片放到新 PDF 页 ──
             all_slices = slices[:]
@@ -3932,10 +4140,15 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                 else:
                     jpeg, w, h = _render_slice_to_jpeg(src_page, clip, dpi)
                 out_page = out_doc.new_page(width=PW, height=PH)
+                # 答案只放在最后一片（避免重复）
+                is_last = (si == len(all_slices) - 1)
                 _place_jpeg_on_page(out_page, jpeg, w, h,
                                     fitz.Rect(M, M, PW-M, PH-M),
                                     label, HH, GAP, FS,
-                                    q_meta=(q_meta if si == 0 else None))
+                                    q_meta=(q_meta if si == 0 else None),
+                                    answer_jpeg=(ans_jpeg if is_last else None),
+                                    answer_w=ans_w, answer_h=ans_h,
+                                    include_answer=include_answer)
                 del jpeg
 
         if progress_cb: progress_cb(seq_start + done + 1)
@@ -3943,12 +4156,13 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
 
 def _export_mcq_packed(out_doc, src_doc, questions, q_nums, dpi,
                         paper_type, PW, PH, M, GAP, progress_cb=None,
-                        seq_start=0):
+                        seq_start=0, include_answer=True):
     """
     MCQ 多题共页打包布局。
     支持两种数据来源（自动识别）：
       - 有 img_bytes_b64：直接用缓存图片（workbook/云端来源）
       - 无 img_bytes_b64：从 src_doc 裁切（原始PDF来源）
+    include_answer: 是否渲染答案部分（功能2）
     """
     import base64 as _b64
     AVAIL_W  = PW - 2 * M
