@@ -186,7 +186,11 @@
   .qt-ld.st-h{height:190px}
   .qt-ld:not(.st-h){height:152px}
   .spin{animation:spin 1s linear infinite;display:inline-block;font-size:20px}
-  .qc-act{padding:7px 9px;display:flex;gap:5px}
+  .qc-act{padding:6px 9px 8px;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:auto auto;gap:5px}
+  .qc-act .btn-sm{min-width:0;width:100%;padding:5px 2px;font-size:11.5px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* 全局答案切换按钮 */
+  #btnToggleAllAns{font-size:12px;padding:4px 10px;border-radius:8px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+  #btnToggleAllAns.all-shown{background:#fef9c3;color:#854d0e;border-color:#fef08a}
 
   /* 难度星级 */
   .q-difficulty{padding:4px 9px 3px;display:flex;align-items:center;gap:5px;border-bottom:1px solid var(--g200);min-height:24px}
@@ -547,6 +551,10 @@
         <option value="diff_asc">难度 低→高</option>
         <option value="diff_desc">难度 高→低</option>
       </select>
+      <!-- 全局答案切换 -->
+      <div id="toggleAllAnsWrap" style="display:none">
+        <button id="btnToggleAllAns" onclick="toggleAllAnswers()">👁 显示所有答案</button>
+      </div>
       <div style="margin-left:auto">
         <button class="btn btn-outline btn-sm" onclick="reset()">🔄 重新上传</button>
       </div>
@@ -1539,10 +1547,19 @@ function renderGrid() {
              onerror="this.style.display='none';document.getElementById('tld-${uid}').innerHTML='⚠️'">
         ${answerHtml}
         <div class="qc-act">
-          <button class="btn btn-outline btn-sm" style="flex:1" onclick="openPrev(${q.q_num},${q.gIdx},event)">🔍 预览</button>
-          ${ansToggleHtml}
-          <button class="btn btn-sm" style="flex:1;background:#e0f2fe;color:#0369a1" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},null,event)">✏️ 编辑</button>
-          <button class="btn btn-primary btn-sm" style="flex:1" onclick="dlOne(${q.q_num},${q.gIdx},event)">⬇️</button>
+          <!-- 第一行 -->
+          <button class="btn btn-outline btn-sm" onclick="openPrev(${q.q_num},${q.gIdx},event)">🔍 预览</button>
+          ${hasAnswer
+            ? `<button class="btn btn-sm btn-ans-toggle" id="ansbtn-${uid}"
+                style="background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0"
+                onclick="toggleAnswer('${uid}',event)">👁 答案</button>`
+            : `<button class="btn btn-sm" style="background:#f5f5f5;color:#bbb;cursor:default" disabled>👁 答案</button>`
+          }
+          <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},null,event)">✏️ 编辑</button>
+          <!-- 第二行 -->
+          <button class="btn btn-primary btn-sm" onclick="dlOne(${q.q_num},${q.gIdx},event)">⬇️ 下载</button>
+          <button class="btn btn-sm" style="background:#f5f0ff;color:#7c3aed;border:1px solid #e9d5ff" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},'difficulty',event)">★ 难度</button>
+          <button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd" onclick="toggleSel('${uid}')">📋 选择</button>
         </div>`;
       card.addEventListener('click', e => { if(e.target.tagName==='BUTTON') return; toggleSel(uid); });
       grid.appendChild(card);
@@ -1564,18 +1581,75 @@ function toggleAnswer(uid, e) {
   const visible = ansWrap.style.display !== 'none';
   ansWrap.style.display = visible ? 'none' : '';
   if (ansBtn) {
-    ansBtn.textContent = visible ? '👁 显示答案' : '🙈 隐藏答案';
+    ansBtn.textContent = visible ? '👁 答案' : '🙈 答案';
     ansBtn.style.background = visible ? '#f0fdf4' : '#fef9c3';
     ansBtn.style.color       = visible ? '#15803d' : '#854d0e';
     ansBtn.style.border      = visible ? '1px solid #bbf7d0' : '1px solid #fef08a';
   }
+  // 同步全局按钮状态
+  _syncToggleAllAnsBtn();
 }
 
-// ── 更新 PDF modal 的「包含答案」开关可见性 ──
+// 同步全局答案按钮文字（根据当前所有答案区的显示状态）
+function _syncToggleAllAnsBtn() {
+  const btn = document.getElementById('btnToggleAllAns');
+  if (!btn) return;
+  const allWraps = document.querySelectorAll('.qc-answer-wrap');
+  if (!allWraps.length) return;
+  const anyShown = Array.from(allWraps).some(el => el.style.display !== 'none');
+  if (anyShown) {
+    btn.textContent = '🙈 隐藏所有答案';
+    btn.classList.add('all-shown');
+  } else {
+    btn.textContent = '👁 显示所有答案';
+    btn.classList.remove('all-shown');
+  }
+}
+
+// ── 更新 PDF modal 的「包含答案」开关 + 全局答案切换按钮可见性 ──
 function _updatePdfAnswerToggle() {
   const hasAnyAnswer = allQuestions.some(q => q.answer_b64);
   const wrap = document.getElementById('pdfAnswerToggleWrap');
   if (wrap) wrap.style.display = hasAnyAnswer ? '' : 'none';
+  const allAnsWrap = document.getElementById('toggleAllAnsWrap');
+  if (allAnsWrap) allAnsWrap.style.display = hasAnyAnswer ? '' : 'none';
+}
+
+// ── 全局「显示/隐藏所有答案」切换 ──
+function toggleAllAnswers() {
+  const btn = document.getElementById('btnToggleAllAns');
+  // 判断当前全局状态：若所有有答案的卡片答案区都显示 → 则切换为隐藏；否则显示
+  const allWraps = document.querySelectorAll('.qc-answer-wrap');
+  if (!allWraps.length) return;
+  const anyHidden = Array.from(allWraps).some(el => el.style.display === 'none' || el.style.display === '');
+  // 目标状态：若有任意隐藏的 → 全部显示；否则全部隐藏
+  const shouldShow = anyHidden;
+
+  allWraps.forEach(wrap => {
+    const uid = wrap.id.replace('ans-', '');
+    const ansBtn = document.getElementById(`ansbtn-${uid}`);
+    wrap.style.display = shouldShow ? '' : 'none';
+    if (ansBtn) {
+      ansBtn.textContent = shouldShow ? '🙈 答案' : '👁 答案';
+      ansBtn.style.background = shouldShow ? '#fef9c3' : '#f0fdf4';
+      ansBtn.style.color       = shouldShow ? '#854d0e' : '#15803d';
+      ansBtn.style.border      = shouldShow ? '1px solid #fef08a' : '1px solid #bbf7d0';
+    }
+  });
+
+  if (btn) {
+    if (shouldShow) {
+      btn.textContent = '🙈 隐藏所有答案';
+      btn.classList.add('all-shown');
+    } else {
+      btn.textContent = '👁 显示所有答案';
+      btn.classList.remove('all-shown');
+    }
+  }
+
+  // 同步 PDF modal 里的「包含答案」checkbox
+  const pdfChk = document.getElementById('pdfIncludeAnswer');
+  if (pdfChk) pdfChk.checked = shouldShow;
 }
 
 function procThumbQ() {

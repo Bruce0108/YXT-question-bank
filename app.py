@@ -369,22 +369,21 @@ def detect_paper_source(doc) -> str:
 # ============================================================
 def detect_edexcel_maths_questions(doc):
     """
-    检测 Edexcel IAL Pure Mathematics (WMA13/P3 类) 试卷的题号边界。
+    检测 Edexcel IAL Pure/Further/Statistics/Mechanics/Decision Mathematics 试卷的题号边界。
+    适用全部单元：P1/P2/P3/P4/FP1/FP2/S1/S2/M1/M2/D1。
 
-    WMA13 实际PDF结构（通过span-level分析确认）：
-      - 题号和题干被合并在同一个 block 里，例如：
-          block txt = "blank\\n1.\\t The function f is defined by"
-          block x0=54.5, y0=48.7（因为第一行是"blank"）
-      - 因此必须用 get_text('dict') 逐 span 扫描，而不能用 get_text('blocks')
-      - 题号 span 特征：
-          * 文字是 "N." 或 "N"（Q7无句点，为特殊情况）
-          * x0 ∈ [48, 72]，y0 ∈ [40, 95]（左边距，页面顶部）
-          * 紧接span是 "\\t 题干文字" 或下一行是题干
-      - 续页：行文字匹配 "Question N continued"，跳过本页
+    识别策略（通用化，不依赖硬编码位置）：
+      1. 真题号 span 特征：
+           - 文字是 "N." 或 "N"（纯数字，1–15）
+           - fontsize ≥ 10pt（区分题干内的上标/下标 ~7pt）
+           - x0 ∈ [40, 85]（左边距，适当放宽兼容不同单元）
+           - y0 ∈ [35, 750]（避开页脚页码，但不限制顶部，Q7等可能从较低位置开始）
+           - 首次出现（seen_nums 去重）
+      2. 续页标记 "Question N continued" → 标记跳过，不记录题号
+      3. 去重+排序后返回
 
     返回 questions 列表，每项含 q_num / page_idx / y_start / x_start。
     """
-    # span级题号匹配：'N.' 或 'N'（纯数字）
     Q_SPAN_DOT   = re.compile(r'^(\d{1,2})\.$')    # '1.' '10.'
     Q_SPAN_PLAIN = re.compile(r'^(\d{1,2})$')       # '7'（无句点）
     CONTINUED_PAT = re.compile(r'^Question\s+\d+\s+continued', re.IGNORECASE)
@@ -394,44 +393,62 @@ def detect_edexcel_maths_questions(doc):
 
     for pg_i in range(1, doc.page_count):   # 跳过封面（第0页）
         page = doc[pg_i]
-        # 使用 dict 模式，逐 span 扫描，精确定位题号
+        pw, ph = page.rect.width, page.rect.height
+
         try:
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
             blocks = []
 
-        found_q = False
+        page_continued = False   # 本页是否是续页（有 "Question N continued"）
+
         for b in blocks:
             if b.get('type') != 0:
                 continue
             for line in b.get('lines', []):
-                # 先检查整行文字是否为续页标记
                 line_txt = ''.join(s['text'] for s in line['spans']).strip()
                 if CONTINUED_PAT.match(line_txt):
-                    found_q = True  # 标记为续页，跳过本页
+                    page_continued = True
                     break
+            if page_continued:
+                break
 
-                # 逐span检查题号
+        if page_continued:
+            continue   # 整页跳过，不在续页上重复记录题号
+
+        # 遍历所有 span 找题号
+        for b in blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
                 for span in line['spans']:
                     txt = span['text'].strip()
                     if not txt:
                         continue
-                    bbox = span['bbox']  # (x0, y0, x1, y1)
-                    x0, y0 = bbox[0], bbox[1]
 
-                    # 位置过滤：x∈[48,72]（左边距题号列），y∈[40,95]（页面顶部）
-                    if not (48 <= x0 <= 72 and 40 <= y0 <= 95):
-                        continue
-
-                    # 匹配题号：带句点 "N." 或不带句点 "N"
                     m = Q_SPAN_DOT.match(txt) or Q_SPAN_PLAIN.match(txt)
                     if not m:
                         continue
 
                     q_num = int(m.group(1))
-                    if not (1 <= q_num <= 30):
+                    if not (1 <= q_num <= 15):
                         continue
                     if q_num in seen_nums:
+                        continue
+
+                    bbox    = span['bbox']   # (x0, y0, x1, y1)
+                    x0, y0  = bbox[0], bbox[1]
+                    fs      = span.get('size', 0)
+
+                    # ── 位置过滤 ──
+                    # x: 左边距题号列，[40,85] 兼容各单元
+                    if not (40 <= x0 <= 85):
+                        continue
+                    # y: 不在页脚（页码区），页面顶部区不过度限制
+                    if y0 > ph - 60:
+                        continue
+                    # fontsize: ≥ 10pt（真题号），排除上标/小字数字（~7pt）
+                    if fs < 9.5:
                         continue
 
                     seen_nums.add(q_num)
@@ -441,13 +458,6 @@ def detect_edexcel_maths_questions(doc):
                         'y_start':  y0,
                         'x_start':  x0,
                     })
-                    found_q = True
-                    break  # 本行找到题号，不再继续本行其他span
-
-                if found_q:
-                    break  # 本页已找到题号（或续页标记），跳出block循环
-            if found_q:
-                break  # 本页处理完毕
 
     questions.sort(key=lambda x: x['q_num'])
     return questions
@@ -2024,9 +2034,17 @@ def upload_multi():
                               detect_edexcel_maths_unit(doc))
 
             if is_ms:
-                # Mark Scheme：检测题目边界，渲染答案图片
-                ms_questions = _detect_questions(doc, pt)
-                ms_answers   = _render_ms_questions_b64(doc, ms_questions, pt, dpi=150)
+                # Mark Scheme：若文件名含 Edexcel Maths 单元代码，强制使用 edexcel_maths 类型
+                # （MS 文件可能不含 WMA\d{2}/ 格式，导致 detect_paper_type 返回 edexcel）
+                ms_pt = pt
+                ms_fn_unit = _extract_unit_from_filename(file.filename)
+                if ms_fn_unit or source == 'edexcel_maths':
+                    ms_pt = 'edexcel_maths'
+                    if not maths_unit:
+                        maths_unit = ms_fn_unit
+                # 检测题目边界，渲染答案图片
+                ms_questions = _detect_questions_ms(doc, ms_pt)
+                ms_answers   = _render_ms_questions_b64(doc, ms_questions, ms_pt, dpi=150)
                 ms_registry.append({
                     'filename':   file.filename,
                     'unit':       maths_unit,
@@ -2191,6 +2209,75 @@ def _get_paper_type():
         with open(pt_file) as f:
             return f.read().strip()
     return 'mcq'
+
+
+def _detect_questions_ms(doc, paper_type):
+    """
+    Mark Scheme 专用题号检测入口。
+    MS 文件题号格式多为 'Question 1'、'Question 2' 或 '1.' / '1'。
+    对 edexcel_maths 类型额外尝试 'Question N' 行级标题格式。
+    """
+    if paper_type == 'edexcel_maths':
+        # 先用标准检测
+        questions = detect_edexcel_maths_questions(doc)
+        if questions:
+            return questions
+        # 退回：扫描 'Question N' 行（MS 常见格式）
+        return _detect_ms_questions_by_header(doc)
+    return _detect_questions(doc, paper_type)
+
+
+def _detect_ms_questions_by_header(doc):
+    """
+    扫描 MS 文件中 'Question N' 格式的题目标题行（Edexcel Maths MS 常见）。
+    匹配格式：
+      - 'Question 1'  / 'Question 12'
+      - 'Question 1 (a)' 等变体（只取 N，忽略子题）
+    返回 questions 列表（q_num / page_idx / y_start / x_start）。
+    """
+    Q_HDR = re.compile(r'^Question\s+(\d{1,2})\b', re.IGNORECASE)
+    questions = []
+    seen_nums = set()
+
+    for pg_i in range(doc.page_count):
+        page = doc[pg_i]
+        ph   = page.rect.height
+        try:
+            blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
+        except Exception:
+            blocks = []
+
+        for b in blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
+                line_txt = ''.join(s['text'] for s in line['spans']).strip()
+                m = Q_HDR.match(line_txt)
+                if not m:
+                    continue
+                q_num = int(m.group(1))
+                if not (1 <= q_num <= 20):
+                    continue
+                if q_num in seen_nums:
+                    continue
+                # 取第一个 span 的位置信息
+                spans = [s for ln in b.get('lines', []) for s in ln.get('spans', [])]
+                if not spans:
+                    continue
+                bbox = spans[0]['bbox']
+                x0, y0 = bbox[0], bbox[1]
+                if y0 > ph - 40:
+                    continue
+                seen_nums.add(q_num)
+                questions.append({
+                    'q_num':    q_num,
+                    'page_idx': pg_i,
+                    'y_start':  y0,
+                    'x_start':  x0,
+                })
+
+    questions.sort(key=lambda x: x['q_num'])
+    return questions
 
 
 def _detect_questions(doc, paper_type):
@@ -3503,34 +3590,68 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
     支持格式：
     - Cambridge MCQ / Structured：内容区 x=30~pw-15
     - Edexcel（含 IAL/IGCSE）：内容区 x=38~548（避开两侧装饰条）
-    - Edexcel Maths (P3-style)：整页模式，只取题目页（1页），跳过空白答题页
+    - Edexcel Maths (所有单元 P1-P4/S1/M1 等)：
+        * 每题可能跨多页（含 "Question N continued" 续页）
+        * 首页从 y_start 截取到页面内容底部
+        * 续页从页面顶部内容区截取到内容底部（或到下一题 y_start）
+        * bottom 用 _find_edexcel_maths_question_bottom 精确找到 marks 下边界
     """
-    # ── Edexcel Maths：只取题目页，截到最后一个 marks 下方（不含答题横线） ──
+    # ── Edexcel Maths：支持跨页题目 ──
     if paper_type == 'edexcel_maths':
-        q = questions[q_idx]
-        page = src_doc[q["page_idx"]]
-        pw, ph = page.rect.width, page.rect.height
+        q      = questions[q_idx]
+        pw_ref = src_doc[q["page_idx"]].rect.width
 
-        # left: 跳过左边框线（x=35~36.5），内容起始 x≈42.5
-        left  = 42
-        right = min(pw - 36, 560)
-        _right_lim = _detect_right_content_limit(page, pw, ph,
-                                                  sample_y0=44, sample_y1=ph - 40)
-        if _right_lim < right:
-            right = _right_lim
+        # 计算题目占用的页面范围
+        pg_start = q["page_idx"]
+        if q_idx + 1 < len(questions):
+            pg_end = questions[q_idx + 1]["page_idx"]
+            # 如果下一题在同一页，当前题只占 pg_start
+            if pg_end == pg_start:
+                pg_end = pg_start
+        else:
+            # 最后一题：找最后有内容的页
+            pg_end = _find_last_content_page(src_doc, pg_start)
 
-        # top: 从题号 y_start 往上 8pt（y_start 由新检测函数提供，>0）
-        # 如 y_start=0（旧兼容），则退回用 48
-        y_start = q.get("y_start", 0)
-        top = max(0, y_start - 8) if y_start > 10 else 48
+        slices = []
+        for pg_i in range(pg_start, pg_end + 1):
+            page   = src_doc[pg_i]
+            pw, ph = page.rect.width, page.rect.height
 
-        # bottom: 截到最后一个右侧 marks(N) 的 y1 + 8pt padding
-        bottom = _find_edexcel_maths_question_bottom(page, ph)
+            # 横向裁剪：左避开边框线，右检测内容边界
+            left  = 42
+            right = min(pw - 36, 560)
+            _rl = _detect_right_content_limit(page, pw, ph,
+                                              sample_y0=44, sample_y1=ph - 40)
+            if _rl < right:
+                right = _rl
 
-        if bottom > top + 10:
-            return [(page, fitz.Rect(left, top, right, bottom))]
-        return []
+            # 纵向裁剪
+            if pg_i == pg_start:
+                y_start = q.get("y_start", 0)
+                top = max(0, y_start - 8) if y_start > 10 else 48
+            else:
+                top = 44    # 续页：从页面内容起始处（跳过页眉）
 
+            if pg_i == pg_end and q_idx + 1 < len(questions):
+                nq = questions[q_idx + 1]
+                if nq["page_idx"] == pg_end:
+                    # 下一题在同一页：截到下一题题号上方
+                    bottom = max(top + 20, nq["y_start"] - 8)
+                else:
+                    bottom = _find_edexcel_maths_question_bottom(page, ph)
+            else:
+                bottom = _find_edexcel_maths_question_bottom(page, ph)
+
+            # 退化保护
+            if bottom <= top + 10:
+                bottom = ph - 25
+
+            if bottom > top + 10:
+                slices.append((page, fitz.Rect(left, top, right, bottom)))
+
+        return slices
+
+    # ── 其他格式 ──
     q = questions[q_idx]
     pg_start = q["page_idx"]
     y_top    = max(0, q["y_start"] - 8)
@@ -3954,7 +4075,10 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
     img_area_w = x1 - x0
     img_area_h = y1 - img_y0 - gap
     if img_area_h < 10 or img_area_w < 10:
-        return
+        # 答案也无法放置，返回剩余答案数据供调用者处理
+        if answer_jpeg and include_answer and answer_w and answer_h:
+            return (answer_jpeg, answer_w, answer_h)
+        return None
 
     # 宽度铺满（scale by width），图片顶对齐信息行，高度等比例延伸
     # 若渲染后超出页面底部则裁切（多片题目由 _export_one_per_page 多页处理）
@@ -3980,25 +4104,30 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
 
         bar_y0 = ans_y0 + 6   # 与题目图片留6pt间距
         bar_y1 = bar_y0 + ANS_BAR_H
-        bar_rect = fitz.Rect(x0, bar_y0, x1, bar_y1)
-        out_page.draw_rect(bar_rect, color=C_ANS_BG, fill=C_ANS_BG)
-        out_page.draw_line(fitz.Point(x0, bar_y0), fitz.Point(x1, bar_y0),
-                           color=C_ANS_SEP, width=1.0)
-        out_page.draw_line(fitz.Point(x0, bar_y1), fitz.Point(x1, bar_y1),
-                           color=C_ANS_SEP, width=0.5)
-        ans_text_y = bar_y0 + ANS_BAR_H - 6
-        out_page.insert_text((x0 + 8, ans_text_y), 'Answer / Mark Scheme',
-                             fontsize=9, color=C_ANS_TXT, fontname='helv')
-
-        # 答案图片
         ans_img_y0  = bar_y1 + ANS_GAP
         ans_scale   = img_area_w / answer_w
         ans_draw_w  = img_area_w
         ans_draw_h  = answer_h * ans_scale
-        if ans_img_y0 + ans_draw_h <= y1 + 2:   # 放得下
+
+        if ans_img_y0 + ans_draw_h <= y1 + 2:
+            # 同一页能放下：绘制分隔条 + 答案图片
+            bar_rect = fitz.Rect(x0, bar_y0, x1, bar_y1)
+            out_page.draw_rect(bar_rect, color=C_ANS_BG, fill=C_ANS_BG)
+            out_page.draw_line(fitz.Point(x0, bar_y0), fitz.Point(x1, bar_y0),
+                               color=C_ANS_SEP, width=1.0)
+            out_page.draw_line(fitz.Point(x0, bar_y1), fitz.Point(x1, bar_y1),
+                               color=C_ANS_SEP, width=0.5)
+            ans_text_y = bar_y0 + ANS_BAR_H - 6
+            out_page.insert_text((x0 + 8, ans_text_y), 'Answer / Mark Scheme',
+                                 fontsize=9, color=C_ANS_TXT, fontname='helv')
             ans_rect = fitz.Rect(x0, ans_img_y0, x0 + ans_draw_w,
                                  ans_img_y0 + ans_draw_h)
             out_page.insert_image(ans_rect, stream=io.BytesIO(answer_jpeg))
+        else:
+            # 同一页放不下：返回答案数据，由调用者新建页面
+            return (answer_jpeg, answer_w, answer_h)
+
+    return None
 
 
 
@@ -4019,6 +4148,47 @@ def _estimate_slice_height_on_page(src_page, clip_rect, dpi, avail_w):
     # 按 avail_w 等比缩放
     display_scale = avail_w / px_w
     return px_h * display_scale
+
+
+def _place_answer_only_page(out_doc, ans_jpeg, ans_w, ans_h,
+                             PW, PH, M, label=''):
+    """
+    当答案图片与题目无法共页时，单独新建一页放答案。
+    绘制浅绿分隔条 + 答案图片，充分利用整页空间。
+    """
+    page      = out_doc.new_page(width=PW, height=PH)
+    x0, y0    = M, M
+    x1, y1    = PW - M, PH - M
+    img_area_w = x1 - x0
+
+    ANS_BAR_H = 22
+    ANS_GAP   = 6
+    C_ANS_BG  = (0.88, 0.97, 0.88)
+    C_ANS_TXT = (0.10, 0.45, 0.15)
+    C_ANS_SEP = (0.55, 0.80, 0.55)
+
+    bar_y0 = y0
+    bar_y1 = bar_y0 + ANS_BAR_H
+    bar_rect = fitz.Rect(x0, bar_y0, x1, bar_y1)
+    page.draw_rect(bar_rect, color=C_ANS_BG, fill=C_ANS_BG)
+    page.draw_line(fitz.Point(x0, bar_y0), fitz.Point(x1, bar_y0),
+                   color=C_ANS_SEP, width=1.0)
+    page.draw_line(fitz.Point(x0, bar_y1), fitz.Point(x1, bar_y1),
+                   color=C_ANS_SEP, width=0.5)
+    hdr_txt = f'Answer / Mark Scheme{(" — " + label) if label else ""}'
+    page.insert_text((x0 + 8, bar_y0 + ANS_BAR_H - 6), hdr_txt,
+                     fontsize=9, color=C_ANS_TXT, fontname='helv')
+
+    # 答案图片：按宽度填满，高度可超出页面则等比压缩
+    ans_img_y0 = bar_y1 + ANS_GAP
+    ans_scale  = img_area_w / ans_w
+    ans_draw_w = img_area_w
+    ans_draw_h = ans_h * ans_scale
+    max_h      = y1 - ans_img_y0
+    if ans_draw_h > max_h:
+        ans_draw_h = max_h
+    ans_rect = fitz.Rect(x0, ans_img_y0, x0 + ans_draw_w, ans_img_y0 + ans_draw_h)
+    page.insert_image(ans_rect, stream=io.BytesIO(ans_jpeg))
 
 
 def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
@@ -4087,11 +4257,14 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                 img_w = q_obj.get('img_w') or 1
                 img_h = q_obj.get('img_h') or 1
                 page  = out_doc.new_page(width=PW, height=PH)
-                _place_jpeg_on_page(page, jpeg, img_w, img_h,
+                overflow_ans = _place_jpeg_on_page(page, jpeg, img_w, img_h,
                                     fitz.Rect(M, M, PW - M, PH - M),
                                     label, HH, GAP, FS, q_meta=q_meta,
                                     answer_jpeg=ans_jpeg, answer_w=ans_w,
                                     answer_h=ans_h, include_answer=include_answer)
+                if overflow_ans:
+                    _place_answer_only_page(out_doc, overflow_ans[0], overflow_ans[1],
+                                            overflow_ans[2], PW, PH, M, label=label)
             except Exception as _e:
                 page = out_doc.new_page(width=PW, height=PH)
                 page.insert_text(fitz.Point(M, M + HH + GAP),
@@ -4126,11 +4299,14 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
         if len(slices) == 1 and fitted_h0 <= AVAIL_H:
             # ── 最简单情况：单片且放得下 ──
             page = out_doc.new_page(width=PW, height=PH)
-            _place_jpeg_on_page(page, jpeg0, w0, h0,
+            overflow_ans = _place_jpeg_on_page(page, jpeg0, w0, h0,
                                 fitz.Rect(M, M, PW-M, PH-M),
                                 label, HH, GAP, FS, q_meta=q_meta,
                                 answer_jpeg=ans_jpeg, answer_w=ans_w,
                                 answer_h=ans_h, include_answer=include_answer)
+            if overflow_ans:
+                _place_answer_only_page(out_doc, overflow_ans[0], overflow_ans[1],
+                                        overflow_ans[2], PW, PH, M, label=label)
         else:
             # ── 多片 或 单片但太高：逐片放到新 PDF 页 ──
             all_slices = slices[:]
@@ -4142,13 +4318,16 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                 out_page = out_doc.new_page(width=PW, height=PH)
                 # 答案只放在最后一片（避免重复）
                 is_last = (si == len(all_slices) - 1)
-                _place_jpeg_on_page(out_page, jpeg, w, h,
+                overflow_ans = _place_jpeg_on_page(out_page, jpeg, w, h,
                                     fitz.Rect(M, M, PW-M, PH-M),
                                     label, HH, GAP, FS,
                                     q_meta=(q_meta if si == 0 else None),
                                     answer_jpeg=(ans_jpeg if is_last else None),
                                     answer_w=ans_w, answer_h=ans_h,
                                     include_answer=include_answer)
+                if overflow_ans and is_last:
+                    _place_answer_only_page(out_doc, overflow_ans[0], overflow_ans[1],
+                                            overflow_ans[2], PW, PH, M, label=label)
                 del jpeg
 
         if progress_cb: progress_cb(seq_start + done + 1)
