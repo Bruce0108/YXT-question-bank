@@ -4336,22 +4336,53 @@ def _estimate_slice_height_on_page(src_page, clip_rect, dpi, avail_w):
     # 按 avail_w 等比缩放
     display_scale = avail_w / px_w
     return px_h * display_scale
-def _estimate_slice_height_on_page(src_page, clip_rect, dpi, avail_w):
+
+
+def _b64_to_jpeg_bytes(b64_str: str) -> bytes | None:
+    """将 base64 字符串解码并转换为 JPEG bytes；失败返回 None。"""
+    try:
+        import base64 as _b64m
+        raw = _b64m.b64decode(b64_str)
+        from PIL import Image as _PILImg
+        im = _PILImg.open(io.BytesIO(raw))
+        buf = io.BytesIO()
+        im.convert('RGB').save(buf, format='JPEG', quality=88)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
+                           PW, PH, M, GAP, label):
     """
-    快速估算一个源 PDF 片段渲染到输出页后的显示高度（pt），不产生像素数据。
-    用于 MCQ 打包布局的高度预算。
+    在 out_doc 中新建一页放置答案图片，带"答案 Answer"标签头栏。
     """
-    scale     = dpi / 72.0
-    clip_w_pt = clip_rect.x1 - clip_rect.x0
-    clip_h_pt = clip_rect.y1 - clip_rect.y0
-    if clip_w_pt <= 0:
-        return 0
-    # 渲染后像素尺寸
-    px_w = clip_w_pt * scale
-    px_h = clip_h_pt * scale
-    # 按 avail_w 等比缩放
-    display_scale = avail_w / px_w
-    return px_h * display_scale
+    ANS_BAND_H = 22   # 答案头栏高度（pt）
+    ANS_GAP    = 4    # 头栏与图片间距
+    AVAIL_W    = PW - 2 * M
+    AVAIL_H    = PH - 2 * M - ANS_BAND_H - ANS_GAP - GAP
+
+    page = out_doc.new_page(width=PW, height=PH)
+
+    # 答案头栏（浅绿色背景）
+    band_rect = fitz.Rect(M, M, PW - M, M + ANS_BAND_H)
+    C_ANS_BG  = (0.88, 0.96, 0.90)   # 浅绿
+    C_ANS_TXT = (0.10, 0.50, 0.25)   # 深绿
+    page.draw_rect(band_rect, color=C_ANS_BG, fill=C_ANS_BG)
+    page.insert_text(
+        (M + 8, M + ANS_BAND_H - 7),
+        f'答案 Answer — {label}',
+        fontsize=11, color=C_ANS_TXT, fontname='helv'
+    )
+
+    # 答案图片
+    img_y0 = M + ANS_BAND_H + ANS_GAP
+    scale  = min(AVAIL_W / max(ans_w, 1), AVAIL_H / max(ans_h, 1))
+    draw_w = ans_w * scale
+    draw_h = ans_h * scale
+    img_rect = fitz.Rect(M, img_y0, M + draw_w, img_y0 + draw_h)
+    page.insert_image(img_rect, stream=io.BytesIO(ans_jpeg))
+    return page
 
 
 
@@ -4361,6 +4392,7 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
     """
     大题模式：每题独占一页（或多页）。
     seq_start: 全局导出序号起始值（0-based），用于头栏题号显示。
+    如果题目对象含 answer_b64，则在题目页之后插入答案页。
     """
     is_mcq_type = paper_type in ('mcq', 'edexcel_mcq')
 
@@ -4429,6 +4461,20 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                                     label, HH, GAP, FS,
                                     q_meta=(q_meta if si == 0 else None))
                 del jpeg  # 立即释放本片内存
+
+        # ── Task 2: 若题目有答案图，在题目页后附加答案页 ──
+        ans_b64 = q_obj.get('answer_b64', '')
+        if ans_b64:
+            ans_jpeg = _b64_to_jpeg_bytes(ans_b64)
+            if ans_jpeg:
+                try:
+                    from PIL import Image as _PILImg
+                    _aim = _PILImg.open(io.BytesIO(ans_jpeg))
+                    ans_w, ans_h = _aim.size
+                    _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
+                                         PW, PH, M, GAP, label)
+                except Exception as _ae:
+                    print(f'[pdf_export] answer page error: {_ae}')
 
         if progress_cb: progress_cb(done + 1)
 def _export_mcq_packed(out_doc, src_doc, questions, q_nums, dpi,
@@ -5292,17 +5338,21 @@ _CLOUD_BOARDS   = ['CAIE', 'Edexcel', 'AQA', 'OCR', 'IB', 'AP']
 # 运行时根据 board+subject 动态确定使用哪套知识点
 
 def _cloud_prefix(subject: str = '', board: str = '', topic1: str = '',
-                   topic2: str = '', qid: str = '') -> str:
-    """生成云端题库的存储 key（R2 key 或本地路径）。"""
+                   topic2: str = '', qid: str = '', maths_unit: str = '') -> str:
+    """生成云端题库的存储 key（R2 key 或本地路径）。
+    路径结构：cloud_db/{subject}/{board}/{maths_unit}/{topic1}/{topic2}/{qid}
+    maths_unit 为空时跳过该层级（向后兼容旧数据）。
+    """
     def _safe(s):
         return re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff. ]', '_', s).strip()
 
     parts = ['cloud_db']
-    if subject: parts.append(_safe(subject))
-    if board:   parts.append(_safe(board))
-    if topic1:  parts.append(_safe(topic1))
-    if topic2:  parts.append(_safe(topic2))
-    if qid:     parts.append(qid)
+    if subject:     parts.append(_safe(subject))
+    if board:       parts.append(_safe(board))
+    if maths_unit:  parts.append(_safe(maths_unit))   # Task 3: 新增 paper 分级
+    if topic1:      parts.append(_safe(topic1))
+    if topic2:      parts.append(_safe(topic2))
+    if qid:         parts.append(qid)
 
     if storage.is_r2_mode():
         return '/'.join(parts)
@@ -5312,11 +5362,21 @@ def _cloud_prefix(subject: str = '', board: str = '', topic1: str = '',
 
 
 def _cloud_img_key(qid: str) -> str:
-    """图片存储 key"""
+    """题目图片存储 key（question 子目录）"""
     if storage.is_r2_mode():
-        return f'cloud_db/images/{qid}.jpg'
+        return f'cloud_db/images/question/{qid}.jpg'
     else:
-        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db', 'images')
+        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db', 'images', 'question')
+        os.makedirs(base, exist_ok=True)
+        return os.path.join(base, f'{qid}.jpg')
+
+
+def _cloud_ans_img_key(qid: str) -> str:
+    """答案图片存储 key（scheme 子目录）"""
+    if storage.is_r2_mode():
+        return f'cloud_db/images/scheme/{qid}.jpg'
+    else:
+        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db', 'images', 'scheme')
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, f'{qid}.jpg')
 
@@ -5548,15 +5608,16 @@ def cloud_library_save_questions():
         board    = q.get('board', 'CAIE')
         topic1   = (q.get('topic1') or '未分类').strip()
         topic2   = (q.get('topic2') or '通用').strip()
+        maths_unit = (q.get('maths_unit') or '').strip()   # Task 3: paper 分级
 
         # 生成唯一题目ID
         qid = str(uuid.uuid4())[:12]
 
-        # 保存图片
+        # Task 4: 保存题目图片到 question/ 子目录
         if b64:
             try:
                 img_data = _b64.b64decode(b64)
-                img_key  = _cloud_img_key(qid)
+                img_key  = _cloud_img_key(qid)   # -> cloud_db/images/question/{qid}.jpg
                 if storage.is_r2_mode():
                     storage.store_bytes(img_key, img_data)
                 else:
@@ -5567,26 +5628,43 @@ def cloud_library_save_questions():
                 failed += 1
                 continue
 
+        # Task 4: 保存答案图片到 scheme/ 子目录（如果有）
+        ans_b64 = q.get('answer_b64', '')
+        has_answer_image = False
+        if ans_b64:
+            try:
+                ans_data = _b64.b64decode(ans_b64)
+                ans_key  = _cloud_ans_img_key(qid)  # -> cloud_db/images/scheme/{qid}.jpg
+                if storage.is_r2_mode():
+                    storage.store_bytes(ans_key, ans_data)
+                else:
+                    with open(ans_key, 'wb') as f:
+                        f.write(ans_data)
+                has_answer_image = True
+            except Exception as e:
+                print(f'[cloud_save] answer img save error qid={qid}: {e}')
+
         # 构建元数据（不含图片 base64，图片单独存）
         q_meta_save = {
-            'qid':        qid,
-            'q_num':      q.get('q_num'),
-            'subject':    subject,
-            'board':      board,
-            'topic1':     topic1,
-            'topic2':     topic2,
-            'difficulty': q.get('difficulty'),
-            'topics':     q.get('topics', []),
-            'exam_date':  q.get('exam_date', ''),
-            'source':     q.get('source', ''),
-            'paper_type': q.get('paper_type', ''),
-            'maths_unit': q.get('maths_unit', ''),
-            'has_image':  bool(b64),
-            'saved_at':   __import__('datetime').datetime.utcnow().isoformat(),
+            'qid':              qid,
+            'q_num':            q.get('q_num'),
+            'subject':          subject,
+            'board':            board,
+            'topic1':           topic1,
+            'topic2':           topic2,
+            'difficulty':       q.get('difficulty'),
+            'topics':           q.get('topics', []),
+            'exam_date':        q.get('exam_date', ''),
+            'source':           q.get('source', ''),
+            'paper_type':       q.get('paper_type', ''),
+            'maths_unit':       maths_unit,
+            'has_image':        bool(b64),
+            'has_answer_image': has_answer_image,   # Task 4: 记录是否有答案图
+            'saved_at':         __import__('datetime').datetime.utcnow().isoformat(),
         }
 
-        # 写元数据 JSON
-        meta_key = _cloud_prefix(subject, board, topic1, topic2) + \
+        # Task 3: 写元数据 JSON（路径含 maths_unit 层级）
+        meta_key = _cloud_prefix(subject, board, topic1, topic2, maths_unit=maths_unit) + \
                    (f'/{qid}.json' if storage.is_r2_mode() else f'{os.sep}{qid}.json')
         try:
             _save_cloud_question(meta_key, q_meta_save)
@@ -5848,7 +5926,10 @@ def cloud_library_import_to_session():
     for i, q in enumerate(selected_qs):
         qid = q.get('qid', '')
         b64 = ''
+        ans_b64 = ''
+
         if qid:
+            # Task 5: 加载题目图片（question 子目录）
             img_key = _cloud_img_key(qid)
             try:
                 if storage.is_r2_mode():
@@ -5861,6 +5942,21 @@ def cloud_library_import_to_session():
                             b64 = _b64.b64encode(f.read()).decode()
             except Exception:
                 pass
+
+            # Task 5: 加载答案图片（scheme 子目录），放入 answer_b64
+            if q.get('has_answer_image'):
+                ans_key = _cloud_ans_img_key(qid)
+                try:
+                    if storage.is_r2_mode():
+                        raw_ans = storage.load_bytes(ans_key)
+                        if raw_ans:
+                            ans_b64 = _b64.b64encode(raw_ans).decode()
+                    else:
+                        if os.path.isfile(ans_key):
+                            with open(ans_key, 'rb') as f:
+                                ans_b64 = _b64.b64encode(f.read()).decode()
+                except Exception:
+                    pass
 
         virt_questions.append({
             'q_num':         i + 1,
@@ -5878,7 +5974,8 @@ def cloud_library_import_to_session():
             'img_bytes_b64': b64,
             'img_w':         0,
             'img_h':         0,
-            '_cloud_qid':    qid,   # 保留原始云端 ID
+            'answer_b64':    ans_b64,    # Task 5: 导入时携带答案，前端 toggleAnswer 可直接使用
+            '_cloud_qid':    qid,        # 保留原始云端 ID
         })
 
     # 注册为虚拟 session
