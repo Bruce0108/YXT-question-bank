@@ -1631,8 +1631,8 @@ def _load_edexcel_maths_syllabus():
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  WMA13 (P3) 题目难度数据库
-#  来源：2022 / 2023 / 2024 Examiner Reports
+#  Edexcel IAL Maths 题目难度数据库（来源：Examiner Report 关键词分析）
+#  结构：_MATHS_DIFFICULTY_DB[unit_code][(year, q_num)] = 1–5
 #
 #  评分依据（关键词映射）：
 #    ★     — "straightforward" / "very well done" / "nearly all"
@@ -1643,6 +1643,8 @@ def _load_edexcel_maths_syllabus():
 #
 #  key = (year: int, q_num: int)  —— 对应试卷年份和题号
 # ═══════════════════════════════════════════════════════════════════
+
+# ── WMA13 (P3) ──────────────────────────────────────────────────────
 _P3_DIFFICULTY_DB = {
     # ── 2022 ──
     (2022, 1):  3,   # "considerable number left blank", Q1不会 — 偏难开局
@@ -1679,52 +1681,221 @@ _P3_DIFFICULTY_DB = {
     (2024, 9):  4,   # quotient rule OK; part (c) "more of a challenge"; integration errors
 }
 
-# 各 year 内所有题目的综合平均 → 用于估算未在数据库中的题目
-_P3_YEAR_AVG = {
-    2022: sum(v for (y, q), v in _P3_DIFFICULTY_DB.items() if y == 2022) /
-          sum(1 for (y, q) in _P3_DIFFICULTY_DB if y == 2022),
-    2023: sum(v for (y, q), v in _P3_DIFFICULTY_DB.items() if y == 2023) /
-          sum(1 for (y, q) in _P3_DIFFICULTY_DB if y == 2023),
-    2024: sum(v for (y, q), v in _P3_DIFFICULTY_DB.items() if y == 2024) /
-          sum(1 for (y, q) in _P3_DIFFICULTY_DB if y == 2024),
+# ── 其他 unit 静态难度数据库（来自 zip 内 Report，2023年） ──────────────────
+
+# WME01 (M1) – June2023
+_WME01_DB = {
+    (2023, 1): 2, (2023, 2): 2, (2023, 3): 2, (2023, 4): 1,
+    (2023, 5): 1, (2023, 6): 2, (2023, 7): 2, (2023, 8): 2,
+}
+# WME02 (M2) – June2023
+_WME02_DB = {
+    (2023, 1): 2, (2023, 2): 3, (2023, 3): 2,
+    (2023, 4): 2, (2023, 5): 2, (2023, 6): 3, (2023, 7): 3,
+}
+# WFM01 (FP1) – June2023
+_WFM01_DB = {
+    (2023, 1): 1, (2023, 2): 2, (2023, 3): 2, (2023, 4): 2,
+    (2023, 5): 2, (2023, 6): 2, (2023, 7): 2, (2023, 8): 3, (2023, 9): 2,
+}
+# WFM02 (FP2) – June2023
+_WFM02_DB = {
+    (2023, 1): 1, (2023, 2): 3, (2023, 3): 2,
+    (2023, 4): 1, (2023, 5): 2, (2023, 6): 2, (2023, 7): 3, (2023, 8): 2,
+}
+# WDM11 (D1) – June2023
+_WDM11_DB = {
+    (2023, 1): 3, (2023, 2): 2, (2023, 3): 2, (2023, 4): 4,
+    (2023, 5): 2, (2023, 6): 3, (2023, 7): 2, (2023, 8): 5,
+}
+# WMA13 (P3) 2021 来自 Jan2021 Report
+_P3_2021_DB = {
+    (2021, 1): 3, (2021, 2): 2, (2021, 3): 1, (2021, 4): 2,
+    (2021, 5): 2, (2021, 6): 1, (2021, 7): 2, (2021, 8): 2,
+    (2021, 9): 2, (2021, 10): 3,
 }
 
-# Q-num → 跨年平均（position-based 估算）
-_P3_QNUM_AVG = {}
-for _qn in range(1, 11):
-    _vals = [v for (y, q), v in _P3_DIFFICULTY_DB.items() if q == _qn]
-    if _vals:
-        _P3_QNUM_AVG[_qn] = sum(_vals) / len(_vals)
+# 合并到统一DB，按 unit_code 索引
+_MATHS_DIFFICULTY_DB: dict[str, dict] = {
+    'WMA13': {**_P3_DIFFICULTY_DB, **_P3_2021_DB},
+    'WME01': _WME01_DB,
+    'WME02': _WME02_DB,
+    'WFM01': _WFM01_DB,
+    'WFM02': _WFM02_DB,
+    'WDM11': _WDM11_DB,
+    # P1/P2/P4/S1/S2等暂无数据，会用 _score_difficulty_report 动态提取
+}
+
+# Edexcel Maths unit -> unit_code 映射
+_MATHS_UNIT_TO_CODE = {
+    'P1': 'WMA11', 'P2': 'WMA12', 'P3': 'WMA13', 'P4': 'WMA14',
+    'FP1': 'WFM01', 'FP2': 'WFM02', 'FP3': 'WFM03',
+    'M1': 'WME01', 'M2': 'WME02',
+    'S1': 'WST01', 'S2': 'WST02',
+    'D1': 'WDM11',
+}
+
+# 运行时 Report 难度缓存（session 级别），key = (unit_code, year, q_num)
+_report_difficulty_cache: dict[tuple, int] = {}
+_report_cache_lock = __import__('threading').Lock()
+
+
+def _score_difficulty_report(text: str) -> int:
+    """
+    基于 Examiner Report 单题段落文字，返回 1-5★ 难度。
+    加权关键词评分后映射到 1-5。
+    """
+    t = text.lower()
+    score = 0
+
+    # ── 极难信号 ──
+    if re.search(r'modal (score|mark) (was|of) 0\b', t):    score += 8
+    if 'modal score of zero' in t:                           score += 8
+    if 'attrition' in t:                                     score += 5
+    if 'most challenging' in t:                              score += 4
+    if 'challenging end to the paper' in t:                  score += 4
+    if 'blank responses' in t:                               score += 2
+
+    # ── 较难信号 ──
+    if 'proved to be quite a challenging' in t:              score += 3
+    if 'challenging for many' in t:                          score += 3
+    if 'discriminated well' in t:                            score += 2
+    if 'discriminating marks' in t:                          score += 2
+    if 'more challenging' in t:                              score += 2
+    if 'accuracy marks more demanding' in t:                 score += 3
+    if 'accuracy marks' in t and 'demanding' in t:           score += 1
+    if 'more mixed' in t or 'mixed success' in t:            score += 2
+    if 'only a minority' in t:                               score += 2
+    if 'very few were able to achieve full' in t:            score += 2
+    if 'few students were able' in t:                        score += 2
+    if 'considerable number' in t and 'left it blank' in t:  score += 3
+    if 'good discriminator' in t or 'a good source of discriminat' in t:
+                                                             score += 2
+
+    # ── 简单信号 ──
+    if 'largely accessible' in t:                            score -= 1
+    if 'accessible to most students' in t:                   score -= 2
+    if 'accessible to most' in t and 'accessible to most students' not in t:
+                                                             score -= 1
+    if 'access into all parts' in t:                         score -= 1
+    if 'most accessible question' in t:                      score -= 3
+    if 'well answered by most' in t:                         score -= 4
+    if 'generally well answered' in t:                       score -= 3
+    if 'well answered' in t and 'generally well answered' not in t:
+                                                             score -= 2
+    if 'most students scored full marks' in t:               score -= 3
+    if 'most gained full marks' in t:                        score -= 3
+    if 'most students gained full marks' in t:               score -= 3
+    if 'straightforward' in t:                               score -= 3
+    if 'familiar topic' in t:                                score -= 2
+    if 'most students correctly' in t:                       score -= 2
+    if 'most students were able' in t:                       score -= 1
+    if 'majority were able' in t:                            score -= 1
+    if 'majority were successful' in t:                      score -= 1
+    if 'more accessible question' in t:                      score -= 2
+    if 'most accessible' in t and 'most accessible question' not in t:
+                                                             score -= 3
+    if 'routine' in t:                                       score -= 1
+    if 'good source of marks' in t:                          score -= 1
+    if 'friendly starter' in t or 'good start' in t:        score -= 2
+    if 'opening question' in t and 'success' in t:           score -= 1
+
+    # 映射
+    if   score >= 7:  return 5
+    elif score >= 4:  return 4
+    elif score >= 1:  return 3
+    elif score >= -1: return 2
+    else:             return 1
+
+
+def extract_difficulty_from_report(doc) -> dict[int, int] | None:
+    """
+    解析 Examiner Report PDF，返回 {q_num: difficulty_1_to_5}。
+    若文档不像 Examiner Report 则返回 None。
+    """
+    full_text = ''
+    for i in range(min(12, doc.page_count)):
+        full_text += doc[i].get_text() + '\n'
+
+    # 必须含有 "Examiner" 或 "Report" 字样（报告特征）
+    if 'examiner' not in full_text.lower() and 'report' not in full_text.lower():
+        return None
+    # 必须含有 "Question" 段落
+    if not re.search(r'Question\s+\d', full_text, re.IGNORECASE):
+        return None
+
+    # 读取全文
+    full_text = ''
+    for i in range(doc.page_count):
+        full_text += doc[i].get_text() + '\n'
+
+    sections: dict[int, str] = {}
+    pat = re.compile(r'Question\s+(\d+)\s*\n', re.IGNORECASE)
+    matches = list(pat.finditer(full_text))
+    for idx, m in enumerate(matches):
+        q_num = int(m.group(1))
+        start = m.end()
+        end   = matches[idx + 1].start() if idx + 1 < len(matches) else len(full_text)
+        txt   = full_text[start:end].strip()
+        sections[q_num] = txt
+
+    if not sections:
+        return None
+
+    result = {}
+    for q_num, txt in sections.items():
+        result[q_num] = _score_difficulty_report(txt)
+    return result
 
 
 def rate_question_difficulty(q_num: int, year: int | None, source: str,
-                              maths_unit: str | None) -> int | None:
+                              maths_unit: str | None,
+                              unit_code: str | None = None) -> int | None:
     """
-    返回题目难度星级 1–5，或 None（非 WMA13/P3 时）。
+    返回题目难度星级 1–5，或 None（非 edexcel_maths 时）。
 
-    匹配优先级：
-      1. 精确匹配 (year, q_num)
-      2. 同 q_num 跨年平均（四舍五入）
-      3. 同年平均（兜底）
-      4. 全局 P3 平均 ≈ 3
+    查找优先级：
+      1. 运行时 Report 缓存（动态解析的）
+      2. 静态 _MATHS_DIFFICULTY_DB 精确匹配 (year, q_num)
+      3. 同 unit 同 q_num 跨年平均
+      4. 同 unit 同年平均
+      5. 全局 unit 平均 ≈ 3
     """
-    if source != 'edexcel_maths' or maths_unit != 'P3':
+    if source != 'edexcel_maths':
         return None
 
-    # 1. 精确匹配
-    if year and (year, q_num) in _P3_DIFFICULTY_DB:
-        return _P3_DIFFICULTY_DB[(year, q_num)]
+    # 推断 unit_code
+    if not unit_code and maths_unit:
+        unit_code = _MATHS_UNIT_TO_CODE.get(maths_unit)
 
-    # 2. 跨年 q_num 平均
-    if q_num in _P3_QNUM_AVG:
-        return max(1, min(5, round(_P3_QNUM_AVG[q_num])))
+    # 1. 运行时 Report 缓存
+    if unit_code and year:
+        with _report_cache_lock:
+            cached = _report_difficulty_cache.get((unit_code, year, q_num))
+        if cached is not None:
+            return cached
 
-    # 3. 同年平均
-    if year and year in _P3_YEAR_AVG:
-        return max(1, min(5, round(_P3_YEAR_AVG[year])))
+    # 2. 静态数据库精确匹配
+    db = _MATHS_DIFFICULTY_DB.get(unit_code or '', {})
+    if year and (year, q_num) in db:
+        return db[(year, q_num)]
 
-    # 4. 全局兜底
+    # 3. 同 unit 同 q_num 跨年平均
+    if unit_code and unit_code in _MATHS_DIFFICULTY_DB:
+        vals = [v for (y, q), v in _MATHS_DIFFICULTY_DB[unit_code].items() if q == q_num]
+        if vals:
+            return max(1, min(5, round(sum(vals) / len(vals))))
+
+    # 4. 同 unit 同年平均
+    if unit_code and year and unit_code in _MATHS_DIFFICULTY_DB:
+        vals = [v for (y, q), v in _MATHS_DIFFICULTY_DB[unit_code].items() if y == year]
+        if vals:
+            return max(1, min(5, round(sum(vals) / len(vals))))
+
+    # 5. 全局兜底（edexcel maths 题目普遍中等）
     return 3
+
+
 
 
 def _extract_year_from_filename(filename: str) -> int | None:
@@ -1905,6 +2076,15 @@ def _is_markscheme_filename(filename: str) -> bool:
     return ('markscheme' in fn or 'mark_scheme' in fn or
             'mark scheme' in fn or '_ms_' in fn or
             fn.endswith('_ms.pdf') or '-ms-' in fn or '-ms.' in fn)
+
+
+def _is_examiner_report_filename(filename: str) -> bool:
+    """判断文件名是否为 Examiner Report（支持多种命名格式）"""
+    fn = filename.lower()
+    return ('examinerreport' in fn or 'examiner_report' in fn or
+            'examiner report' in fn or '_er_' in fn or
+            '-er-' in fn or 'examinersreport' in fn or
+            'examiners_report' in fn)
 
 
 def _extract_unit_from_filename(filename: str) -> str | None:
@@ -2296,9 +2476,10 @@ def upload_multi():
     paper_type_hint = request.form.get('paper_type', 'auto')
     session_id = str(uuid.uuid4())
 
-    # ── 第一遍：保存所有文件，分类为 QP 和 MS ──
+    # ── 第一遍：保存所有文件，分类为 QP、MS 和 Examiner Report ──
     qp_groups   = []   # 正常题目卷
     ms_registry = []   # Mark Scheme 信息列表
+    er_registry = []   # Examiner Report 信息列表（用于难度填充）
 
     for file in files:
         if not file.filename or not allowed_file(file.filename):
@@ -2309,7 +2490,8 @@ def upload_multi():
         r2_key = f'multi/{session_id}_{safe}'
         storage.upload_from_local(tmp_path, r2_key)
 
-        is_ms = _is_markscheme_filename(file.filename)
+        is_ms     = _is_markscheme_filename(file.filename)
+        is_report = _is_examiner_report_filename(file.filename)
 
         try:
             doc = fitz.open(tmp_path)
@@ -2324,6 +2506,34 @@ def upload_multi():
                 # 先从文件名取 unit（更可靠），fallback 到内容检测
                 maths_unit = (_extract_unit_from_filename(file.filename) or
                               detect_edexcel_maths_unit(doc))
+
+            # ── Task 2/1: Examiner Report 处理 ──
+            if is_report:
+                er_fn_unit = _extract_unit_from_filename(file.filename)
+                er_unit    = er_fn_unit or maths_unit
+                er_year    = _extract_year_from_filename(file.filename)
+                # 尝试解析难度
+                try:
+                    diff_map = extract_difficulty_from_report(doc)
+                    if diff_map:
+                        er_code = _MATHS_UNIT_TO_CODE.get(er_unit or '', '')
+                        if er_code and er_year:
+                            with _report_cache_lock:
+                                for q_num, diff in diff_map.items():
+                                    _report_difficulty_cache[(er_code, er_year, q_num)] = diff
+                            er_registry.append({
+                                'filename': file.filename,
+                                'unit':     er_unit,
+                                'code':     er_code,
+                                'year':     er_year,
+                                'diff_map': diff_map,
+                            })
+                            print(f'[upload] ER parsed: {file.filename} unit={er_unit} year={er_year} '
+                                  f'Q={sorted(diff_map.keys())} diffs={list(diff_map.values())}')
+                except Exception as e:
+                    print(f'[upload] ER parse error {file.filename}: {e}')
+                doc.close()
+                continue  # Report 不加入 qp_groups
 
             if is_ms:
                 # Mark Scheme：若文件名含 Edexcel Maths 单元代码，强制使用 edexcel_maths 类型
@@ -2361,6 +2571,7 @@ def upload_multi():
                         q['topics'] = []
                     q['difficulty'] = None
             elif source == 'edexcel_maths':
+                unit_code = _MATHS_UNIT_TO_CODE.get(maths_unit or '', None)
                 for q_idx, q in enumerate(questions):
                     try:
                         txt = _extract_question_text(doc, questions, q_idx, pt)
@@ -2373,7 +2584,8 @@ def upload_multi():
                     q_num = q.get('q_num') or (q_idx + 1)
                     q['difficulty'] = rate_question_difficulty(
                         q_num=q_num, year=paper_year,
-                        source=source, maths_unit=maths_unit
+                        source=source, maths_unit=maths_unit,
+                        unit_code=unit_code
                     )
             else:
                 for q in questions:
