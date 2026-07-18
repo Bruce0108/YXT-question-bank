@@ -4013,21 +4013,30 @@ async function doCloudSave() {
   const selQ = getSelectedQuestions();
   if (!selQ || selQ.length === 0) { toast('无选中题目', 'err'); return; }
 
+  // 构建 Cambridge parent_id → topic title 的映射表（用于 autoT1）
+  const camTopicTitleMap = {};
+  if (syllabus && syllabus.topics) {
+    syllabus.topics.forEach(t => {
+      camTopicTitleMap[String(t.id)] = t.title;
+    });
+  }
+
   // 构建 payload（为每题附加云端题库分类信息）
   const questions = selQ.map(q => {
     // 从题目已有 topics 提取一级/二级标题
     // edexcel_maths: topics[0] = {id:'P3-1', title:'Algebraic Methods', score:4}
     //   → topic1 = 'Algebraic Methods', topic2 = 'Algebraic Methods'（章节级，无二级细分）
-    // cambridge: topics[0] = {id:'P3-1.1', title:'...', parent_id:'P3-1'}
-    //   → topic1 = parent_id mapped title, topic2 = title
+    // cambridge: topics[0] = {id:'1.1', title:'Physical quantities', parent_id:'1'}
+    //   → topic1 = '1' → 查表 → 'Physical quantities and units', topic2 = 'Physical quantities'
     let autoT1 = '未分类', autoT2 = '通用';
     if (q.topics && q.topics.length > 0) {
       const t0 = q.topics[0];
       const tId = t0.id || '';
       if (t0.parent_id) {
-        // Cambridge 结构：parent_id 是一级，id 是二级
-        autoT1 = t0.parent_id || '未分类';
-        autoT2 = t0.title || '通用';
+        // Cambridge 结构：parent_id 是一级编号 → 查 syllabus 得到 title
+        const parentTitle = camTopicTitleMap[String(t0.parent_id)] || t0.parent_id;
+        autoT1 = parentTitle;
+        autoT2 = t0.title || autoT1;
       } else if (tId.match(/^[A-Z0-9]+-\d+$/)) {
         // Edexcel 章节 ID（如 P3-1, M1-2, S1-4）→ 直接用 title 作为 topic1
         autoT1 = t0.title || tId;

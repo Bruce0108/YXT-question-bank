@@ -994,10 +994,13 @@ def _is_answer_writing_page(page):
     这类页面在导出时应跳过，不应出现在题册 PDF 中。
 
     判断依据（满足任意一条即为答题页）：
-    1. 页面文字极少（< 30 字符），且页面上有大量横线/矩形线条
-    2. 文字中包含 'BLANK PAGE' / 'This page is intentionally left blank'
-    3. 页面有效内容（去除页眉页脚后）几乎全是横线（下划线字符）
-    4. 有效文字块均为页码/版权/DO NOT WRITE，没有实质题目内容
+    1. 页面文字包含 'BLANK PAGE' / 'THIS PAGE IS INTENTIONALLY LEFT BLANK'
+    2. 去除页眉页脚/DO NOT WRITE/题目继续提示后，有效内容极少（≤15字符）
+       且有3条以上横线绘制路径
+    3. 有效内容极少（≤8字符）即视为空白页
+    4. Edexcel Maths 答题续页特征：仅有 "Question N continued" + 大量横线
+
+    注意：首页（包含题目编号）永远不应被本函数判为答题页（调用方保证）。
     """
     try:
         text_raw = page.get_text().strip()
@@ -1023,7 +1026,14 @@ def _is_answer_writing_page(page):
         return False
 
     SKIP_RE = re.compile(
-        r'^(DO NOT WRITE|Turn over|©|UCLES|\d{1,4}$|9702/|\*P|\s*$)',
+        r'^(DO NOT WRITE|Turn over|©|UCLES|\d{1,4}$|9702/|\*P|P\d{4,}[A-Z]|WMA\d|[A-Z]{2,4}\d{4,}|\s*$)',
+        re.IGNORECASE
+    )
+    # Edexcel Maths 续页提示文字不算有效题目内容
+    CONTINUE_RE = re.compile(
+        r'^(question\s+\d+\s+continued|total\s+for\s+question|answer\s+space|'
+        r'answer\s+in\s+the\s+space|write\s+your\s+answer|leave\s+blank|'
+        r'additional\s+(answer\s+)?space)',
         re.IGNORECASE
     )
     real_content_chars = 0
@@ -1040,6 +1050,8 @@ def _is_answer_writing_page(page):
         if not ts:
             continue
         if SKIP_RE.match(ts):
+            continue
+        if CONTINUE_RE.match(ts):
             continue
         # 统计横线字符
         clean = ts.replace(' ', '').replace('\n', '').replace('\t', '')
@@ -1722,22 +1734,31 @@ _MATHS_CHAPTER_RULES = [
                r'r\^2','r\^3','summation','sigma'], []),
     ('FP1-8', ['proof by induction','induction','base case','inductive step',
                'assume.*true for n=k','true for n=k+1'], []),
-    # ── FP2 ──
+    # ── FP2 ── (对齐 syllabus_edexcel_maths.json: FP2-1..FP2-8)
     ('FP2-1', ['inequalities','inequality.*algebraic','modulus inequality',
                'rational inequality'], []),
     ('FP2-2', ['series','method of differences','partial fractions.*series'], []),
     ('FP2-3', ['complex number.*further','de moivre','nth roots of unity',
                "exponential form","euler","e^{i","modulus-argument form","locus.*complex"], []),
-    ('FP2-4', ['first order differential equation','integrating factor',
-               'separable','exact equation'], []),
-    ('FP2-5', ['second order differential equation','complementary function',
-               'particular integral','auxiliary equation'], []),
-    ('FP2-6', ['maclaurin series','taylor series','power series expansion',
+    # FP2-4: Further Argand Diagrams (loci in complex plane, transformations)
+    ('FP2-4', ['argand diagram','loci.*complex plane','complex.*locus',
+               'half-line','circle.*complex','|z - a|','arg(z','z - z1',
+               'perpendicular bisector.*complex','transformation.*complex'], []),
+    # FP2-5: First-Order Differential Equations
+    ('FP2-5', ['first order differential equation','first-order differential',
+               'integrating factor','separable differential','exact equation',
+               'dy/dx.*y','first order.*ode'], []),
+    # FP2-6: Second-Order Differential Equations
+    ('FP2-6', ['second order differential equation','second-order differential',
+               'complementary function','particular integral','auxiliary equation',
+               'd²y/dx²','second order.*ode'], []),
+    # FP2-7: Maclaurin and Taylor Series
+    ('FP2-7', ['maclaurin series','taylor series','power series expansion',
                'series expansion'], []),
-    ('FP2-7', ['polar coordinate','polar curve','area.*polar',
-               'r = f(theta)','cardioid','rose curve'], []),
-    ('FP2-8', ['hyperbolic','sinh','cosh','tanh','sech','cosech','coth',
-               'osborn','inverse hyperbolic','arsinh','arcosh'], []),
+    # FP2-8: Polar Coordinates
+    ('FP2-8', ['polar coordinate','polar curve','area.*polar',
+               'r = f(theta)','cardioid','rose curve',
+               'convert.*polar','polar.*cartesian'], []),
     # ── M1 ──
     ('M1-1', ['model','particle','rigid body','smooth','rough','light','inextensible',
               'assumption','mathematical model'], []),
@@ -1758,20 +1779,31 @@ _MATHS_CHAPTER_RULES = [
               'concurrent','resolve.*equilibrium'], []),
     ('M1-8', ['moment','torque','couple','turning effect','clockwise',
               'anticlockwise','beam','uniform rod'], []),
-    # ── M2 ──
+    # ── M2 ── (对齐 syllabus_edexcel_maths.json: M2-1..M2-6)
     ('M2-1', ['projectile','horizontal component','vertical component',
               'trajectory','range.*projectile','maximum height',
               'time of flight'], []),
-    ('M2-2', ['centre of mass','centroid','composite body',
-              'lamina','uniform','non-uniform'], []),
-    ('M2-3', ['work done','energy','kinetic energy','potential energy',
+    # M2-2: Variable Acceleration (using calculus/integration in kinematics)
+    ('M2-2', ['variable acceleration','acceleration.*function of time',
+              'v = ds/dt','a = dv/dt','integrate.*velocity','differentiate.*displacement',
+              'x = \\int v','v = \\int a','acceleration varies','non-constant acceleration'], []),
+    # M2-3: Centres of Mass
+    ('M2-3', ['centre of mass','centroid','composite body',
+              'lamina','uniform.*lamina','non-uniform','center of mass',
+              'centre of gravity','suspended'], []),
+    # M2-4: Work and Energy
+    ('M2-4', ['work done','energy','kinetic energy','potential energy',
               'conservation of energy','power','work-energy theorem',
-              'joule','watt'], []),
-    ('M2-4', ['elastic string','elastic collision','coefficient of restitution',
-              'hooke.*law','natural length','extension','modulus of elasticity'], []),
-    ('M2-5', ['circular motion','centripetal','angular velocity','angular speed',
-              'conical pendulum','banked road','omega'], []),
-    ('M2-6', ['statics.*rigid body','toppling','sliding','tilting'], []),
+              'joule','watt','gravitational pe','elastic pe'], []),
+    # M2-5: Impulses and Collisions (includes coefficient of restitution, elastic)
+    ('M2-5', ['impulse','coefficient of restitution','elastic collision',
+              'inelastic collision','hooke.*law','natural length',
+              'elastic string','modulus of elasticity','extension',
+              'i = mv - mu','conservation of momentum','collision'], []),
+    # M2-6: Statics of Rigid Bodies
+    ('M2-6', ['statics.*rigid body','toppling','sliding','tilting',
+              'rigid body.*equilibrium','centre of mass.*equilibrium',
+              'overturning','limiting equilibrium.*rod'], []),
     # ── S1 ──
     ('S1-1', ['mathematical model','statistical model','population','sample',
               'assumption.*model'], []),
@@ -1790,22 +1822,30 @@ _MATHS_CHAPTER_RULES = [
               'discrete uniform'], []),
     ('S1-7', ['normal distribution','standard normal','z-score','phi','z table',
               'standardise','n(mu,sigma','symmetry.*normal'], []),
-    # ── S2 ──
+    # ── S2 ── (对齐 syllabus_edexcel_maths.json: S2-1..S2-7)
     ('S2-1', ['binomial distribution','b(n,p)','binomial probability',
               'number of successes','bernoulli'], []),
     ('S2-2', ['poisson distribution','po(lambda)','poisson probability',
               'mean = variance','rare event'], []),
-    ('S2-3', ['continuous random variable','probability density function','pdf',
-              'f(x)','cumulative distribution function','cdf','f(x) = 0 outside'], []),
-    ('S2-4', ['continuous uniform distribution','rectangular distribution',
-              'uniform over','u(a,b)'], []),
-    ('S2-5', ['normal approximation','continuity correction','approximate.*normal',
-              'np > 5','approximate.*poisson'], []),
-    ('S2-6', ['hypothesis test','null hypothesis','alternative hypothesis',
+    # S2-3: Approximations (normal approx to binomial/poisson)
+    ('S2-3', ['normal approximation','continuity correction','approximate.*normal',
+              'approximate.*binomial','approximate.*poisson',
+              'np > 5','nq > 5','large n'], []),
+    # S2-4: Continuous Random Variables
+    ('S2-4', ['continuous random variable','probability density function','pdf',
+              'f(x)','cumulative distribution function','cdf',
+              'f(x) = 0 outside','p(x < ','p(x > '], []),
+    # S2-5: Continuous Uniform Distribution
+    ('S2-5', ['continuous uniform distribution','rectangular distribution',
+              'uniform over','u(a,b)','uniform distribution'], []),
+    # S2-6: Sampling and Sampling Distributions
+    ('S2-6', ['sampling distribution','central limit theorem','distribution of sample mean',
+              'unbiased estimator','sample variance','estimation',
+              'confidence interval','point estimate'], []),
+    # S2-7: Hypothesis Testing
+    ('S2-7', ['hypothesis test','null hypothesis','alternative hypothesis',
               'h_0','h_1','significance level','critical region',
               'p-value','test statistic','one-tailed','two-tailed'], []),
-    ('S2-7', ['estimation','unbiased estimator','sample mean',
-              'sample variance','confidence interval','central limit theorem'], []),
     # ── D1 ──
     ('D1-1', ['algorithm','flow chart','bubble sort','quick sort','bin packing',
               'first fit','full bin','order of algorithm','complexity'], []),
@@ -4369,6 +4409,18 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
             page   = src_doc[pg_i]
             pw, ph = page.rect.width, page.rect.height
 
+            # Task4-edexcel_maths: 跳过答题页（纯横线页/空白页）
+            # 首页（pg_start）必须保留（含题目），尾页也保留（含 marks 截断逻辑）
+            if pg_i != pg_start and pg_i != pg_end:
+                if _is_answer_writing_page(page):
+                    continue
+            # 尾页若是答题页（当前题 marks 结束后全是横线）
+            # → _find_edexcel_maths_question_bottom 会截到 marks，不含横线，无需额外跳过
+            # 但若尾页完全是答题页（没有任何 marks）→ 跳过
+            if pg_i == pg_end and pg_i != pg_start:
+                if _is_answer_writing_page(page):
+                    continue
+
             # 横向裁剪：左避开边框线，右检测内容边界
             left  = 42
             right = min(pw - 36, 560)
@@ -6206,11 +6258,17 @@ def cloud_library_save_questions():
                 t0_title = t0.get('title', '')
                 parent_id = t0.get('parent_id', '')
                 if parent_id:
-                    # Cambridge 结构：parent_id 是一级
-                    topic1 = parent_id
+                    # Cambridge 结构：parent_id 是数字编号 → 查 syllabus 得到人类可读 title
+                    cam_syl = _load_syllabus()
+                    cam_title_map = {}
+                    if cam_syl:
+                        for _t in cam_syl.get('topics', []):
+                            cam_title_map[str(_t.get('id', ''))] = _t.get('title', '')
+                    parent_title = cam_title_map.get(str(parent_id), str(parent_id))
+                    topic1 = parent_title
                     topic2 = t0_title or topic1
                 elif re.match(r'^[A-Z0-9]+-\d+$', t0_id):
-                    # Edexcel 章节 ID（P3-1, M1-2 等）→ 用 title 做 topic1
+                    # Edexcel 章节 ID（P3-1, M1-2 等）→ 用 title 做 topic1（title 已从 JSON 反查）
                     topic1 = t0_title or t0_id
                     topic2 = t0_title or t0_id
                 else:
