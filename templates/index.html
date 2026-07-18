@@ -801,6 +801,16 @@
         </div>
       </div>
 
+      <!-- Paper 选择（动态加载，仅有多个 paper 时显示） -->
+      <div id="ciPaperWrap" style="margin-bottom:14px;display:none">
+        <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:6px">
+          📄 Paper（单选，不选则导入全部 Paper）
+        </label>
+        <div id="ciPapers" style="display:flex;flex-wrap:wrap;gap:6px;min-height:32px;padding:4px;background:var(--g50);border-radius:6px;border:1px solid var(--g200)">
+          <span style="color:var(--g400);font-size:12px;padding:4px">⏳ 加载中...</span>
+        </div>
+      </div>
+
       <!-- 年份（多选，动态加载） -->
       <div style="margin-bottom:14px">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:6px">
@@ -4053,14 +4063,18 @@ function closeModal(id) {
 //  从云端图库导入
 // ══════════════════════════════════════════════════════════
 let _ciBoard = '';
+let _ciPaper = '';          // Task 3: 选中的 paper（如 P1/P2/P3/M1 等）
 let _ciYearsSelected = new Set();
 
 function openCloudImportDialog() {
   _ciBoard = '';
+  _ciPaper = '';
   _ciYearsSelected.clear();
   // 重置UI
   document.querySelectorAll('#ciBoards .cloud-board-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('ciSubject').value = '';
+  document.getElementById('ciPaperWrap').style.display = 'none';
+  document.getElementById('ciPapers').innerHTML = '<span style="color:var(--g400);font-size:12px;padding:4px">⏳ 加载中...</span>';
   document.getElementById('ciYears').innerHTML = '<span style="color:var(--g400);font-size:12px;padding:4px">先选择学科和考试局</span>';
   document.getElementById('ciCountHint').style.display = 'none';
   document.getElementById('ciProgWrap').style.display = 'none';
@@ -4072,6 +4086,67 @@ function ciSelectBoard(btn) {
   document.querySelectorAll('#ciBoards .cloud-board-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   _ciBoard = btn.dataset.board;
+  // Task 3: 先加载 papers，再由 paper 选择触发年份加载
+  loadCloudImportPapers();
+}
+
+// Task 3: 加载可选 papers
+async function loadCloudImportPapers() {
+  const subject = document.getElementById('ciSubject').value;
+  if (!subject || !_ciBoard) return;
+
+  _ciPaper = '';
+  _ciYearsSelected.clear();
+  document.getElementById('ciYears').innerHTML = '<span style="color:var(--g400);font-size:12px;padding:4px">请先选择 Paper</span>';
+  document.getElementById('ciCountHint').style.display = 'none';
+
+  const papersWrap = document.getElementById('ciPaperWrap');
+  const papersEl   = document.getElementById('ciPapers');
+  papersWrap.style.display = 'block';
+  papersEl.innerHTML = '<span style="color:var(--g400);font-size:12px;padding:4px">⏳ 加载 Paper...</span>';
+
+  try {
+    const r = await fetch(`/api/cloud_library/papers?subject=${encodeURIComponent(subject)}&board=${encodeURIComponent(_ciBoard)}`);
+    const d = await r.json();
+    const papers = d.papers || [];
+
+    if (papers.length === 0) {
+      // 没有 paper 分类数据，直接加载年份（兼容旧数据）
+      papersWrap.style.display = 'none';
+      loadCloudImportYears();
+      return;
+    }
+
+    if (papers.length === 1) {
+      // 只有一个 paper，自动选中，直接加载年份
+      _ciPaper = papers[0];
+      papersEl.innerHTML = papers.map(p =>
+        `<button class="cloud-board-btn active" data-paper="${p}" onclick="ciSelectPaper(this)"
+          style="padding:4px 14px;font-size:12px;font-weight:700">${p}</button>`
+      ).join('');
+      loadCloudImportYears();
+      return;
+    }
+
+    // 多个 paper：渲染选择按钮 + "全部" 选项
+    papersEl.innerHTML =
+      `<button class="cloud-board-btn" data-paper="" onclick="ciSelectPaper(this)"
+        style="padding:4px 14px;font-size:12px">全部</button>` +
+      papers.map(p =>
+        `<button class="cloud-board-btn" data-paper="${p}" onclick="ciSelectPaper(this)"
+          style="padding:4px 14px;font-size:12px;font-weight:700">${p}</button>`
+      ).join('');
+
+  } catch(e) {
+    papersEl.innerHTML = `<span style="color:#dc2626;font-size:12px;padding:4px">加载失败: ${e.message}</span>`;
+  }
+}
+
+// Task 3: 选中 paper 后触发年份加载
+function ciSelectPaper(btn) {
+  document.querySelectorAll('#ciPapers .cloud-board-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _ciPaper = btn.dataset.paper;
   loadCloudImportYears();
 }
 
@@ -4084,7 +4159,11 @@ async function loadCloudImportYears() {
   _ciYearsSelected.clear();
 
   try {
-    const r = await fetch(`/api/cloud_library/years?subject=${encodeURIComponent(subject)}&board=${encodeURIComponent(_ciBoard)}`);
+    // Task 3: 传入 maths_unit 参数，过滤对应 paper 的年份
+    let url = `/api/cloud_library/years?subject=${encodeURIComponent(subject)}&board=${encodeURIComponent(_ciBoard)}`;
+    if (_ciPaper) url += `&maths_unit=${encodeURIComponent(_ciPaper)}`;
+
+    const r = await fetch(url);
     const d = await r.json();
     const years = d.years || [];
 
@@ -4152,10 +4231,14 @@ async function doCloudImport() {
   document.getElementById('ciProgTxt').textContent = '正在从云端加载题目...';
 
   try {
+    // Task 3: 加入 maths_unit 过滤
+    const body = { subject, board: _ciBoard, years };
+    if (_ciPaper) body.maths_unit = _ciPaper;
+
     const r = await fetch('/api/cloud_library/import_to_session', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ subject, board: _ciBoard, years })
+      body: JSON.stringify(body)
     });
     const d = await r.json();
 
@@ -4189,7 +4272,7 @@ async function doCloudImport() {
         gIdx:       baseGIdx,
         source:     'cloud',
         paper_type: grpData.paper_type,
-        maths_unit: null,
+        maths_unit: q.maths_unit || null,
         exam_date:  q.exam_date || '',
         _img_b64:   q.img_bytes_b64 || '',
       });
@@ -4207,7 +4290,9 @@ async function doCloudImport() {
     renderGrid();
     renderStats();
 
-    toast(`☁️ 已从云端导入 ${d.total_questions} 道题目（${subject} / ${_ciBoard}）`, 'ok');
+    // Task 3: toast 显示 paper 信息
+    const paperLabel = _ciPaper ? ` / ${_ciPaper}` : '';
+    toast(`☁️ 已从云端导入 ${d.total_questions} 道题目（${subject} / ${_ciBoard}${paperLabel}）`, 'ok');
 
     setTimeout(() => closeModal('cloudImportMo'), 1200);
   } catch(e) {

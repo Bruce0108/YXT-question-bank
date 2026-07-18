@@ -6070,20 +6070,45 @@ def cloud_library_push_from_session():
 
 
 # ── API: 获取云端题库可用年份列表 ──
+@app.route('/api/cloud_library/papers', methods=['GET'])
+def cloud_library_papers():
+    """
+    返回云端题库中指定学科+考试局下所有 paper（maths_unit）的列表。
+    可选参数：subject, board
+    返回：{papers: ['P1','P2','P3',...]} 按字母排序
+    """
+    subject = request.args.get('subject', '')
+    board   = request.args.get('board', '')
+
+    all_keys = _list_cloud_questions(subject, board, '', '')
+    papers = set()
+    for key in all_keys:
+        q = _load_cloud_question(key)
+        if q:
+            mu = q.get('maths_unit', '')
+            if mu:
+                papers.add(mu)
+    return jsonify({'papers': sorted(papers)})
+
+
 @app.route('/api/cloud_library/years', methods=['GET'])
 def cloud_library_years():
     """
     返回云端题库中所有题目涉及的年份列表（从 exam_date 中提取）。
-    可选参数：subject, board
+    可选参数：subject, board, maths_unit
     """
-    subject = request.args.get('subject', '')
-    board   = request.args.get('board', '')
+    subject    = request.args.get('subject', '')
+    board      = request.args.get('board', '')
+    maths_unit = request.args.get('maths_unit', '')
 
     all_keys = _list_cloud_questions(subject, board, '', '')
     years = set()
     for key in all_keys:
         q = _load_cloud_question(key)
         if q:
+            # Task 3: 按 maths_unit 过滤
+            if maths_unit and q.get('maths_unit', '') != maths_unit:
+                continue
             exam_date = q.get('exam_date', '')
             if exam_date:
                 # 从 "October 2023" / "2023" / "2023-10" 等格式提取年份
@@ -6098,15 +6123,16 @@ def cloud_library_years():
 @app.route('/api/cloud_library/import_to_session', methods=['POST'])
 def cloud_library_import_to_session():
     """
-    按学科、考试局、年份筛选云端题目，返回一个新 session_id 供后续操作。
-    请求体：{subject, board, years: [str] (空=全部)}
+    按学科、考试局、paper(maths_unit)、年份筛选云端题目，返回一个新 session_id 供后续操作。
+    请求体：{subject, board, maths_unit (可选), years: [str] (空=全部)}
     返回：{session_id, groups, total_questions}
     """
     import base64 as _b64
-    data    = request.json or {}
-    subject = data.get('subject', '')
-    board   = data.get('board', '')
-    years   = data.get('years', [])   # 空列表 = 全部年份
+    data       = request.json or {}
+    subject    = data.get('subject', '')
+    board      = data.get('board', '')
+    maths_unit = data.get('maths_unit', '')   # Task 3: paper 过滤
+    years      = data.get('years', [])         # 空列表 = 全部年份
 
     if not subject or not board:
         return jsonify({'error': '必须提供 subject 和 board'}), 400
@@ -6115,11 +6141,14 @@ def cloud_library_import_to_session():
     if not all_keys:
         return jsonify({'error': f'云端题库中没有 {subject} / {board} 的题目'}), 404
 
-    # 过滤年份
+    # 过滤 maths_unit + 年份
     selected_qs = []
     for key in all_keys:
         q = _load_cloud_question(key)
         if not q:
+            continue
+        # Task 3: 按 paper 过滤
+        if maths_unit and q.get('maths_unit', '') != maths_unit:
             continue
         if years:
             exam_date = str(q.get('exam_date', ''))
