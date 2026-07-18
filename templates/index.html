@@ -346,10 +346,15 @@
   /* level 3: topic1 */
   .cloud-tree-row.lvl3{padding-left:28px}
   .cloud-tree-row.lvl3 .ctr-label{font-size:11px;font-weight:500;color:#4b5563}
-  /* level 4: topic2 */
+  /* level 4: topic1 */
   .cloud-tree-row.lvl4{padding-left:42px}
-  .cloud-tree-row.lvl4 .ctr-label{font-size:11px;font-weight:400;color:#6b7280}
+  .cloud-tree-row.lvl4 .ctr-label{font-size:11px;font-weight:500;color:#4b5563}
   .cloud-tree-row.lvl4.active .ctr-label{font-weight:600}
+  /* level 5: topic2 */
+  .cloud-tree-row.lvl5{padding-left:56px}
+  .cloud-tree-row.lvl5 .ctr-label{font-size:11px;font-weight:400;color:#6b7280}
+  .cloud-tree-row.lvl5.active{background:#eff6ff;color:var(--blue)}
+  .cloud-tree-row.lvl5.active .ctr-label{font-weight:600}
 
   /* Cloud Q Card */
   .cloud-qcard{background:#fff;border:1.5px solid var(--g200);border-radius:10px;overflow:hidden;cursor:pointer;transition:all .2s;box-shadow:var(--sh);position:relative}
@@ -2961,6 +2966,8 @@ async function confirmSaveLib() {
         entry.img_w         = q._img_w || 0;
         entry.img_h         = q._img_h || 0;
       }
+      // Task1: 保存答案图片
+      if (q.answer_b64) entry.answer_b64 = q.answer_b64;
       return entry;
     });
 
@@ -3532,7 +3539,7 @@ async function refreshCloudStats() {
 
 // ── 目录树数据 ──
 let _cloudTreeData = null;
-let _cloudActivePath = {}; // {subject, board, topic1, topic2}
+let _cloudActivePath = {}; // {subject, board, paper, topic1, topic2}
 let _cloudQPage = 1;
 let _cloudQTotal = 0;
 let _cloudAllQuestions = []; // 本次加载的全部题目
@@ -3591,27 +3598,41 @@ function renderCloudTree(data, filterText) {
         </div>
         <div class="cloud-tree-children ${boardOpen ? 'open' : ''}">`;
 
-      for (const t1 of (board.topics || [])) {
-        const t1Open = boardOpen && _cloudActivePath.topic1 === t1.name;
+      for (const paper of (board.papers || [])) {
+        if (!paper.count && !filterText) continue;
+        const paperOpen = boardOpen && _cloudActivePath.paper === paper.name;
         html += `<div class="cloud-tree-item">
-          <div class="cloud-tree-row lvl3" onclick="cloudTreeClick('topic1','${esc(subj.name)}','${esc(board.name)}','${esc(t1.name)}')">
-            <span class="ctr-chev ${t1Open ? 'open' : ''}">▶</span>
-            <span class="ctr-ico">📌</span>
-            <span class="ctr-label">${esc(t1.name)}</span>
-            <span class="ctr-cnt">${t1.count}</span>
+          <div class="cloud-tree-row lvl3" onclick="cloudTreeClick('paper','${esc(subj.name)}','${esc(board.name)}','${esc(paper.name)}')">
+            <span class="ctr-chev ${paperOpen ? 'open' : ''}">▶</span>
+            <span class="ctr-ico">📄</span>
+            <span class="ctr-label">${esc(paper.name)}</span>
+            <span class="ctr-cnt">${paper.count}</span>
           </div>
-          <div class="cloud-tree-children ${t1Open ? 'open' : ''}">`;
+          <div class="cloud-tree-children ${paperOpen ? 'open' : ''}">`;
 
-        for (const t2 of (t1.subtopics || [])) {
-          const t2Active = t1Open && _cloudActivePath.topic2 === t2.name;
-          html += `<div class="cloud-tree-row lvl4 ${t2Active ? 'active' : ''}"
-              onclick="cloudTreeClick('topic2','${esc(subj.name)}','${esc(board.name)}','${esc(t1.name)}','${esc(t2.name)}')">
-            <span class="ctr-ico">🔖</span>
-            <span class="ctr-label">${esc(t2.name)}</span>
-            <span class="ctr-cnt">${t2.count}</span>
-          </div>`;
+        for (const t1 of (paper.topics || [])) {
+          const t1Open = paperOpen && _cloudActivePath.topic1 === t1.name;
+          html += `<div class="cloud-tree-item">
+            <div class="cloud-tree-row lvl4" onclick="cloudTreeClick('topic1','${esc(subj.name)}','${esc(board.name)}','${esc(paper.name)}','${esc(t1.name)}')">
+              <span class="ctr-chev ${t1Open ? 'open' : ''}">▶</span>
+              <span class="ctr-ico">📌</span>
+              <span class="ctr-label">${esc(t1.name)}</span>
+              <span class="ctr-cnt">${t1.count}</span>
+            </div>
+            <div class="cloud-tree-children ${t1Open ? 'open' : ''}">`;
+
+          for (const t2 of (t1.subtopics || [])) {
+            const t2Active = t1Open && _cloudActivePath.topic2 === t2.name;
+            html += `<div class="cloud-tree-row lvl5 ${t2Active ? 'active' : ''}"
+                onclick="cloudTreeClick('topic2','${esc(subj.name)}','${esc(board.name)}','${esc(paper.name)}','${esc(t1.name)}','${esc(t2.name)}')">
+              <span class="ctr-ico">🔖</span>
+              <span class="ctr-label">${esc(t2.name)}</span>
+              <span class="ctr-cnt">${t2.count}</span>
+            </div>`;
+          }
+
+          html += `</div></div>`;
         }
-
         html += `</div></div>`;
       }
       html += `</div></div>`;
@@ -3623,7 +3644,7 @@ function renderCloudTree(data, filterText) {
 
 function checkTreeMatch(node, ft) {
   if (node.name && node.name.toLowerCase().includes(ft.toLowerCase())) return true;
-  for (const child of (node.boards || node.topics || node.subtopics || [])) {
+  for (const child of (node.boards || node.papers || node.topics || node.subtopics || [])) {
     if (checkTreeMatch(child, ft)) return true;
   }
   return false;
@@ -3638,8 +3659,8 @@ function esc(s) {
 }
 
 // ── 目录树点击：激活路径并加载题目 ──
-function cloudTreeClick(level, subject, board, topic1, topic2) {
-  _cloudActivePath = {subject, board, topic1, topic2};
+function cloudTreeClick(level, subject, board, paper, topic1, topic2) {
+  _cloudActivePath = {subject, board, paper, topic1, topic2};
   _cloudQPage = 1;
   _cloudDiffFilter = '';
   document.getElementById('cloudDiffFilter').value = '';
@@ -3648,30 +3669,31 @@ function cloudTreeClick(level, subject, board, topic1, topic2) {
   if (_cloudTreeData) renderCloudTree(_cloudTreeData, document.getElementById('cloudTreeSearch').value);
 
   // 更新面包屑
-  updateCloudBreadcrumb(level, subject, board, topic1, topic2);
+  updateCloudBreadcrumb(level, subject, board, paper, topic1, topic2);
 
   // 加载题目
-  loadCloudQuestions(subject, board, topic1 || '', topic2 || '', 1);
+  loadCloudQuestions(subject, board, paper || '', topic1 || '', topic2 || '', 1);
 }
 
-function updateCloudBreadcrumb(level, subject, board, topic1, topic2) {
+function updateCloudBreadcrumb(level, subject, board, paper, topic1, topic2) {
   const bc = document.getElementById('cloudBreadcrumb');
   let parts = [
     `<span class="cloud-bc-item" onclick="cloudBcClick(0)">☁️ 全部</span>`
   ];
   if (subject) parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(1,'${esc(subject)}')">${esc(subject)}</span>`);
   if (board)   parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(2,'${esc(subject)}','${esc(board)}')">${esc(board)}</span>`);
-  if (topic1)  parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(3,'${esc(subject)}','${esc(board)}','${esc(topic1)}')">${esc(topic1)}</span>`);
+  if (paper)   parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(3,'${esc(subject)}','${esc(board)}','${esc(paper)}')">${esc(paper)}</span>`);
+  if (topic1)  parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(4,'${esc(subject)}','${esc(board)}','${esc(paper)}','${esc(topic1)}')">${esc(topic1)}</span>`);
   if (topic2)  parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item active">${esc(topic2)}</span>`);
 
   bc.innerHTML = parts.join('');
 }
 
-function cloudBcClick(level, subject, board, topic1) {
+function cloudBcClick(level, subject, board, paper, topic1) {
   if (level === 0) { loadCloudAllOverview(); return; }
   cloudTreeClick(
-    ['', 'subject','board','topic1','topic2'][level] || 'subject',
-    subject, board, topic1
+    ['', 'subject','board','paper','topic1','topic2'][level] || 'subject',
+    subject, board, paper, topic1
   );
 }
 
@@ -3689,7 +3711,7 @@ async function loadCloudAllOverview() {
 }
 
 // ── 加载题目列表 ──
-async function loadCloudQuestions(subject, board, topic1, topic2, page) {
+async function loadCloudQuestions(subject, board, paper, topic1, topic2, page) {
   const grid = document.getElementById('cloudQGrid');
   grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--g400)"><div class="spin">⏳</div></div>';
   document.getElementById('cloudPagination').style.display = 'none';
@@ -3697,6 +3719,7 @@ async function loadCloudQuestions(subject, board, topic1, topic2, page) {
   const params = new URLSearchParams({
     subject, board, page: page || 1, per_page: 30
   });
+  if (paper)  params.set('maths_unit', paper);
   if (topic1) params.set('topic1', topic1);
   if (topic2) params.set('topic2', topic2);
 
@@ -3711,7 +3734,7 @@ async function loadCloudQuestions(subject, board, topic1, topic2, page) {
     document.getElementById('cloudQTotal').textContent = `共 ${_cloudQTotal} 题`;
 
     renderCloudQGrid(_cloudAllQuestions);
-    renderCloudPagination(d.page, d.pages, subject, board, topic1, topic2);
+    renderCloudPagination(d.page, d.pages, subject, board, paper, topic1, topic2);
   } catch(e) {
     grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:#dc2626">加载失败: ${e.message}</div>`;
   }
@@ -3747,8 +3770,9 @@ function renderCloudQGrid(questions) {
     const topicTags = (q.topics || []).slice(0, 2).map(t =>
       `<span class="cloud-qcard-tag" style="background:#e0f2fe;color:#0369a1;font-size:9px">${esc(t.title || t.id || '')}</span>`
     ).join('');
-    const dateTag = q.exam_date ? `<span class="cloud-qcard-tag" style="background:#fef3c7;color:#92400e">${esc(q.exam_date)}</span>` : '';
+    const dateTag  = q.exam_date   ? `<span class="cloud-qcard-tag" style="background:#fef3c7;color:#92400e">${esc(q.exam_date)}</span>` : '';
     const boardTag = `<span class="cloud-qcard-tag" style="background:#f3e8ff;color:#7c3aed">${esc(q.board || '')}</span>`;
+    const paperTag = q.maths_unit  ? `<span class="cloud-qcard-tag" style="background:#ecfdf5;color:#065f46;font-weight:600">${esc(q.maths_unit)}</span>` : '';
 
     return `<div class="cloud-qcard" data-qid="${q.qid}">
       <button class="cloud-qcard-del" onclick="deleteCloudQuestion('${q.qid}','${esc(q.subject||'')}','${esc(q.board||'')}','${esc(q.topic1||'')}','${esc(q.topic2||'')}',event)" title="删除此题">✕</button>
@@ -3757,6 +3781,7 @@ function renderCloudQGrid(questions) {
       <div class="cloud-qcard-body">
         <div class="cloud-qcard-meta">
           ${boardTag}
+          ${paperTag}
           <span class="cloud-qcard-tag" style="${diffStyle}">${diffText}</span>
           ${dateTag}
         </div>
@@ -3775,20 +3800,20 @@ function cloudFilterChange() {
   renderCloudQGrid(_cloudAllQuestions);
 }
 
-function renderCloudPagination(page, pages, subject, board, topic1, topic2) {
+function renderCloudPagination(page, pages, subject, board, paper, topic1, topic2) {
   const pg = document.getElementById('cloudPagination');
   if (pages <= 1) { pg.style.display = 'none'; return; }
   pg.style.display = 'flex';
 
   let html = '';
-  if (page > 1) html += `<button class="btn btn-outline btn-sm" onclick="loadCloudQuestions('${esc(subject)}','${esc(board)}','${esc(topic1||'')}','${esc(topic2||'')}',${page-1})">◀</button>`;
+  if (page > 1) html += `<button class="btn btn-outline btn-sm" onclick="loadCloudQuestions('${esc(subject)}','${esc(board)}','${esc(paper||'')}','${esc(topic1||'')}','${esc(topic2||'')}',${page-1})">◀</button>`;
   const start = Math.max(1, page - 2);
   const end   = Math.min(pages, page + 2);
   for (let p = start; p <= end; p++) {
     html += `<button class="btn btn-sm ${p===page?'btn-primary':'btn-outline'}"
-      onclick="loadCloudQuestions('${esc(subject)}','${esc(board)}','${esc(topic1||'')}','${esc(topic2||'')}',${p})">${p}</button>`;
+      onclick="loadCloudQuestions('${esc(subject)}','${esc(board)}','${esc(paper||'')}','${esc(topic1||'')}','${esc(topic2||'')}',${p})">${p}</button>`;
   }
-  if (page < pages) html += `<button class="btn btn-outline btn-sm" onclick="loadCloudQuestions('${esc(subject)}','${esc(board)}','${esc(topic1||'')}','${esc(topic2||'')}',${page+1})">▶</button>`;
+  if (page < pages) html += `<button class="btn btn-outline btn-sm" onclick="loadCloudQuestions('${esc(subject)}','${esc(board)}','${esc(paper||'')}','${esc(topic1||'')}','${esc(topic2||'')}',${page+1})">▶</button>`;
   html += `<span style="font-size:12px;color:var(--g400)">共 ${pages} 页</span>`;
   pg.innerHTML = html;
 }

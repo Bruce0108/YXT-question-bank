@@ -3224,13 +3224,14 @@ def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, o
 
 
 def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_q,
-                              cover_title='', ordered_items=None):
+                              cover_title='', ordered_items=None, include_answer=True):
     """
     后台线程：多文件合并导出 PDF。
     groups_info: [{path, paper_type, questions, q_nums, g_idx}]
     ordered_items: [{gIdx, q_num}] 全局有序列表（来自前端 exportItems，保留 sortOrder 排序）。
                    若提供则按此全局顺序逐题输出；否则按组顺序输出（降级模式）。
     cover_title: 封面标题，非空时在首页插入封面。
+    include_answer: 是否在PDF中包含答案页（Task3）。
     """
     def upd(prog, status='running', error=None):
         data = {'status': status, 'progress': prog,
@@ -3244,6 +3245,12 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
 
     try:
         out_doc = fitz.open()
+
+        # Task3: 如果不包含答案，对所有题目清除 answer_b64
+        if not include_answer:
+            for ginfo in groups_info:
+                for q in ginfo.get('questions', []):
+                    q.pop('answer_b64', None)
 
         # ── 封面页 ──
         if cover_title:
@@ -3461,6 +3468,7 @@ def export_pdf():
     sess_id   = data.get('session_id')
     merged    = data.get('merged', False)
     cover_title    = data.get('cover_title', '').strip()
+    include_answer = data.get('include_answer', True)  # Task3: 是否在PDF中包含答案页
 
     safe_name = re.sub(r'[\\/*?:"<>|]', '_', filename)
     if not safe_name.endswith('.pdf'):
@@ -3511,7 +3519,8 @@ def export_pdf():
         threading.Thread(
             target=_build_pdf_merged_worker,
             args=(task_id, groups_info, dpi, layout, out_path, total_q),
-            kwargs={'cover_title': cover_title, 'ordered_items': ordered_items},
+            kwargs={'cover_title': cover_title, 'ordered_items': ordered_items,
+                    'include_answer': include_answer},
             daemon=True
         ).start()
 
@@ -5071,7 +5080,7 @@ def library_save():
             file_idx_map[file_idx].append((i, q))
 
     # ── 步骤1：处理已有 b64 的题目（直接写图片文件）──
-    img_results = {}   # list_pos -> (img_file, img_w, img_h)
+    img_results = {}   # list_pos -> (img_file, img_w, img_h, ans_file)
     for i, q in enumerate(questions):
         if not q_has_b64.get(i):
             continue
@@ -5091,16 +5100,36 @@ def library_save():
                 img_path = os.path.join(wb_prefix, img_fname)
                 with open(img_path, 'wb') as f:
                     f.write(buf.getvalue())
-            img_results[i] = (img_fname, _im.width, _im.height)
+            img_results[i] = (img_fname, _im.width, _im.height, '')
         except Exception:
-            img_results[i] = ('', 0, 0)
+            img_results[i] = ('', 0, 0, '')
+
+        # Task1: 保存答案图片
+        ans_b64 = q.get('answer_b64', '')
+        if ans_b64:
+            ans_fname = f'q_{i+1:03d}_ans.jpg'
+            try:
+                ans_raw = _b64.b64decode(ans_b64)
+                from PIL import Image as _PIL2
+                _aim = _PIL2.open(io.BytesIO(ans_raw))
+                abuf = io.BytesIO()
+                _aim.convert('RGB').save(abuf, format='JPEG', quality=88)
+                if storage.is_r2_mode():
+                    storage.store_bytes(f'{wb_prefix}/{ans_fname}', abuf.getvalue())
+                else:
+                    with open(os.path.join(wb_prefix, ans_fname), 'wb') as f:
+                        f.write(abuf.getvalue())
+                if i in img_results:
+                    img_results[i] = (img_results[i][0], img_results[i][1], img_results[i][2], ans_fname)
+            except Exception:
+                pass
 
     # ── 步骤2：从 PDF session 裁图（模式A）──
     for file_idx, items in file_idx_map.items():
         if not sess or file_idx >= len(sess):
             # session 不可用，这些题目无法获取图片，记录失败
             for (i, q) in items:
-                img_results[i] = ('', 0, 0)
+                img_results[i] = ('', 0, 0, '')
             continue
 
         group      = sess[file_idx]
@@ -5110,7 +5139,7 @@ def library_save():
 
         if not os.path.exists(save_path):
             for (i, q) in items:
-                img_results[i] = ('', 0, 0)
+                img_results[i] = ('', 0, 0, '')
             continue
 
         try:
@@ -5120,7 +5149,7 @@ def library_save():
                 q_idx = next((qi for qi, qo in enumerate(questions_meta)
                               if qo['q_num'] == q_num), None)
                 if q_idx is None:
-                    img_results[i] = ('', 0, 0)
+                    img_results[i] = ('', 0, 0, '')
                     continue
                 try:
                     img_bytes, w, h = crop_question_image(
@@ -5140,17 +5169,38 @@ def library_save():
                         img_path = os.path.join(wb_prefix, img_file)
                         with open(img_path, 'wb') as f:
                             f.write(buf.getvalue())
-                    img_results[i] = (img_file, w, h)
+
+                    # Task1: 保存答案图片（从 questions_meta 中取 answer_b64）
+                    ans_fname = ''
+                    q_meta_obj = questions_meta[q_idx]
+                    ans_b64 = q_meta_obj.get('answer_b64', '') or q.get('answer_b64', '')
+                    if ans_b64:
+                        ans_fname = f'q_{i+1:03d}_ans.jpg'
+                        try:
+                            ans_raw = _b64.b64decode(ans_b64)
+                            from PIL import Image as _PIL3
+                            _aim = _PIL3.open(io.BytesIO(ans_raw))
+                            abuf = io.BytesIO()
+                            _aim.convert('RGB').save(abuf, format='JPEG', quality=88)
+                            if storage.is_r2_mode():
+                                storage.store_bytes(f'{wb_prefix}/{ans_fname}', abuf.getvalue())
+                            else:
+                                with open(os.path.join(wb_prefix, ans_fname), 'wb') as f:
+                                    f.write(abuf.getvalue())
+                        except Exception:
+                            ans_fname = ''
+
+                    img_results[i] = (img_file, w, h, ans_fname)
                 except Exception as ce:
-                    img_results[i] = ('', 0, 0)
+                    img_results[i] = ('', 0, 0, '')
             doc.close()
         except Exception as e:
             for (i, q) in items:
-                img_results[i] = ('', 0, 0)
+                img_results[i] = ('', 0, 0, '')
 
     # ── 步骤3：构建 manifest ──
     for i, q in enumerate(questions):
-        img_file, img_w, img_h = img_results.get(i, ('', 0, 0))
+        img_file, img_w, img_h, ans_file = img_results.get(i, ('', 0, 0, ''))
         saved_q.append({
             'seq':        i + 1,
             'q_num':      q.get('q_num', i + 1),
@@ -5162,6 +5212,7 @@ def library_save():
             'img_file':   img_file,
             'img_w':      img_w,
             'img_h':      img_h,
+            'ans_file':   ans_file,   # Task1: 答案图片文件名
         })
 
     success_count = sum(1 for q in saved_q if q.get('img_file'))
@@ -5228,6 +5279,7 @@ def _register_workbook_session(wb_id: str, manifest: dict, questions_out: list) 
             'img_bytes_b64': q.get('img_bytes_b64', ''),
             'img_w':         q.get('img_w', 0),
             'img_h':         q.get('img_h', 0),
+            'answer_b64':    q.get('answer_b64', ''),   # Task1: 答案图片
         })
     virt_group = {
         'filename':        manifest.get('title', wb_id) + '.pdf',
@@ -5269,6 +5321,13 @@ def library_load(wb_id):
                 raw = storage.load_bytes(f'{wb_prefix}/{img_file}')
                 if raw:
                     b64 = _b64.b64encode(raw).decode('ascii')
+            # Task1: 读取答案图片
+            ans_b64 = ''
+            ans_file = q.get('ans_file', '')
+            if ans_file:
+                raw_ans = storage.load_bytes(f'{wb_prefix}/{ans_file}')
+                if raw_ans:
+                    ans_b64 = _b64.b64encode(raw_ans).decode('ascii')
             questions_out.append({
                 'seq':           q.get('seq', 0),
                 'q_num':         q.get('q_num', 0),
@@ -5279,6 +5338,7 @@ def library_load(wb_id):
                 'img_bytes_b64': b64,
                 'img_w':         q.get('img_w', 0),
                 'img_h':         q.get('img_h', 0),
+                'answer_b64':    ans_b64,   # Task1
             })
     else:
         mfest = os.path.join(wb_prefix, 'manifest.json')
@@ -5295,6 +5355,14 @@ def library_load(wb_id):
                 if os.path.isfile(img_path):
                     with open(img_path, 'rb') as f:
                         b64 = _b64.b64encode(f.read()).decode('ascii')
+            # Task1: 读取答案图片
+            ans_b64 = ''
+            ans_file = q.get('ans_file', '')
+            if ans_file:
+                ans_path = os.path.join(wb_prefix, ans_file)
+                if os.path.isfile(ans_path):
+                    with open(ans_path, 'rb') as f:
+                        ans_b64 = _b64.b64encode(f.read()).decode('ascii')
             questions_out.append({
                 'seq':           q.get('seq', 0),
                 'q_num':         q.get('q_num', 0),
@@ -5305,6 +5373,7 @@ def library_load(wb_id):
                 'img_bytes_b64': b64,
                 'img_w':         q.get('img_w', 0),
                 'img_h':         q.get('img_h', 0),
+                'answer_b64':    ans_b64,   # Task1
             })
 
     return jsonify({
@@ -5728,8 +5797,9 @@ def _build_stats_cache() -> dict:
     重新计算全局统计缓存，返回统计对象：
     {
       total: int,
-      by_subject: {subject: {total, by_board: {board: {total, by_topic1: {t1: {total, by_topic2: {t2: int}}}}}}}
+      by_subject: {subject: {total, by_board: {board: {total, by_paper: {paper: {total, by_topic1: {t1: {total, by_topic2: {t2: int}}}}}}}}}
     }
+    5层结构：学科 → 考试局 → paper类型(maths_unit) → 一级知识点 → 二级知识点
     """
     stats = {'total': 0, 'by_subject': {}}
 
@@ -5738,21 +5808,24 @@ def _build_stats_cache() -> dict:
             keys = _list_cloud_questions(subj, board)
             if not keys:
                 continue
-            subj_stats = stats['by_subject'].setdefault(subj, {'total': 0, 'by_board': {}})
-            board_stats = subj_stats['by_board'].setdefault(board, {'total': 0, 'by_topic1': {}})
+            subj_stats  = stats['by_subject'].setdefault(subj, {'total': 0, 'by_board': {}})
+            board_stats = subj_stats['by_board'].setdefault(board, {'total': 0, 'by_paper': {}})
 
             for key in keys:
                 q = _load_cloud_question(key)
                 if not q:
                     continue
-                t1 = q.get('topic1', '未分类')
-                t2 = q.get('topic2', '未分类')
-                t1_stats = board_stats['by_topic1'].setdefault(t1, {'total': 0, 'by_topic2': {}})
+                paper = q.get('maths_unit', '') or '未分类'
+                t1    = q.get('topic1', '未分类')
+                t2    = q.get('topic2', '未分类')
+                paper_stats = board_stats['by_paper'].setdefault(paper, {'total': 0, 'by_topic1': {}})
+                t1_stats    = paper_stats['by_topic1'].setdefault(t1, {'total': 0, 'by_topic2': {}})
                 t1_stats['by_topic2'][t2] = t1_stats['by_topic2'].get(t2, 0) + 1
-                t1_stats['total'] += 1
+                t1_stats['total']  += 1
+                paper_stats['total'] += 1
                 board_stats['total'] += 1
-                subj_stats['total'] += 1
-                stats['total'] += 1
+                subj_stats['total']  += 1
+                stats['total']       += 1
 
     # 写缓存
     key = _cloud_stats_key()
@@ -5977,20 +6050,31 @@ def cloud_library_save_questions():
 def cloud_library_questions():
     """
     分页查询某节点下的题目列表。
-    参数：subject, board, topic1(可选), topic2(可选), page(默认1), per_page(默认30)
+    参数：subject, board, maths_unit(可选), topic1(可选), topic2(可选), page(默认1), per_page(默认30)
     返回：{questions: [...], total: int, page: int, pages: int}
     """
-    subject  = request.args.get('subject', '')
-    board    = request.args.get('board', '')
-    topic1   = request.args.get('topic1', '')
-    topic2   = request.args.get('topic2', '')
-    page     = max(1, int(request.args.get('page', 1)))
-    per_page = min(100, int(request.args.get('per_page', 30)))
+    subject    = request.args.get('subject', '')
+    board      = request.args.get('board', '')
+    maths_unit = request.args.get('maths_unit', '')  # Task2: paper 层过滤
+    topic1     = request.args.get('topic1', '')
+    topic2     = request.args.get('topic2', '')
+    page       = max(1, int(request.args.get('page', 1)))
+    per_page   = min(100, int(request.args.get('per_page', 30)))
 
     if not subject or not board:
         return jsonify({'error': '必须提供 subject 和 board'}), 400
 
     keys = _list_cloud_questions(subject, board, topic1, topic2)
+
+    # Task2: 如果指定了 maths_unit，则按 maths_unit 过滤
+    if maths_unit:
+        filtered_keys = []
+        for key in keys:
+            q = _load_cloud_question(key)
+            if q and (q.get('maths_unit', '') or '未分类') == maths_unit:
+                filtered_keys.append(key)
+        keys = filtered_keys
+
     total = len(keys)
     start = (page - 1) * per_page
     end   = start + per_page
@@ -6083,8 +6167,8 @@ def cloud_library_clear_all():
 @app.route('/api/cloud_library/tree', methods=['GET'])
 def cloud_library_tree():
     """
-    返回完整的四级目录树：
-    学科 → 考试局 → 知识点一级 → 知识点二级，每级带题目数量。
+    返回完整的五级目录树：
+    学科 → 考试局 → paper类型(maths_unit) → 知识点一级 → 知识点二级，每级带题目数量。
     优先使用统计缓存；若缓存不存在则实时扫描。
     ?subject=  可过滤只返回该学科
     ?board=    可过滤只返回该考试局
@@ -6112,18 +6196,28 @@ def cloud_library_tree():
             board_data  = subj_data.get('by_board', {}).get(board, {})
             board_total = board_data.get('total', 0)
 
-            topics1_out = []
-            for t1, t1_data in sorted(board_data.get('by_topic1', {}).items()):
-                t1_total = t1_data.get('total', 0)
-                topics2_out = []
-                for t2, t2_cnt in sorted(t1_data.get('by_topic2', {}).items()):
-                    topics2_out.append({'name': t2, 'count': t2_cnt})
-                topics1_out.append({'name': t1, 'count': t1_total, 'subtopics': topics2_out})
+            papers_out = []
+            for paper, paper_data in sorted(board_data.get('by_paper', {}).items()):
+                paper_total = paper_data.get('total', 0)
+
+                topics1_out = []
+                for t1, t1_data in sorted(paper_data.get('by_topic1', {}).items()):
+                    t1_total = t1_data.get('total', 0)
+                    topics2_out = []
+                    for t2, t2_cnt in sorted(t1_data.get('by_topic2', {}).items()):
+                        topics2_out.append({'name': t2, 'count': t2_cnt})
+                    topics1_out.append({'name': t1, 'count': t1_total, 'subtopics': topics2_out})
+
+                papers_out.append({
+                    'name':   paper,
+                    'count':  paper_total,
+                    'topics': topics1_out,
+                })
 
             boards_out.append({
-                'name':    board,
-                'count':   board_total,
-                'topics':  topics1_out,
+                'name':   board,
+                'count':  board_total,
+                'papers': papers_out,
             })
 
         subjects_out.append({
