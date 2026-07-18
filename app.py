@@ -2811,6 +2811,15 @@ def preview_question(q_num):
         save_path  = group['path']
         paper_type = group['paper_type']
         questions  = group['questions']
+
+        # ── 云端题目（无实体PDF）：直接从 img_bytes_b64 返回 ──
+        if not save_path or not os.path.exists(save_path):
+            q_obj = next((q for q in questions if q['q_num'] == q_num), None)
+            if q_obj and q_obj.get('img_bytes_b64'):
+                import base64 as _b64
+                img_data = _b64.b64decode(q_obj['img_bytes_b64'])
+                return send_file(io.BytesIO(img_data), mimetype='image/jpeg', as_attachment=False)
+            return jsonify({'error': '该题目无预览图'}), 404
     else:
         save_path  = os.path.join(app.config['UPLOAD_FOLDER'], 'current.pdf')
         paper_type = _get_paper_type()
@@ -3246,16 +3255,69 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
         for ginfo in groups_info:
             group_map[ginfo['g_idx']] = ginfo
 
+        def _export_cloud_questions(out_doc, questions, q_nums, dpi,
+                                     PW, PH, M, HH, GAP, FS, seq_start=0):
+            """云端题目（无实体PDF）：直接将 img_bytes_b64 渲染到输出页。"""
+            import base64 as _b64_inner
+            AVAIL_W = PW - 2 * M
+            for done, q_num in enumerate(q_nums):
+                q_obj = next((q for q in questions if q['q_num'] == q_num), None)
+                if not q_obj:
+                    continue
+                b64 = q_obj.get('img_bytes_b64', '')
+                if not b64:
+                    continue
+                try:
+                    img_data = _b64_inner.b64decode(b64)
+                    from PIL import Image as _PILImg2
+                    _im = _PILImg2.open(io.BytesIO(img_data))
+                    img_w, img_h = _im.size
+                    buf = io.BytesIO()
+                    _im.convert('RGB').save(buf, format='JPEG', quality=88)
+                    jpeg_bytes = buf.getvalue()
+                except Exception as _ce:
+                    print(f'[cloud_export] decode error q_num={q_num}: {_ce}')
+                    continue
+
+                export_seq = seq_start + done + 1
+                label = f'第 {export_seq} 题'
+
+                q_meta = None
+                diff      = q_obj.get('difficulty')
+                topics    = q_obj.get('topics') or []
+                exam_date = q_obj.get('exam_date', '')
+                if diff is not None or topics or exam_date:
+                    q_meta = {'difficulty': diff, 'topics': topics, 'exam_date': exam_date}
+
+                page = out_doc.new_page(width=PW, height=PH)
+                _place_jpeg_on_page(page, jpeg_bytes, img_w, img_h,
+                                    fitz.Rect(M, M, PW-M, PH-M),
+                                    label, HH, GAP, FS, q_meta=q_meta)
+
+                # 答案页
+                ans_b64 = q_obj.get('answer_b64', '')
+                if ans_b64:
+                    ans_jpeg = _b64_to_jpeg_bytes(ans_b64)
+                    if ans_jpeg:
+                        try:
+                            from PIL import Image as _PILImg3
+                            _aim = _PILImg3.open(io.BytesIO(ans_jpeg))
+                            ans_w, ans_h = _aim.size
+                            _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
+                                                  PW, PH, M, GAP, label)
+                        except Exception as _ae:
+                            print(f'[cloud_export] answer page error: {_ae}')
+
         if ordered_items:
             # ── 有序模式：按 ordered_items 全局顺序逐题输出 ──
             # 需要分组打开 src_doc（按 gIdx 缓存）
             src_docs = {}  # g_idx -> fitz.Document
             done_total = 0
 
-            # 按 gIdx 预打开文件
+            # 按 gIdx 预打开文件（跳过路径为空的云端组）
             for ginfo in groups_info:
                 gi = ginfo['g_idx']
-                if os.path.exists(ginfo['path']):
+                if ginfo.get('path') and os.path.exists(ginfo['path']):
                     src_docs[gi] = fitz.open(ginfo['path'])
 
             # 注意：MCQ 打包模式（多题共页）在全局顺序下需要特殊处理
@@ -3284,10 +3346,9 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                     seen_gi.append(gi)
 
             for gi in seen_gi:
-                if gi not in group_map or gi not in src_docs:
+                if gi not in group_map:
                     continue
                 ginfo     = group_map[gi]
-                src_doc   = src_docs[gi]
                 questions = ginfo['questions']
                 paper_type = ginfo['paper_type']
                 q_nums_ordered = ordered_by_group.get(gi, [])
@@ -3298,12 +3359,19 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                 def cb(p, _done=done_before):
                     upd(_done + p)
 
-                if layout == 'two_per_page':
+                if gi not in src_docs:
+                    # ── 云端题目（无实体PDF）：直接从 img_bytes_b64 渲染 ──
+                    _export_cloud_questions(out_doc, questions, q_nums_ordered, dpi,
+                                            PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
+                                            seq_start=done_total)
+                elif layout == 'two_per_page':
+                    src_doc = src_docs[gi]
                     _export_two_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
                                          paper_type, PAGE_W, PAGE_H, MARGIN,
                                          HEADER_H, GAP, FS, progress_cb=cb,
                                          seq_start=done_total)
                 else:
+                    src_doc = src_docs[gi]
                     _export_one_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
                                          paper_type, PAGE_W, PAGE_H, MARGIN,
                                          HEADER_H, GAP, FS, progress_cb=cb,
@@ -3322,7 +3390,15 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                 questions  = ginfo['questions']
                 q_nums     = ginfo['q_nums']
 
-                if not q_nums or not os.path.exists(save_path):
+                if not q_nums:
+                    continue
+
+                # ── 云端题目（path 为空）：直接从 img_bytes_b64 渲染 ──
+                if not save_path or not os.path.exists(save_path):
+                    _export_cloud_questions(out_doc, questions, q_nums, dpi,
+                                            PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
+                                            seq_start=done_total)
+                    done_total += len(q_nums)
                     continue
 
                 src_doc = fitz.open(save_path)
@@ -3343,6 +3419,9 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
 
                 src_doc.close()
                 done_total += len(q_nums)
+
+        if out_doc.page_count == 0:
+            raise ValueError('导出后 PDF 为空，请确保题目图片已正确加载')
 
         out_doc.save(out_path, garbage=4, deflate=True)
         out_doc.close()

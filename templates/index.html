@@ -714,13 +714,28 @@
       </div>
 
       <!-- 知识点二级分类 -->
-      <div style="margin-bottom:16px">
+      <div style="margin-bottom:12px">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:5px">
           🔖 知识点二级分类
         </label>
         <select id="cloudSaveTopic2" style="width:100%;border:1px solid var(--g200);border-radius:8px;padding:8px 12px;font-size:13px;background:#fff;outline:none">
           <option value="">— 自动使用题目知识点 —</option>
         </select>
+      </div>
+
+      <!-- Paper 分类（Feature 4: 自动识别 maths_unit，可手动覆盖） -->
+      <div style="margin-bottom:16px">
+        <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:5px">
+          📄 Paper 分类
+          <span style="font-size:10px;font-weight:400;color:var(--g400)">（自动从题目识别，可手动修改）</span>
+        </label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="cloudSavePaper" type="text" placeholder="如 P1、P2、M1、S1（留空则不分 paper）"
+                 style="flex:1;border:1px solid var(--g200);border-radius:8px;padding:8px 12px;font-size:13px;background:#fff;outline:none">
+          <div id="cloudSavePaperBadge" style="display:none;padding:4px 10px;border-radius:12px;background:#eef2ff;color:#4f46e5;font-size:11px;font-weight:700;white-space:nowrap">
+            🤖 自动识别
+          </div>
+        </div>
       </div>
 
       <!-- 保存进度 -->
@@ -2858,11 +2873,22 @@ async function openSaveLibDialog() {
   // 拉取考试局/学科列表
   try {
     const r = await fetch('/api/library/boards');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
     _libBoards   = d.boards  || [];
     _libSubjects = d.subjects|| {};
   } catch(e) {
-    toast('获取考试局列表失败', 'err'); return;
+    // 降级处理：使用内置默认列表，不阻断用户操作
+    _libBoards   = ['Edexcel','CAIE','AQA','OCR','IB','AP'];
+    _libSubjects = {
+      'Edexcel': ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
+      'CAIE':    ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
+      'AQA':     ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
+      'OCR':     ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
+      'IB':      ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
+      'AP':      ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
+    };
+    console.warn('library/boards 加载失败，使用默认列表：', e.message);
   }
 
   // 填充考试局选项
@@ -3846,6 +3872,27 @@ async function openCloudSaveDialog() {
   const detectedSubject = subjectMap[firstQ.source] || '物理 Physics';
   document.getElementById('cloudSaveSubject').value = detectedSubject;
 
+  // Feature 4: 自动识别 maths_unit（paper 分类）
+  // 优先用题目的 maths_unit，若不一致则留空让用户手动填写
+  const paperInput = document.getElementById('cloudSavePaper');
+  const paperBadge = document.getElementById('cloudSavePaperBadge');
+  const papers = [...new Set(selQ.map(q => q.maths_unit || '').filter(Boolean))];
+  if (papers.length === 1) {
+    // 所有选中题目属于同一 paper，自动填充
+    paperInput.value = papers[0];
+    paperBadge.style.display = '';
+  } else if (papers.length > 1) {
+    // 多个 paper，提示用户手动确认
+    paperInput.value = '';
+    paperInput.placeholder = `检测到多个 Paper: ${papers.join(', ')}，请手动填写`;
+    paperBadge.style.display = 'none';
+  } else {
+    // 无 paper 信息
+    paperInput.value = '';
+    paperInput.placeholder = '如 P1、P2、M1、S1（留空则不分 paper）';
+    paperBadge.style.display = 'none';
+  }
+
   await updateCloudSaveTopics();
   document.getElementById('cloudSaveMo').classList.add('show');
   document.getElementById('cloudSaveProgWrap').style.display = 'none';
@@ -3924,6 +3971,8 @@ async function doCloudSave() {
   const board   = document.querySelector('.cloud-board-btn.active')?.dataset.board || 'CAIE';
   const topic1  = document.getElementById('cloudSaveTopic1').value;
   const topic2  = document.getElementById('cloudSaveTopic2').value;
+  // Feature 4: 从 paper input 获取 maths_unit（优先用户手填，其次题目自带）
+  const paperOverride = document.getElementById('cloudSavePaper').value.trim();
 
   const selQ = getSelectedQuestions();
   if (!selQ || selQ.length === 0) { toast('无选中题目', 'err'); return; }
@@ -3933,12 +3982,15 @@ async function doCloudSave() {
     // 尝试从题目已有 topics 提取一级/二级标题
     const autoT1 = (q.topics && q.topics[0]) ? (q.topics[0].parent_id ? q.topics[0].parent_id + ' ' + (q.topics[0].title || '') : q.topics[0].title || '') : '未分类';
     const autoT2 = (q.topics && q.topics[0]) ? (q.topics[0].title || '') : '通用';
+    // Feature 4: paper 覆盖逻辑 — 弹窗手填 > 题目自带 maths_unit
+    const resolvedPaper = paperOverride || q.maths_unit || '';
     return {
       ...q,
       subject,
       board,
       topic1: topic1 || autoT1,
       topic2: topic2 || autoT2,
+      maths_unit: resolvedPaper,  // Feature 4: 确保 maths_unit 被传递
     };
   });
 
