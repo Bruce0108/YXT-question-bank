@@ -988,10 +988,104 @@ def _find_edexcel_maths_question_bottom(page, page_height):
     return min(last_y + 8, page_height - 25) if last_y > 50 else page_height - 25
 
 
+def _is_answer_writing_page(page):
+    """
+    判断一个 PDF 页面是否是"答题页"（供学生手写答案的空白/横线页）。
+    这类页面在导出时应跳过，不应出现在题册 PDF 中。
+
+    判断依据（满足任意一条即为答题页）：
+    1. 页面文字极少（< 30 字符），且页面上有大量横线/矩形线条
+    2. 文字中包含 'BLANK PAGE' / 'This page is intentionally left blank'
+    3. 页面有效内容（去除页眉页脚后）几乎全是横线（下划线字符）
+    4. 有效文字块均为页码/版权/DO NOT WRITE，没有实质题目内容
+    """
+    try:
+        text_raw = page.get_text().strip()
+    except Exception:
+        return False
+
+    # ── 规则 1: 明确标注的空白/答题页 ──
+    upper = text_raw.upper()
+    if 'BLANK PAGE' in upper:
+        return True
+    if 'THIS PAGE IS INTENTIONALLY LEFT BLANK' in upper:
+        return True
+    if 'INTENTIONALLY BLANK' in upper:
+        return True
+
+    ph = page.rect.height
+    pw = page.rect.width
+
+    # ── 规则 2: 分析文字块，剔除页眉/页脚/DO NOT WRITE 后的有效内容 ──
+    try:
+        blocks = page.get_text('blocks')
+    except Exception:
+        return False
+
+    SKIP_RE = re.compile(
+        r'^(DO NOT WRITE|Turn over|©|UCLES|\d{1,4}$|9702/|\*P|\s*$)',
+        re.IGNORECASE
+    )
+    real_content_chars = 0
+    underscore_chars   = 0
+
+    for b in blocks:
+        x0, y0, x1, y1, txt, bno, btype = b
+        if btype != 0:
+            continue
+        # 跳过页眉（顶部 50pt）和页脚（底部 50pt）
+        if y1 < 50 or y0 > ph - 50:
+            continue
+        ts = txt.strip()
+        if not ts:
+            continue
+        if SKIP_RE.match(ts):
+            continue
+        # 统计横线字符
+        clean = ts.replace(' ', '').replace('\n', '').replace('\t', '')
+        if clean and all(c in '_-–—' for c in clean):
+            underscore_chars += len(clean)
+        else:
+            real_content_chars += len(ts)
+
+    # 几乎没有实质内容（≤ 15 字符），且文字极少
+    if real_content_chars <= 15:
+        # 进一步检查：是否有大量横线（绘制路径）
+        try:
+            drawings = page.get_drawings()
+            hline_count = 0
+            for d in drawings:
+                for item in d.get('items', []):
+                    if item[0] == 'l':
+                        p1, p2 = item[1], item[2]
+                        dy = abs(p2.y - p1.y)
+                        dx = abs(p2.x - p1.x)
+                        # 近似水平线，且跨度 > 页面宽度 30%
+                        if dy < 3 and dx > pw * 0.30:
+                            hline_count += 1
+                    elif item[0] == 're':
+                        r = item[1]
+                        rh = abs(r.y1 - r.y0)
+                        rw = abs(r.x1 - r.x0)
+                        # 横向细矩形（细线条）
+                        if rh < 3 and rw > pw * 0.30:
+                            hline_count += 1
+            # 有 3 条以上横线且实质内容 ≤ 15 字符 → 答题页
+            if hline_count >= 3:
+                return True
+        except Exception:
+            pass
+        # 即使没有横线，实质内容 ≤ 8 字符也认为是空白页
+        if real_content_chars <= 8:
+            return True
+
+    return False
+
+
 def _find_last_content_page(doc, start_page):
     """
     从start_page开始，找最后一个有题目内容的页面。
-    跳过空白页、版权页等。
+    跳过空白页、版权页、答题页等。
     """
     last_content_page = start_page
 
@@ -1006,6 +1100,10 @@ def _find_last_content_page(doc, start_page):
         # 版权/结尾页
         if 'Permission to reproduce' in text:
             break
+
+        # Task4: 答题页（横线页/空白答题区）→ 跳过，不更新 last_content_page，但继续扫描
+        if _is_answer_writing_page(page):
+            continue
 
         # 页面有实际内容
         blocks = page.get_text("blocks")
@@ -1605,6 +1703,125 @@ _MATHS_CHAPTER_RULES = [
               'reduction formula','arc length'], []),
     ('P4-7', ['vector','scalar product','dot product','equation of plane',
               'direction vector','position vector','unit vector'], []),
+    # ── FP1 ──
+    ('FP1-1', ['complex number','imaginary','real part','imaginary part','argand',
+               'modulus-argument','argument of z','conjugate','|z|',
+               'locus','loci','complex roots'], []),
+    ('FP1-2', ['roots of quadratic','sum of roots','product of roots',
+               'alpha.*beta','beta.*alpha','symmetric function'], []),
+    ('FP1-3', ['numerical method','interval bisection','linear interpolation',
+               'newton-raphson','fixed point iteration'], []),
+    ('FP1-4', ['parabola','rectangular hyperbola','focus','directrix',
+               'conic','parametric','coordinate system'], []),
+    ('FP1-5', ['matrix','determinant','inverse matrix','singular',
+               'simultaneous equation.*matrix','matrix equation',
+               'eigenvalue','eigenvector'], []),
+    ('FP1-6', ['transformation','rotation','reflection','enlargement',
+               'matrix.*transformation','invariant','stretch'], []),
+    ('FP1-7', ['series','sum of squares','sum of cubes','standard series',
+               r'r\^2','r\^3','summation','sigma'], []),
+    ('FP1-8', ['proof by induction','induction','base case','inductive step',
+               'assume.*true for n=k','true for n=k+1'], []),
+    # ── FP2 ──
+    ('FP2-1', ['inequalities','inequality.*algebraic','modulus inequality',
+               'rational inequality'], []),
+    ('FP2-2', ['series','method of differences','partial fractions.*series'], []),
+    ('FP2-3', ['complex number.*further','de moivre','nth roots of unity',
+               "exponential form","euler","e^{i","modulus-argument form","locus.*complex"], []),
+    ('FP2-4', ['first order differential equation','integrating factor',
+               'separable','exact equation'], []),
+    ('FP2-5', ['second order differential equation','complementary function',
+               'particular integral','auxiliary equation'], []),
+    ('FP2-6', ['maclaurin series','taylor series','power series expansion',
+               'series expansion'], []),
+    ('FP2-7', ['polar coordinate','polar curve','area.*polar',
+               'r = f(theta)','cardioid','rose curve'], []),
+    ('FP2-8', ['hyperbolic','sinh','cosh','tanh','sech','cosech','coth',
+               'osborn','inverse hyperbolic','arsinh','arcosh'], []),
+    # ── M1 ──
+    ('M1-1', ['model','particle','rigid body','smooth','rough','light','inextensible',
+              'assumption','mathematical model'], []),
+    ('M1-2', ['constant acceleration','suvat','v = u + at','s = ut',
+              'velocity-time graph','displacement-time',
+              'kinematics','free fall','acceleration due to gravity'], []),
+    ('M1-3', ['vector.*velocity','vector.*force','resultant vector',
+              'column vector','i.*j component','bearing','component form'], []),
+    ('M1-4', ['newton','f = ma','equation of motion','dynamics','thrust',
+              'tension','newton.s law','mass.*acceleration',
+              'connected particles','pulley'], []),
+    ('M1-5', ['friction','normal reaction','coefficient of friction',
+              'limiting friction','rough surface','resolve.*forces',
+              'inclined plane'], []),
+    ('M1-6', ['momentum','impulse','conservation of momentum','collision',
+              'impact','explosion','i = mv - mu'], []),
+    ('M1-7', ['equilibrium','statics','lami.*theorem','triangle of forces',
+              'concurrent','resolve.*equilibrium'], []),
+    ('M1-8', ['moment','torque','couple','turning effect','clockwise',
+              'anticlockwise','beam','uniform rod'], []),
+    # ── M2 ──
+    ('M2-1', ['projectile','horizontal component','vertical component',
+              'trajectory','range.*projectile','maximum height',
+              'time of flight'], []),
+    ('M2-2', ['centre of mass','centroid','composite body',
+              'lamina','uniform','non-uniform'], []),
+    ('M2-3', ['work done','energy','kinetic energy','potential energy',
+              'conservation of energy','power','work-energy theorem',
+              'joule','watt'], []),
+    ('M2-4', ['elastic string','elastic collision','coefficient of restitution',
+              'hooke.*law','natural length','extension','modulus of elasticity'], []),
+    ('M2-5', ['circular motion','centripetal','angular velocity','angular speed',
+              'conical pendulum','banked road','omega'], []),
+    ('M2-6', ['statics.*rigid body','toppling','sliding','tilting'], []),
+    # ── S1 ──
+    ('S1-1', ['mathematical model','statistical model','population','sample',
+              'assumption.*model'], []),
+    ('S1-2', ['mean','median','mode','standard deviation','variance','quartile',
+              'interquartile range','skewness','range.*data','outlier'], []),
+    ('S1-3', ['histogram','frequency density','stem.*leaf','box plot',
+              'cumulative frequency','scatter diagram','representation'], []),
+    ('S1-4', ['probability','venn diagram','tree diagram','conditional probability',
+              'independent event','mutually exclusive','p(a|b)','p(a and b)',
+              'p(a or b)','complement'], []),
+    ('S1-5', ['correlation','regression','product moment','pmcc',
+              'line of best fit','scatter','bivariate','y on x','x on y',
+              'least squares'], []),
+    ('S1-6', ['discrete random variable','probability distribution','expectation',
+              'expected value','e(x)','var(x)','probability function',
+              'discrete uniform'], []),
+    ('S1-7', ['normal distribution','standard normal','z-score','phi','z table',
+              'standardise','n(mu,sigma','symmetry.*normal'], []),
+    # ── S2 ──
+    ('S2-1', ['binomial distribution','b(n,p)','binomial probability',
+              'number of successes','bernoulli'], []),
+    ('S2-2', ['poisson distribution','po(lambda)','poisson probability',
+              'mean = variance','rare event'], []),
+    ('S2-3', ['continuous random variable','probability density function','pdf',
+              'f(x)','cumulative distribution function','cdf','f(x) = 0 outside'], []),
+    ('S2-4', ['continuous uniform distribution','rectangular distribution',
+              'uniform over','u(a,b)'], []),
+    ('S2-5', ['normal approximation','continuity correction','approximate.*normal',
+              'np > 5','approximate.*poisson'], []),
+    ('S2-6', ['hypothesis test','null hypothesis','alternative hypothesis',
+              'h_0','h_1','significance level','critical region',
+              'p-value','test statistic','one-tailed','two-tailed'], []),
+    ('S2-7', ['estimation','unbiased estimator','sample mean',
+              'sample variance','confidence interval','central limit theorem'], []),
+    # ── D1 ──
+    ('D1-1', ['algorithm','flow chart','bubble sort','quick sort','bin packing',
+              'first fit','full bin','order of algorithm','complexity'], []),
+    ('D1-2', ['graph','network','node','vertex','edge','arc','degree',
+              'bipartite','matching','complete graph','cycle','path'], []),
+    ('D1-3', ['kruskal','prim','dijkstra','minimum spanning tree','shortest path',
+              'minimum connector','route inspection','chinese postman'], []),
+    ('D1-4', ['route inspection','chinese postman','eulerian','semi-eulerian',
+              'traversable','odd vertex'], []),
+    ('D1-5', ['travelling salesman','upper bound','lower bound','nearest neighbour',
+              'hamilton cycle'], []),
+    ('D1-6', ['critical path','activity network','early time','late time',
+              'float','critical activity','precedence','gantt chart',
+              'resource histogram'], []),
+    ('D1-7', ['linear programming','objective function','feasible region',
+              'constraint','vertex.*optimal','simplex','inequalit.*region'], []),
 ]
 
 # 向后兼容别名（旧代码中引用了 _MATHS_TOPIC_RULES 的地方不会报错）
@@ -4207,6 +4424,12 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
         page = src_doc[pg_i]
         pw, ph = page.rect.width, page.rect.height
 
+        # Task4: 跳过中间的答题页（空白/横线页），不纳入导出切片
+        # 首页（pg_start）永远保留，尾页（pg_end）也保留（含题目截止位）
+        if pg_i != pg_start and pg_i != pg_end:
+            if _is_answer_writing_page(page):
+                continue
+
         if is_edexcel:
             left, right = 36, min(pw - 36, 550)   # 避开 Edexcel 两侧装饰条
         else:
@@ -5970,9 +6193,35 @@ def cloud_library_save_questions():
         b64 = b64_cache.get(i, '')
         subject  = q.get('subject', '数学 Maths')
         board    = q.get('board', 'CAIE')
-        topic1   = (q.get('topic1') or '未分类').strip()
-        topic2   = (q.get('topic2') or '通用').strip()
+        topic1   = (q.get('topic1') or '').strip()
+        topic2   = (q.get('topic2') or '').strip()
         maths_unit = (q.get('maths_unit') or '').strip()   # Task 3: paper 分级
+
+        # 如果 topic1/topic2 未设置，从 topics 列表自动推断
+        if not topic1 or topic1 == '未分类':
+            qtopics = q.get('topics') or []
+            if qtopics:
+                t0 = qtopics[0]
+                t0_id    = t0.get('id', '')
+                t0_title = t0.get('title', '')
+                parent_id = t0.get('parent_id', '')
+                if parent_id:
+                    # Cambridge 结构：parent_id 是一级
+                    topic1 = parent_id
+                    topic2 = t0_title or topic1
+                elif re.match(r'^[A-Z0-9]+-\d+$', t0_id):
+                    # Edexcel 章节 ID（P3-1, M1-2 等）→ 用 title 做 topic1
+                    topic1 = t0_title or t0_id
+                    topic2 = t0_title or t0_id
+                else:
+                    topic1 = t0_title or '未分类'
+                    topic2 = t0_title or '通用'
+        if not topic2 or topic2 == '通用':
+            topic2 = topic1  # 没有二级则和一级一样
+        if not topic1:
+            topic1 = '未分类'
+        if not topic2:
+            topic2 = topic1
 
         # 生成唯一题目ID
         qid = str(uuid.uuid4())[:12]

@@ -1090,7 +1090,11 @@ function _loadAllSyllabi() {
   }
 
   // Edexcel Maths 考纲：根据文件的 unit 决定加载哪个 unit
-  const mathsGroups = groups.filter(g => g.source === 'edexcel_maths');
+  // 包含 cloud/workbook 来源但带有 maths_unit 的 group
+  const mathsGroups = groups.filter(g =>
+    g.source === 'edexcel_maths' ||
+    ((g.source === 'cloud' || g.source === 'workbook') && g.maths_unit)
+  );
   if (mathsGroups.length > 0) {
     // 收集所有用到的 unit（去重）
     const units = [...new Set(mathsGroups.map(g => g.maths_unit).filter(Boolean))];
@@ -1100,11 +1104,8 @@ function _loadAllSyllabi() {
       const unit = units[0];
       const url = `/api/syllabus/edexcel_maths?unit=${encodeURIComponent(unit)}`;
       fetch(url).then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
-    } else if (units.length > 1) {
-      // 多个不同 unit：加载全部考纲
-      fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
     } else {
-      // unit 未知：加载全部考纲
+      // 多个不同 unit 或 unit 未知：加载全部考纲
       fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
     }
   }
@@ -1333,7 +1334,11 @@ function renderStats() {
 // ══════════════════════════════════════════════════════════
 function renderSyllabusCard() {
   const hasCambridge   = groups.some(g => g.source === 'cambridge');
-  const hasMaths       = groups.some(g => g.source === 'edexcel_maths');
+  // cloud/workbook groups with maths_unit count as edexcel_maths for syllabus display
+  const hasMaths       = groups.some(g =>
+    g.source === 'edexcel_maths' ||
+    ((g.source === 'cloud' || g.source === 'workbook') && g.maths_unit)
+  );
   const card = document.getElementById('syllabusCard');
 
   // 显示条件：有 Cambridge 试卷 或 有 Edexcel Maths 试卷
@@ -1354,8 +1359,11 @@ function renderSyllabusCard() {
   // ── 更新副标题 ──
   const subtitle = document.getElementById('syllabusSubtitle');
   if (stype === 'edexcel_maths') {
-    // 获取当前所有 edexcel_maths 文件的 unit 列表
-    const mathsGroups = groups.filter(g => g.source === 'edexcel_maths');
+    // 获取当前所有 edexcel_maths / cloud / workbook 文件的 unit 列表
+    const mathsGroups = groups.filter(g =>
+      g.source === 'edexcel_maths' ||
+      ((g.source === 'cloud' || g.source === 'workbook') && g.maths_unit)
+    );
     const units = [...new Set(mathsGroups.map(g => g.maths_unit).filter(Boolean))];
     if (units.length === 1) {
       subtitle.textContent = `(Edexcel IAL ${units[0]})`;
@@ -3202,6 +3210,8 @@ function _applyLoadedWorkbook(d) {
       _img_b64:      q.img_bytes_b64 || '',
       _img_w:        q.img_w || 0,
       _img_h:        q.img_h || 0,
+      // Task3: 答案图片（从 library_load 的 answer_b64 字段）
+      answer_b64:    q.answer_b64 || '',
     };
     allQuestions.push(qObj);
     g.questions.push(qObj);
@@ -3222,6 +3232,7 @@ function _applyLoadedWorkbook(d) {
 
   renderGrid();
   renderSyllabusCard();
+  _loadAllSyllabi();         // Task2: 加载知识点筛选树（cloud/workbook 也需要）
   document.getElementById('statsCard').style.display = '';
   document.getElementById('actCard').style.display   = '';
   document.getElementById('toolbar').style.display   = '';
@@ -4004,9 +4015,28 @@ async function doCloudSave() {
 
   // 构建 payload（为每题附加云端题库分类信息）
   const questions = selQ.map(q => {
-    // 尝试从题目已有 topics 提取一级/二级标题
-    const autoT1 = (q.topics && q.topics[0]) ? (q.topics[0].parent_id ? q.topics[0].parent_id + ' ' + (q.topics[0].title || '') : q.topics[0].title || '') : '未分类';
-    const autoT2 = (q.topics && q.topics[0]) ? (q.topics[0].title || '') : '通用';
+    // 从题目已有 topics 提取一级/二级标题
+    // edexcel_maths: topics[0] = {id:'P3-1', title:'Algebraic Methods', score:4}
+    //   → topic1 = 'Algebraic Methods', topic2 = 'Algebraic Methods'（章节级，无二级细分）
+    // cambridge: topics[0] = {id:'P3-1.1', title:'...', parent_id:'P3-1'}
+    //   → topic1 = parent_id mapped title, topic2 = title
+    let autoT1 = '未分类', autoT2 = '通用';
+    if (q.topics && q.topics.length > 0) {
+      const t0 = q.topics[0];
+      const tId = t0.id || '';
+      if (t0.parent_id) {
+        // Cambridge 结构：parent_id 是一级，id 是二级
+        autoT1 = t0.parent_id || '未分类';
+        autoT2 = t0.title || '通用';
+      } else if (tId.match(/^[A-Z0-9]+-\d+$/)) {
+        // Edexcel 章节 ID（如 P3-1, M1-2, S1-4）→ 直接用 title 作为 topic1
+        autoT1 = t0.title || tId;
+        autoT2 = t0.title || tId;
+      } else {
+        autoT1 = t0.title || '未分类';
+        autoT2 = t0.title || '通用';
+      }
+    }
     // Feature 4: paper 覆盖逻辑 — 弹窗手填 > 题目自带 maths_unit
     const resolvedPaper = paperOverride || q.maths_unit || '';
     return {
@@ -4366,6 +4396,7 @@ async function doCloudImport() {
     renderFileList();
     renderGrid();
     renderStats();
+    _loadAllSyllabi();       // Task2: 加载知识点筛选树
 
     // Task 3: toast 显示 paper 信息
     const paperLabel = _ciPaper ? ` / ${_ciPaper}` : '';
