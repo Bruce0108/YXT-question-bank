@@ -852,35 +852,6 @@
       <!-- 统计提示 -->
       <div id="ciCountHint" style="font-size:12px;color:var(--g500);text-align:center;padding:6px;display:none"></div>
 
-      <!-- 知识点筛选（可折叠） -->
-      <div style="margin-bottom:14px;border:1px solid var(--g200);border-radius:8px;overflow:hidden">
-        <div onclick="ciToggleTopicFilter()" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--g50);cursor:pointer;user-select:none">
-          <span style="font-size:12px;font-weight:700;color:var(--g600)">🎯 知识点筛选 <span style="font-weight:400;color:var(--g400)">（可选，不选则导入全部）</span></span>
-          <span id="ciTopicFilterChev" style="font-size:11px;color:var(--g400);transition:transform .2s">▶</span>
-        </div>
-        <div id="ciTopicFilterBody" style="display:none;padding:10px 12px">
-          <!-- 一级：章节 -->
-          <div style="margin-bottom:8px">
-            <label style="display:block;font-size:11px;font-weight:700;color:var(--g500);margin-bottom:4px">📂 一级（章节）</label>
-            <select id="ciTopic1" multiple size="5"
-                    style="width:100%;border:1px solid var(--g200);border-radius:6px;font-size:12px;padding:2px"
-                    onchange="ciOnTopic1Change()">
-              <option value="" disabled style="color:var(--g400)">先选择学科/考试局后加载...</option>
-            </select>
-            <div style="font-size:10px;color:var(--g400);margin-top:3px">按住 Ctrl / Cmd 可多选</div>
-          </div>
-          <!-- 二级：子知识点 -->
-          <div>
-            <label style="display:block;font-size:11px;font-weight:700;color:var(--g500);margin-bottom:4px">🔖 二级（子知识点）</label>
-            <select id="ciTopic2" multiple size="5"
-                    style="width:100%;border:1px solid var(--g200);border-radius:6px;font-size:12px;padding:2px">
-              <option value="" disabled style="color:var(--g400)">先选择一级章节后加载...</option>
-            </select>
-            <div style="font-size:10px;color:var(--g400);margin-top:3px">不选则导入所选章节下全部子知识点</div>
-          </div>
-        </div>
-      </div>
-
       <!-- 进度条 -->
       <div id="ciProgWrap" style="display:none;margin-top:12px">
         <div style="height:6px;background:var(--g200);border-radius:3px;overflow:hidden;margin-bottom:8px">
@@ -1134,6 +1105,22 @@ function _restoreSession() {
 }
 
 // 页面加载时尝试恢复上次数据（函数定义，在脚本末尾调用）
+// ── 判断某个 group 是否属于「需要知识点筛选树」的数学类型 ──
+function _isMathsGroup(g) {
+  if (g.source === 'edexcel_maths') return true;
+  if (g.paper_type === 'edexcel_maths') return true;
+  // cloud/workbook: 有 maths_unit 或 题目带有 topics 数据
+  if (g.source === 'cloud' || g.source === 'workbook') {
+    if (g.maths_unit) return true;
+    // 检查是否有任何题目携带了 topics（edexcel_maths 类型特征）
+    if (Array.isArray(g.questions) && g.questions.some(q => q.topics && q.topics.length > 0)) return true;
+    // 检查 allQuestions 中同 gIdx 的题目
+    const gIdx = groups.indexOf(g);
+    if (gIdx >= 0 && allQuestions.some(q => q.gIdx === gIdx && Array.isArray(q.topics) && q.topics.length > 0)) return true;
+  }
+  return false;
+}
+
 function _loadAllSyllabi() {
   // Cambridge 物理考纲（只要有 cambridge 文件就加载）
   const hasCambridge = groups.some(g => g.source === 'cambridge');
@@ -1143,10 +1130,7 @@ function _loadAllSyllabi() {
 
   // Edexcel Maths 考纲：根据文件的 unit 决定加载哪个 unit
   // 包含 cloud/workbook 来源但带有 maths_unit 的 group
-  const mathsGroups = groups.filter(g =>
-    g.source === 'edexcel_maths' ||
-    ((g.source === 'cloud' || g.source === 'workbook') && g.maths_unit)
-  );
+  const mathsGroups = groups.filter(g => _isMathsGroup(g));
   if (mathsGroups.length > 0) {
     // 收集所有用到的 unit（去重）
     const units = [...new Set(mathsGroups.map(g => g.maths_unit).filter(Boolean))];
@@ -1386,11 +1370,8 @@ function renderStats() {
 // ══════════════════════════════════════════════════════════
 function renderSyllabusCard() {
   const hasCambridge   = groups.some(g => g.source === 'cambridge');
-  // cloud/workbook groups with maths_unit count as edexcel_maths for syllabus display
-  const hasMaths       = groups.some(g =>
-    g.source === 'edexcel_maths' ||
-    ((g.source === 'cloud' || g.source === 'workbook') && g.maths_unit)
-  );
+  // cloud/workbook groups with maths_unit OR topics count as edexcel_maths for syllabus display
+  const hasMaths       = groups.some(g => _isMathsGroup(g));
   const card = document.getElementById('syllabusCard');
 
   // 显示条件：有 Cambridge 试卷 或 有 Edexcel Maths 试卷
@@ -1412,10 +1393,7 @@ function renderSyllabusCard() {
   const subtitle = document.getElementById('syllabusSubtitle');
   if (stype === 'edexcel_maths') {
     // 获取当前所有 edexcel_maths / cloud / workbook 文件的 unit 列表
-    const mathsGroups = groups.filter(g =>
-      g.source === 'edexcel_maths' ||
-      ((g.source === 'cloud' || g.source === 'workbook') && g.maths_unit)
-    );
+    const mathsGroups = groups.filter(g => _isMathsGroup(g));
     const units = [...new Set(mathsGroups.map(g => g.maths_unit).filter(Boolean))];
     if (units.length === 1) {
       subtitle.textContent = `(Edexcel IAL ${units[0]})`;
@@ -3236,8 +3214,6 @@ function toggleLibSubj(key) {
 }
 
 async function loadFromLib(board, subject, wbId, title) {
-  // 先收集知识点筛选条件（在关闭 Modal 前读取）
-  const libTopicFilter = _libGetSelectedTopics();
   closeLoadLibDialog();
   showLd(`正在读取题册《${title}》…`);
   try {
@@ -3246,10 +3222,8 @@ async function loadFromLib(board, subject, wbId, title) {
     hideLd();
     if (!r.ok || !d.ok) { toast(d.error || '读取失败', 'err'); return; }
 
-    const totalLoaded = _applyLoadedWorkbook(d, libTopicFilter);
-    const filterHint = (libTopicFilter.topic1Ids.size > 0 || libTopicFilter.topic2Ids.size > 0)
-      ? `，知识点筛选后 ${totalLoaded} 题` : `，共 ${d.count} 题`;
-    toast(`✅ 题册《${d.title}》已读取${filterHint}，可继续编辑`, 'ok');
+    _applyLoadedWorkbook(d);
+    toast(`✅ 题册《${d.title}》已读取，共 ${d.count} 题，可继续编辑`, 'ok');
   } catch(e) {
     hideLd(); toast('读取题册失败：' + e.message, 'err');
   }
@@ -3271,7 +3245,7 @@ async function deleteFromLib(evt, board, subject, wbId) {
   }
 }
 
-function _applyLoadedWorkbook(d, topicFilter) {
+function _applyLoadedWorkbook(d) {
   // ── 构建一个新的 group（workbook 类型）并追加到当前 groups ──
   const isAppend = allQuestions.length > 0;
   const newGIdx  = isAppend ? groups.length : 0;
@@ -3302,10 +3276,8 @@ function _applyLoadedWorkbook(d, topicFilter) {
     _wb_title:       d.title,
   };
 
-  // 追加题目（应用知识点过滤）
-  const hasFilter = topicFilter && (topicFilter.topic1Ids.size > 0 || topicFilter.topic2Ids.size > 0);
+  // 追加所有题目
   const baseSeq = allQuestions.length;
-  let addedCount = 0;
   for (let i = 0; i < d.questions.length; i++) {
     const q = d.questions[i];
     const qObj = {
@@ -3321,14 +3293,11 @@ function _applyLoadedWorkbook(d, topicFilter) {
       _img_b64:      q.img_bytes_b64 || '',
       _img_w:        q.img_w || 0,
       _img_h:        q.img_h || 0,
-      // Task3: 答案图片（从 library_load 的 answer_b64 字段）
+      // 答案图片（从 library_load 的 answer_b64 字段）
       answer_b64:    q.answer_b64 || '',
     };
-    // 应用知识点过滤
-    if (hasFilter && !_matchesTopicFilter(qObj, topicFilter)) continue;
     allQuestions.push(qObj);
     g.questions.push(qObj);
-    addedCount++;
   }
 
   groups.push(g);
@@ -3346,7 +3315,7 @@ function _applyLoadedWorkbook(d, topicFilter) {
 
   renderGrid();
   renderSyllabusCard();
-  _loadAllSyllabi();         // Task2: 加载知识点筛选树（cloud/workbook 也需要）
+  _loadAllSyllabi();         // 加载知识点筛选树（cloud/workbook 也需要）
   document.getElementById('statsCard').style.display = '';
   document.getElementById('actCard').style.display   = '';
   document.getElementById('toolbar').style.display   = '';
@@ -3355,7 +3324,6 @@ function _applyLoadedWorkbook(d, topicFilter) {
   // 更新保存按钮状态
   const wbBtn = document.getElementById('btnSaveWb');
   if (wbBtn) wbBtn.disabled = false;
-  return addedCount;
 }
 
 function closeLoadLibDialog() {
@@ -3579,33 +3547,6 @@ async function loadWorkbook(file) {
     <div id="libTreeContainer"
       style="flex:1;overflow-y:auto;padding:12px 14px;min-height:200px">
       <div style="text-align:center;padding:40px;color:#9ca3af">加载中…</div>
-    </div>
-    <!-- 知识点筛选（可折叠） -->
-    <div style="flex-shrink:0;border-top:1px solid #e5e7eb">
-      <div onclick="libToggleTopicFilter()" style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:#f9fafb;cursor:pointer;user-select:none">
-        <span style="font-size:12px;font-weight:700;color:#374151">🎯 知识点筛选 <span id="libTopicFilterBadge" style="font-size:10px;font-weight:400;color:#6b7280">（可选）</span></span>
-        <span id="libTopicFilterChev" style="font-size:11px;color:#9ca3af;transition:transform .2s">▶</span>
-      </div>
-      <div id="libTopicFilterBody" style="display:none;padding:10px 14px;background:#fff;border-top:1px solid #f3f4f6">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div>
-            <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;margin-bottom:4px">📂 一级（章节）</label>
-            <select id="libTopic1" multiple size="4"
-                    style="width:100%;border:1px solid #d1d5db;border-radius:6px;font-size:11px;padding:2px"
-                    onchange="libOnTopic1Change()">
-              <option value="" disabled style="color:#9ca3af">加载题册后自动填充</option>
-            </select>
-          </div>
-          <div>
-            <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;margin-bottom:4px">🔖 二级（子知识点）</label>
-            <select id="libTopic2" multiple size="4"
-                    style="width:100%;border:1px solid #d1d5db;border-radius:6px;font-size:11px;padding:2px">
-              <option value="" disabled style="color:#9ca3af">先选择一级章节</option>
-            </select>
-          </div>
-        </div>
-        <div style="font-size:10px;color:#9ca3af;margin-top:5px">按住 Ctrl/Cmd 多选 · 不选则读取全部题目</div>
-      </div>
     </div>
     <!-- Footer -->
     <div style="padding:12px 16px;border-top:1px solid #e5e7eb;background:#f9fafb;flex-shrink:0;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#6b7280">
@@ -4706,11 +4647,8 @@ async function doCloudImport() {
     sessionId = d.session_id;
     const grpData = d.groups[0];
 
-    // 收集知识点筛选条件
-    const ciFilteredTopics = _ciGetSelectedTopics();
-
-    // 把 img_bytes_b64 → _img_b64 供渲染，并应用知识点过滤
-    let importedQs = grpData.questions.map(q => ({
+    // 把 img_bytes_b64 → _img_b64 供渲染
+    const importedQs = grpData.questions.map(q => ({
       ...q,
       gIdx:       baseGIdx,
       source:     'cloud',
@@ -4719,11 +4657,6 @@ async function doCloudImport() {
       exam_date:  q.exam_date || '',
       _img_b64:   q.img_bytes_b64 || '',
     }));
-
-    // 知识点过滤（若用户选择了筛选条件）
-    if (ciFilteredTopics.topic1Ids.size > 0 || ciFilteredTopics.topic2Ids.size > 0) {
-      importedQs = importedQs.filter(q => _matchesTopicFilter(q, ciFilteredTopics));
-    }
 
     importedQs.forEach(q => allQuestions.push(q));
     groups.push({
@@ -4738,13 +4671,11 @@ async function doCloudImport() {
     renderFileList();
     renderGrid();
     renderStats();
-    _loadAllSyllabi();       // Task2: 加载知识点筛选树
+    _loadAllSyllabi();       // 加载知识点筛选树
 
-    // Task 3: toast 显示 paper 信息
+    // toast 显示 paper 信息
     const paperLabel = _ciPaper ? ` / ${_ciPaper}` : '';
-    const filterLabel = (ciFilteredTopics.topic1Ids.size > 0 || ciFilteredTopics.topic2Ids.size > 0)
-      ? `，知识点筛选后 ${importedQs.length} 题` : '';
-    toast(`☁️ 已从云端导入 ${d.total_questions} 道题目（${subject} / ${_ciBoard}${paperLabel}）${filterLabel}`, 'ok');
+    toast(`☁️ 已从云端导入 ${d.total_questions} 道题目（${subject} / ${_ciBoard}${paperLabel}）`, 'ok');
 
     setTimeout(() => closeModal('cloudImportMo'), 1200);
   } catch(e) {
@@ -4753,171 +4684,6 @@ async function doCloudImport() {
   } finally {
     document.getElementById('btnDoCloudImport').disabled = false;
   }
-}
-
-// ══════════════════════════════════════════════════════════
-//  知识点筛选辅助函数（云端导入 + 题册读取共用）
-// ══════════════════════════════════════════════════════════
-
-// ── 通用：判断题目是否匹配知识点过滤条件 ──
-// topicFilter: { topic1Ids: Set<string>, topic2Ids: Set<string> }
-function _matchesTopicFilter(q, topicFilter) {
-  if (!topicFilter) return true;
-  const { topic1Ids, topic2Ids } = topicFilter;
-  if (topic1Ids.size === 0 && topic2Ids.size === 0) return true;
-
-  const qTopics = Array.isArray(q.topics) ? q.topics : [];
-  if (qTopics.length === 0) return true;  // 无知识点标注：全部通过
-
-  return qTopics.some(t => {
-    const tid = String(t.id || '');
-    const pid = String(t.parent_id || '');
-
-    // 二级过滤：精确匹配 subtopic id
-    if (topic2Ids.size > 0 && topic2Ids.has(tid)) return true;
-
-    // 若只选了一级（没选二级），则匹配章节
-    if (topic2Ids.size === 0 && topic1Ids.size > 0) {
-      // parent_id 直接匹配一级章节 id
-      if (pid && topic1Ids.has(pid)) return true;
-      // tid 本身就是章节级 id（旧格式无 parent_id）
-      if (topic1Ids.has(tid)) return true;
-      // 新格式：tid=P3-1.1，其父章节 P3-1
-      const parentChapter = tid.replace(/\.\d+$/, '');
-      if (parentChapter !== tid && topic1Ids.has(parentChapter)) return true;
-    }
-    return false;
-  });
-}
-
-// ── 获取当前 syllabus 数据（优先 mathsSyllabus，其次 syllabus）──
-function _getActiveSyllabusData() {
-  return mathsSyllabus || syllabus;
-}
-
-// ── 云端导入 Modal：折叠/展开知识点筛选面板 ──
-function ciToggleTopicFilter() {
-  const body = document.getElementById('ciTopicFilterBody');
-  const chev = document.getElementById('ciTopicFilterChev');
-  const open = body.style.display !== 'none';
-  body.style.display = open ? 'none' : 'block';
-  chev.style.transform = open ? '' : 'rotate(90deg)';
-  // 展开时加载知识点选项
-  if (!open) ciLoadTopicOptions();
-}
-
-// ── 云端导入 Modal：加载一级知识点选项 ──
-function ciLoadTopicOptions() {
-  const syll = _getActiveSyllabusData();
-  const sel1 = document.getElementById('ciTopic1');
-  const sel2 = document.getElementById('ciTopic2');
-  sel2.innerHTML = '<option value="" disabled style="color:var(--g400)">先选择一级章节...</option>';
-  if (!syll || !syll.topics) {
-    sel1.innerHTML = '<option value="" disabled style="color:#dc2626">知识库尚未加载，请先导入题目</option>';
-    return;
-  }
-  sel1.innerHTML = syll.topics.map(t =>
-    `<option value="${t.id}">${t.id}. ${t.title}</option>`
-  ).join('');
-}
-
-// ── 云端导入 Modal：一级章节选中 → 更新二级选项 ──
-function ciOnTopic1Change() {
-  const syll = _getActiveSyllabusData();
-  const sel1 = document.getElementById('ciTopic1');
-  const sel2 = document.getElementById('ciTopic2');
-  const selectedIds = new Set([...sel1.selectedOptions].map(o => String(o.value)));
-  if (!syll || selectedIds.size === 0) {
-    sel2.innerHTML = '<option value="" disabled style="color:var(--g400)">先选择一级章节...</option>';
-    return;
-  }
-  const subs = [];
-  syll.topics.forEach(t => {
-    if (selectedIds.has(String(t.id))) {
-      (t.subtopics || []).forEach(s => subs.push({ id: s.id, title: s.title, parent: t.id }));
-    }
-  });
-  if (subs.length === 0) {
-    sel2.innerHTML = '<option value="" disabled style="color:var(--g400)">所选章节无二级子知识点</option>';
-    return;
-  }
-  sel2.innerHTML = subs.map(s =>
-    `<option value="${s.id}">${s.id} — ${s.title}</option>`
-  ).join('');
-}
-
-// ── 云端导入 Modal：获取已选的知识点 id 集合 ──
-function _ciGetSelectedTopics() {
-  const sel1 = document.getElementById('ciTopic1');
-  const sel2 = document.getElementById('ciTopic2');
-  return {
-    topic1Ids: new Set([...sel1.selectedOptions].map(o => String(o.value)).filter(Boolean)),
-    topic2Ids: new Set([...sel2.selectedOptions].map(o => String(o.value)).filter(Boolean)),
-  };
-}
-
-// ── 题册读取 Modal：折叠/展开知识点筛选面板 ──
-function libToggleTopicFilter() {
-  const body = document.getElementById('libTopicFilterBody');
-  const chev = document.getElementById('libTopicFilterChev');
-  const open = body.style.display !== 'none';
-  body.style.display = open ? 'none' : 'block';
-  chev.style.transform = open ? '' : 'rotate(90deg)';
-  if (!open) libLoadTopicOptions();
-}
-
-// ── 题册读取 Modal：加载一级知识点选项 ──
-function libLoadTopicOptions() {
-  const syll = _getActiveSyllabusData();
-  const sel1 = document.getElementById('libTopic1');
-  const sel2 = document.getElementById('libTopic2');
-  sel2.innerHTML = '<option value="" disabled style="color:#9ca3af">先选择一级章节</option>';
-  if (!syll || !syll.topics) {
-    sel1.innerHTML = '<option value="" disabled style="color:#dc2626">知识库尚未加载</option>';
-    // 尝试异步加载
-    fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d => {
-      mathsSyllabus = d; libLoadTopicOptions();
-    }).catch(() => {});
-    return;
-  }
-  sel1.innerHTML = syll.topics.map(t =>
-    `<option value="${t.id}">${t.id}. ${t.title}</option>`
-  ).join('');
-}
-
-// ── 题册读取 Modal：一级章节选中 → 更新二级选项 ──
-function libOnTopic1Change() {
-  const syll = _getActiveSyllabusData();
-  const sel1 = document.getElementById('libTopic1');
-  const sel2 = document.getElementById('libTopic2');
-  const selectedIds = new Set([...sel1.selectedOptions].map(o => String(o.value)));
-  if (!syll || selectedIds.size === 0) {
-    sel2.innerHTML = '<option value="" disabled style="color:#9ca3af">先选择一级章节</option>';
-    return;
-  }
-  const subs = [];
-  syll.topics.forEach(t => {
-    if (selectedIds.has(String(t.id))) {
-      (t.subtopics || []).forEach(s => subs.push({ id: s.id, title: s.title }));
-    }
-  });
-  if (subs.length === 0) {
-    sel2.innerHTML = '<option value="" disabled style="color:#9ca3af">所选章节无二级子知识点</option>';
-    return;
-  }
-  sel2.innerHTML = subs.map(s =>
-    `<option value="${s.id}">${s.id} — ${s.title}</option>`
-  ).join('');
-}
-
-// ── 题册读取 Modal：获取已选的知识点 id 集合 ──
-function _libGetSelectedTopics() {
-  const sel1 = document.getElementById('libTopic1');
-  const sel2 = document.getElementById('libTopic2');
-  return {
-    topic1Ids: new Set([...sel1.selectedOptions].map(o => String(o.value)).filter(Boolean)),
-    topic2Ids: new Set([...sel2.selectedOptions].map(o => String(o.value)).filter(Boolean)),
-  };
 }
 
 // ── 初始化页面布局 ──

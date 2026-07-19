@@ -7317,14 +7317,22 @@ def cloud_library_import_to_session():
         })
 
     # 注册为虚拟 session
+    # 推导 maths_unit：若题目都有相同的 maths_unit，用该值；否则用 maths_unit 参数
+    q_mu_vals = [q.get('maths_unit', '') for q in selected_qs if q.get('maths_unit')]
+    inferred_maths_unit = maths_unit or (q_mu_vals[0] if len(set(q_mu_vals)) == 1 else None)
+    # 推导 paper_type：优先用 maths_unit 判定为 edexcel_maths，否则用题目里的值
+    inferred_paper_type = 'edexcel_maths' if inferred_maths_unit else (
+        selected_qs[0].get('paper_type', 'structured') if selected_qs else 'structured'
+    )
+
     session_id = str(uuid.uuid4())
     virt_group = {
         'filename':        f'{subject}_{board}_云端导入.pdf',
         'path':            '',
         'r2_key':          '',
         'source':          'cloud',
-        'paper_type':      selected_qs[0].get('paper_type', 'structured') if selected_qs else 'structured',
-        'maths_unit':      None,
+        'paper_type':      inferred_paper_type,
+        'maths_unit':      inferred_maths_unit,
         'exam_date':       '',
         'questions':       virt_questions,
         'total_questions': len(virt_questions),
@@ -7340,7 +7348,7 @@ def cloud_library_import_to_session():
             'filename':        virt_group['filename'],
             'source':          virt_group['source'],
             'paper_type':      virt_group['paper_type'],
-            'maths_unit':      None,
+            'maths_unit':      virt_group['maths_unit'],
             'exam_date':       '',
             'questions':       virt_questions,
             'total_questions': len(virt_questions),
