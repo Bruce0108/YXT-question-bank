@@ -623,6 +623,30 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
         re.IGNORECASE
     )
 
+    # ── 阶段0（最高优先级）：文字横线检测 ──
+    # Edexcel Maths 等试卷的答题横线是文字字符 "____..."，不是 drawing 路径
+    # 通用函数也加入此检测，作为辅助信号
+    text_hline_y = None
+    try:
+        dict_blocks = page.get_text('dict')['blocks']
+        text_hline_ys = []
+        for b in dict_blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
+                for span in line.get('spans', []):
+                    t = span['text']
+                    # 判定为答题横线：下划线字符占比 > 80% 且总字符数 ≥ 10
+                    if len(t) >= 10 and t.count('_') / len(t) > 0.80:
+                        y0 = span['bbox'][1]
+                        if 40 < y0 < ph - 40:
+                            text_hline_ys.append(y0)
+        if text_hline_ys:
+            text_hline_ys.sort()
+            text_hline_y = max(0, text_hline_ys[0] - 2)
+    except Exception:
+        pass
+
     # ── 阶段1：通过 drawing 找横线区域起始 y（最可靠信号）──
     # 分两档：超宽单条线（单独触发）+ 普通宽线密集区（2条以上）
     hline_start = None
@@ -680,6 +704,11 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
                     break
     except Exception:
         pass
+
+    # 将文字横线信号并入 hline_start（取更早出现的）
+    if text_hline_y is not None and text_hline_y > 40:
+        if hline_start is None or text_hline_y < hline_start:
+            hline_start = text_hline_y
 
     # ── 阶段2：答题区文字标志（扫描所有文字块）──
     answer_zone_y0 = ph
@@ -1131,21 +1160,62 @@ def _find_edexcel_maths_question_bottom(page, page_height):
     Edexcel Maths 题目页专用：只截取题干，不含答题横线。
     适用所有单元：P1/P2/P3/P4/FP1/FP2/S1/S2/M1/M2/D1。
 
-    策略（按优先级）：
-      1. 横线区域检测（与 _find_question_stem_bottom 一致）：
-         - 单条超宽线（>70% 页宽）直接截止
-         - 连续2条普通宽线（>30% 页宽，间距<32pt）截止
-         此信号优先于 marks，防止 marks 与答题线之间存在间隔时截入横线
-      2. 在右侧（x > 页宽×60%）找所有 marks 标记 (N) 的位置
-         取最后一个 marks y1 + 8pt
-      3. 综合：取 min(hline_signal, marks_signal)，取更保守的那个
+    策略（按优先级，三层信号）：
+      1. 文字横线检测（最精准）：Edexcel Maths 答题横线是文字字符"____..."
+         直接找第一条含≥10个下划线的 span，取其 y0 - 2 作为截止点
+      2. 右侧 marks (N) 标记：取最后一个 marks y1 + 2pt
+         （实测 marks_y1 到横线距离固定 ~3.5pt，+2 安全不越线）
+      3. drawing 横线检测（兜底）：针对其他 Edexcel 系列可能有 drawing 线的情况
+      综合：取三者中最小值（最保守截止点）
       4. fallback：找最后一个非横线内容块底部
     """
     pw = page.rect.width
     ph = page_height
 
-    # ── 信号1：横线区域检测（同 _find_question_stem_bottom，两档）──
-    hline_start = None
+    # ── 信号1（最高优先级）：文字横线检测 ──
+    # Edexcel Maths 的答题横线是 "____..." 文字字符，不是 drawing 路径
+    # 直接扫描所有 spans，找第一条含有大量下划线的行
+    text_hline_y = None
+    try:
+        dict_blocks = page.get_text('dict')['blocks']
+        spans_sorted = []
+        for b in dict_blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
+                for span in line.get('spans', []):
+                    t = span['text']
+                    # 判定为答题横线：下划线字符占比 > 80% 且总字符数 ≥ 10
+                    if len(t) >= 10 and t.count('_') / len(t) > 0.80:
+                        spans_sorted.append(span['bbox'][1])  # y0
+        if spans_sorted:
+            spans_sorted.sort()
+            # 取第一条答题横线的 y0，再退 2pt 作为截止点
+            text_hline_y = max(0, spans_sorted[0] - 2)
+    except Exception:
+        pass
+
+    # ── 信号2：右侧 marks (N) 标记 ──
+    blocks = page.get_text('blocks')
+    marks_x_min = max(350, pw * 0.60)
+    MARKS_PAT = re.compile(r'^\(\d+\)$')
+
+    marks_y1 = None
+    for b in blocks:
+        x0, y0, x1, y1, txt, bno, btype = b
+        if btype != 0:
+            continue
+        ts = txt.strip()
+        if x0 > marks_x_min and y0 < ph - 60 and MARKS_PAT.match(ts):
+            marks_y1 = y1   # 取最后一个（持续更新）
+
+    marks_bottom = None
+    if marks_y1 is not None:
+        # +2pt：实测 marks_y1 到横线固定 ~3.5pt，+2 不会越过横线
+        marks_bottom = min(marks_y1 + 2, ph - 25)
+
+    # ── 信号3（兜底）：drawing 横线检测（针对其他系列有 drawing 线的情况）──
+    drawing_hline_y = None
     try:
         drawings = page.get_drawings()
         wide_hlines   = []
@@ -1175,65 +1245,50 @@ def _find_edexcel_maths_question_bottom(page, page_height):
 
         if wide_hlines:
             wide_hlines.sort()
-            hline_start = max(0, wide_hlines[0] - 6)
+            drawing_hline_y = max(0, wide_hlines[0] - 6)
 
-        if hline_start is None and len(normal_hlines) >= 2:
+        if drawing_hline_y is None and len(normal_hlines) >= 2:
             normal_hlines.sort()
             for idx in range(len(normal_hlines) - 1):
                 y_a = normal_hlines[idx]
                 y_b = normal_hlines[idx + 1]
                 if (y_b - y_a) < 32:
-                    hline_start = max(0, y_a - 6)
+                    drawing_hline_y = max(0, y_a - 6)
                     break
 
-        if hline_start is None and len(normal_hlines) >= 3:
+        if drawing_hline_y is None and len(normal_hlines) >= 3:
             normal_hlines.sort()
             for idx in range(len(normal_hlines) - 2):
                 y_a = normal_hlines[idx]
                 y_b = normal_hlines[idx + 1]
                 y_c = normal_hlines[idx + 2]
                 if (y_b - y_a) < 50 and (y_c - y_b) < 50:
-                    hline_start = max(0, y_a - 6)
+                    drawing_hline_y = max(0, y_a - 6)
                     break
     except Exception:
         pass
 
-    # ── 信号2：右侧 marks (N) 标记 ──
-    blocks = page.get_text('blocks')
-    # 右侧 marks 的 x 阈值：页宽 60%（适应 P/FP/S/M/D 各系列版式）
-    marks_x_min = max(350, pw * 0.60)
-    # 精确匹配 '(3)' '(10)' 等 marks 格式
-    MARKS_PAT = re.compile(r'^\(\d+\)$')
-
-    marks_y1 = None
-    for b in blocks:
-        x0, y0, x1, y1, txt, bno, btype = b
-        if btype != 0:
-            continue
-        ts = txt.strip()
-        # 右侧 marks（相对 x 阈值）且不在页脚
-        if x0 > marks_x_min and y0 < ph - 60 and MARKS_PAT.match(ts):
-            marks_y1 = y1   # 取最后一个（持续更新）
-
-    marks_bottom = None
-    if marks_y1 is not None:
-        marks_bottom = min(marks_y1 + 8, ph - 25)
-
-    # ── 综合取最保守（更小）的信号 ──
+    # ── 综合：收集所有有效信号，取最小值（最保守截止点）──
     candidates = []
-    if hline_start is not None and hline_start > 60:
-        candidates.append(hline_start)
+    if text_hline_y is not None and text_hline_y > 60:
+        candidates.append(text_hline_y)
+    if drawing_hline_y is not None and drawing_hline_y > 60:
+        candidates.append(drawing_hline_y)
     if marks_bottom is not None:
         candidates.append(marks_bottom)
 
     if candidates:
         result = min(candidates)
-        # 如果 marks 存在且恰好在横线截止点之前，确保 marks 完整
-        if marks_bottom is not None and hline_start is not None:
-            if marks_bottom > hline_start:
-                # marks 在横线区之后（异常情况：横线先出现再是marks）
-                # 保守处理：使用 marks_bottom 以确保题干完整
-                result = marks_bottom
+        # 安全检查：如果 marks 存在且 marks_bottom 比所有横线信号都大，
+        # 说明题干（含 marks）完整可见，直接使用
+        # 如果 marks_bottom 比横线信号更小，说明横线检测异常，
+        # 以 marks_bottom 为准确保 marks 完整
+        if marks_bottom is not None:
+            # 确保至少包含最后一个 marks
+            result = max(result, marks_bottom)
+            # 但如果文字横线信号存在且在 marks_bottom 之后，以横线为准
+            if text_hline_y is not None and text_hline_y < marks_bottom:
+                result = text_hline_y
         return min(result, ph - 25)
 
     # ── fallback：找最后一个非横线、非 DO NOT WRITE、非页码的内容块底部 ──
