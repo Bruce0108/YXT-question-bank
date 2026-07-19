@@ -1677,11 +1677,9 @@ function _syncToggleAllAnsBtn() {
   }
 }
 
-// ── 更新 PDF modal 的「包含答案」开关 + 全局答案切换按钮可见性 ──
+// ── 更新全局答案切换按钮可见性（与 PDF Modal 的答案选项分离）──
 function _updatePdfAnswerToggle() {
   const hasAnyAnswer = allQuestions.some(q => q.answer_b64);
-  const wrap = document.getElementById('pdfAnswerToggleWrap');
-  if (wrap) wrap.style.display = hasAnyAnswer ? '' : 'none';
   const allAnsWrap = document.getElementById('toggleAllAnsWrap');
   if (allAnsWrap) allAnsWrap.style.display = hasAnyAnswer ? '' : 'none';
 }
@@ -2219,6 +2217,17 @@ function openPdfModal(scope) {
   if (!nums.length) { toast('没有可导出的题目','err'); return; }
   document.getElementById('pdfQCount').textContent = nums.length;
   document.getElementById('pdfDpiShow').textContent = getDPI();
+
+  // 根据本次导出范围内是否有题目带答案，决定是否显示导出模式选项
+  const hasAnswerInScope = nums.some(q => q && q.answer_b64);
+  const wrap = document.getElementById('pdfAnswerToggleWrap');
+  if (wrap) wrap.style.display = hasAnswerInScope ? '' : 'none';
+  // 若无答案题目，重置回 question_only 状态
+  if (!hasAnswerInScope) {
+    const radioQOnly = document.querySelector('input[name="pdfExportMode"][value="question_only"]');
+    if (radioQOnly) { radioQOnly.checked = true; _syncPdfModeRadio('question_only'); }
+  }
+
   document.getElementById('pdfMo').classList.add('show');
 }
 function closePdfModal() { document.getElementById('pdfMo').classList.remove('show'); }
