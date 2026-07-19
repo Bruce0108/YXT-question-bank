@@ -1121,6 +1121,34 @@ function _isMathsGroup(g) {
   return false;
 }
 
+// ── 从题目列表的 topics.id 前缀推导涉及的 unit 集合 ──
+// topics id 格式：P3-1.1 / P3-1 / WMA13-1 / 4PME0_01-1 等
+// unit 取第一个 '-' 前的部分（如 P3、WMA13）
+function _inferUnitsFromQuestions(qs) {
+  const units = new Set();
+  qs.forEach(q => {
+    // 优先取题目或所在 group 的 maths_unit 字段
+    const mu = q.maths_unit || (groups[q.gIdx] && groups[q.gIdx].maths_unit) || null;
+    if (mu) { units.add(mu); return; }
+    // 从 topics id 前缀推导
+    (q.topics || []).forEach(t => {
+      const id = String(t.id || t.parent_id || '');
+      const m = id.match(/^([A-Za-z0-9]+)-/);
+      if (m) units.add(m[1]);
+    });
+  });
+  return units;
+}
+
+// ── 获取当前所有 edexcel_maths 题目的 unit 集合 ──
+function _getActiveUnits() {
+  const mathsQs = allQuestions.filter(q => {
+    const g = groups[q.gIdx];
+    return g && _isMathsGroup(g);
+  });
+  return _inferUnitsFromQuestions(mathsQs);
+}
+
 function _loadAllSyllabi() {
   // Cambridge 物理考纲（只要有 cambridge 文件就加载）
   const hasCambridge = groups.some(g => g.source === 'cambridge');
@@ -1128,20 +1156,22 @@ function _loadAllSyllabi() {
     fetch('/api/syllabus').then(r=>r.json()).then(d=>{syllabus=d; renderSyllabusCard();}).catch(()=>{});
   }
 
-  // Edexcel Maths 考纲：根据文件的 unit 决定加载哪个 unit
-  // 包含 cloud/workbook 来源但带有 maths_unit 的 group
+  // Edexcel Maths 考纲：根据题目实际涉及的 unit 决定加载哪个 unit
   const mathsGroups = groups.filter(g => _isMathsGroup(g));
   if (mathsGroups.length > 0) {
-    // 收集所有用到的 unit（去重）
-    const units = [...new Set(mathsGroups.map(g => g.maths_unit).filter(Boolean))];
+    // 优先从 groups.maths_unit 收集，再从 topics 推导补充
+    const unitSet = _getActiveUnits();
+    const units = [...unitSet].filter(Boolean);
 
     if (units.length === 1) {
       // 单一 unit：加载该 unit 的过滤考纲
-      const unit = units[0];
-      const url = `/api/syllabus/edexcel_maths?unit=${encodeURIComponent(unit)}`;
+      const url = `/api/syllabus/edexcel_maths?unit=${encodeURIComponent(units[0])}`;
       fetch(url).then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
+    } else if (units.length > 1) {
+      // 多个不同 unit：加载全部考纲（后续由 renderTopicTree 按 activeUnits 过滤显示）
+      fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
     } else {
-      // 多个不同 unit 或 unit 未知：加载全部考纲
+      // unit 未知：加载全部考纲
       fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
     }
   }
@@ -1392,9 +1422,8 @@ function renderSyllabusCard() {
   // ── 更新副标题 ──
   const subtitle = document.getElementById('syllabusSubtitle');
   if (stype === 'edexcel_maths') {
-    // 获取当前所有 edexcel_maths / cloud / workbook 文件的 unit 列表
-    const mathsGroups = groups.filter(g => _isMathsGroup(g));
-    const units = [...new Set(mathsGroups.map(g => g.maths_unit).filter(Boolean))];
+    // 从实际题目推导涉及的 unit（优先 maths_unit 字段，其次 topics id 前缀）
+    const units = [..._getActiveUnits()].filter(Boolean);
     if (units.length === 1) {
       subtitle.textContent = `(Edexcel IAL ${units[0]})`;
     } else if (units.length > 1) {
@@ -1824,6 +1853,9 @@ function renderTopicTree() {
 
   // ── Edexcel Maths：两级树（章节 + 子知识点），带题目数量统计 ──
   if (stype === 'edexcel_maths') {
+    // 计算当前题目实际涉及的 unit 集合（用于过滤显示章节）
+    const activeUnits = _getActiveUnits();
+
     // 统计每个 topic/subtopic 对应的题目数
     // 兼容新格式（id=P3-1.1, parent_id=P3-1）和旧格式（id=P3-1）
     const topicCount = {};   // id → count（含章节级和subtopic级）
@@ -1842,11 +1874,15 @@ function renderTopicTree() {
     const chapterCount = {};
     curSyllabus.topics.forEach(topic => {
       const chId = String(topic.id);
-      // 直接命中章节的题目 + 命中其 subtopic 的题目（去重已在上面处理）
       chapterCount[chId] = topicCount[chId] || 0;
     });
 
     curSyllabus.topics.forEach(topic => {
+      // ── 只显示当前题目实际涉及的 unit 章节 ──
+      // topic.unit 为该章节所属 unit（如 'P3'），activeUnits 为当前题目涉及的 unit 集合
+      // 若 activeUnits 非空，则只显示属于这些 unit 的章节；若 activeUnits 为空（考纲无 unit 字段）则全显示
+      if (activeUnits.size > 0 && topic.unit && !activeUnits.has(topic.unit)) return;
+
       if (q && !topic.title.toLowerCase().includes(q) &&
           !String(topic.id).toLowerCase().includes(q) &&
           !(topic.subtopics||[]).some(s => s.title.toLowerCase().includes(q))) return;
@@ -2588,8 +2624,16 @@ function openEditMeta(uid, gIdx, qNum, focusField, e) {
   treeWrap.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px">⏳ 加载中...</div>';
 
   const grp = groups[gIdx] || {};
-  const unit = grp.maths_unit || null;
-  const apiUrl = unit ? `/api/syllabus/edexcel_maths?unit=${unit}` : '/api/syllabus/edexcel_maths';
+  // 推导 unit：优先 group.maths_unit，其次从该题目的 topics id 前缀推导
+  let unit = grp.maths_unit || null;
+  if (!unit && q.topics && q.topics.length > 0) {
+    const unitSet = _inferUnitsFromQuestions([q]);
+    const unitArr = [...unitSet].filter(Boolean);
+    if (unitArr.length === 1) unit = unitArr[0];
+  }
+  const apiUrl = unit
+    ? `/api/syllabus/edexcel_maths?unit=${encodeURIComponent(unit)}`
+    : '/api/syllabus/edexcel_maths';
 
   fetch(apiUrl).then(r => r.json()).then(data => {
     _editMeta.sessionTopics = data.topics || [];
