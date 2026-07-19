@@ -1326,6 +1326,7 @@ def _is_answer_writing_page(page):
        且有3条以上横线绘制路径
     3. 有效内容极少（≤8字符）即视为空白页
     4. Edexcel Maths 答题续页特征：仅有 "Question N continued" + 大量横线
+       （修复：逐行拆分混合块；SKIP_RE 含 Q\\d+；CONTINUE_RE 含 (Total N marks)/(Leave/blank)）
 
     注意：首页（包含题目编号）永远不应被本函数判为答题页（调用方保证）。
     """
@@ -1355,7 +1356,9 @@ def _is_answer_writing_page(page):
     SKIP_RE = re.compile(
         r'^(DO NOT WRITE|Turn over|©|UCLES|\d{1,4}$|9702/|\*P|P\d{4,}[A-Z]'
         r'|WMA\d{2}|WFM\d{2}|WST\d{2}|WME\d{2}|WDM\d{2}|WMS\d{2}|WPM\d{2}'  # Edexcel Applied Maths 卷号
-        r'|[A-Z]{2,4}\d{4,}|\s*$)',
+        r'|[A-Z]{2,4}\d{4,}'
+        r'|Q\d{1,2}$'   # Edexcel Maths 续页底部题号标记（如 "Q1" "Q10"）
+        r'|\s*$)',
         re.IGNORECASE
     )
     # 续页/答题区提示文字：不计为有效题目内容
@@ -1364,8 +1367,11 @@ def _is_answer_writing_page(page):
         r'^(question\s+\d+\s+continued|'
         r'total\s+for\s+(question|this\s+question)[\s\d]*|'
         r'\(total\s+for\s+(question|this\s+question)[^)]*\)|'
+        r'\(total\s+\d+\s+marks?\)|'   # (Total N marks) — Edexcel Maths 续页底部总分
+        r'total\s+\d+\s+marks?|'         # Total N marks（无括号）
         r'answer\s+space|answer\s+in\s+the\s+space|'
-        r'write\s+your\s+answer|leave\s+blank|'
+        r'write\s+your\s+answer|'
+        r'leave\s+blank|^leave$|^blank$|'  # "Leave blank" 也可能被拆成两个单独行
         r'additional\s+(answer\s+)?space|'
         r'do\s+not\s+write\s+(in\s+this\s+space|here|outside)|'
         r'for\s+examiner[\'s]*\s+use|examiner\s+only)',
@@ -1389,15 +1395,24 @@ def _is_answer_writing_page(page):
         if CONTINUE_RE.match(ts):
             continue
         # 统计横线字符（下划线/破折线全组成的行）
-        clean = ts.replace(' ', '').replace('\n', '').replace('\t', '')
-        if clean and all(c in '_-–—' for c in clean):
-            underscore_chars += len(clean)
-        else:
-            real_content_chars += len(ts)
+        # 注意：Edexcel Maths 续页末尾可能有 "___...\nQ1" 的混合块
+        # 逐行拆分处理，区分纯横线行和非横线行
+        for line in ts.split('\n'):
+            line_s = line.strip()
+            if not line_s:
+                continue
+            line_clean = line_s.replace(' ', '').replace('\t', '')
+            if line_clean and all(c in '_-–—' for c in line_clean):
+                underscore_chars += len(line_clean)
+            elif SKIP_RE.match(line_s) or CONTINUE_RE.match(line_s):
+                pass  # 跳过（续页标记或页眉）
+            else:
+                real_content_chars += len(line_s)
 
     # 判断答题页：优先看下划线字符数量
     # 规则A：大量下划线（>200字符）+ 有效内容很少（≤ 50字符）→ 答题页
-    # 这覆盖了 "Question N continued + 满页下划线" 的情况
+    # 这覆盖了 "Question N continued + 满页下划线 + Q1 + (Total N marks)" 的情况
+    # 注意：(Total N marks) 已被 CONTINUE_RE 过滤，Q1 已被 SKIP_RE 过滤
     if underscore_chars > 200 and real_content_chars <= 50:
         return True
 
