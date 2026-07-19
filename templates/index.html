@@ -613,7 +613,10 @@
       <div style="background:#fff;border:1px solid var(--g200);border-radius:10px;padding:16px;box-shadow:var(--sh)">
         <div style="font-size:12px;font-weight:700;color:var(--g600);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
           <span>📂 题库目录</span>
-          <button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 8px" onclick="loadCloudTree()">刷新</button>
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 8px" onclick="loadCloudTree()">刷新</button>
+            <button class="btn btn-outline btn-sm" id="btnRepairTopics" style="font-size:10px;padding:2px 8px;color:#e67e22;border-color:#e67e22" onclick="repairCloudTopics()" title="重新推导所有题目的知识点分类，修复错误归档">🔧 修复知识点</button>
+          </div>
         </div>
         <!-- 搜索框 -->
         <input type="text" id="cloudTreeSearch" placeholder="🔍 搜索学科/考试局/知识点..."
@@ -3549,6 +3552,51 @@ async function loadCloudStats() {
   } catch(e) { console.warn('stats load error', e); }
 }
 
+// 修复云端题库所有题目的知识点分类（重新从 topics[] 推导 topic1/topic2）
+async function repairCloudTopics() {
+  const btn = document.getElementById('btnRepairTopics');
+  if (!confirm('将重新推导云端所有题目的知识点分类（修复M1等卷子的错误归档）。\n\n先预览（dry_run）将显示需要修复的条数，再选择是否执行修复。\n\n点击确定开始预览...')) return;
+
+  btn.disabled = true; btn.textContent = '⏳ 预览中...';
+  try {
+    // Step 1: dry_run 预览
+    const r1 = await fetch('/api/cloud_library/repair_topics', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ dry_run: true })
+    });
+    const d1 = await r1.json();
+    const previewLines = (d1.preview || []).map(p =>
+      `• ${p.qid}: [${p.old_t1}] → [${p.new_t1}] / [${p.old_t2}] → [${p.new_t2}]`
+    ).join('\n');
+    const msg = `预览结果：共检查 ${d1.checked} 道题，需修复 ${d1.repaired} 道。\n\n` +
+                (previewLines ? `前${Math.min(50, d1.repaired)}条详情：\n${previewLines}\n\n` : '') +
+                '是否执行修复？（此操作不可逆，会移动题目到正确目录）';
+    if (d1.repaired === 0) {
+      toast(`✅ 所有题目分类正确，无需修复（共检查 ${d1.checked} 道）`, 'info', 5000);
+      return;
+    }
+    if (!confirm(msg)) return;
+
+    // Step 2: 执行修复
+    btn.textContent = '⏳ 修复中...';
+    const r2 = await fetch('/api/cloud_library/repair_topics', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ dry_run: false })
+    });
+    const d2 = await r2.json();
+    toast(`✅ 修复完成：共修复 ${d2.repaired} 道，失败 ${d2.failed} 道`, 'ok', 5000);
+    // 刷新目录树和统计
+    await loadCloudTree();
+    await refreshCloudStats();
+  } catch(e) {
+    toast('修复失败: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '🔧 修复知识点';
+  }
+}
+
 async function refreshCloudStats() {
   const btn = document.getElementById('btnRefreshStats');
   btn.disabled = true; btn.textContent = '⏳ 重算中...';
@@ -4162,26 +4210,35 @@ async function doCloudSave() {
     // ── 无筛选器 → 从题目自身 topics 推断 ──
     let autoT1 = '未分类', autoT2 = '通用';
     if (q.topics && q.topics.length > 0) {
-      const t0 = q.topics[0];
-      const tId = String(t0.id || '');
+      // 优先选择有 parent_id（subtopic级）且不是纯通用建模章节的条目
+      // 已知通用建模章节（几乎每道题都匹配，代表性差）：
+      const GENERIC_CHAPTERS = new Set(['M1-1', 'M2-1', 'S1-1', 'FP1-1']);
+      // 策略：优先取有 parent_id 且 parent_id 不在 GENERIC_CHAPTERS 的条目
+      //       其次取有 parent_id 的任意条目（包括通用章节）
+      //       最后 fallback 到 topics[0]
+      const bestTopic =
+        q.topics.find(t => t.parent_id && !GENERIC_CHAPTERS.has(String(t.parent_id))) ||
+        q.topics.find(t => t.parent_id) ||
+        q.topics[0];
+      const tId = String(bestTopic.id || '');
 
-      if (t0.parent_id && t0.parent_title) {
+      if (bestTopic.parent_id && bestTopic.parent_title) {
         // 新版 Edexcel Maths subtopic 格式：parent_id=章节id, parent_title=章节title
         // 与筛选面板两级结构完全对齐：topic1=章节, topic2=subtopic
-        autoT1 = t0.parent_title;
-        autoT2 = t0.title || autoT1;
-      } else if (t0.parent_id) {
+        autoT1 = bestTopic.parent_title;
+        autoT2 = bestTopic.title || autoT1;
+      } else if (bestTopic.parent_id) {
         // Cambridge 结构（parent_id 是数字）或旧版 edexcel_maths
-        const parentTitle = camTopicTitleMap[String(t0.parent_id)] || t0.parent_id;
+        const parentTitle = camTopicTitleMap[String(bestTopic.parent_id)] || bestTopic.parent_id;
         autoT1 = parentTitle;
-        autoT2 = t0.title || autoT1;
+        autoT2 = bestTopic.title || autoT1;
       } else if (tId.match(/^[A-Z0-9]+-\d+(\.\d+)?$/)) {
         // Edexcel 章节 ID（如 P3-1, M1-2, S1-4）→ 直接用 title 作为 topic1
-        autoT1 = t0.title || tId;
-        autoT2 = t0.title || tId;
+        autoT1 = bestTopic.title || tId;
+        autoT2 = bestTopic.title || tId;
       } else {
-        autoT1 = t0.title || '未分类';
-        autoT2 = t0.title || '通用';
+        autoT1 = bestTopic.title || '未分类';
+        autoT2 = bestTopic.title || '通用';
       }
     }
     return { t1: autoT1, t2: autoT2 };

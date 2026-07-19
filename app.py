@@ -1651,6 +1651,7 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
                     'parent_id':    sid,
                     'parent_title': chapter_title,
                     'score':        sc,
+                    '_has_sub':     True,   # 内部标记，用于排序
                 })
             else:
                 # 无 subtopic 匹配：返回章节级别（保持向后兼容）
@@ -1658,7 +1659,16 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
                     'id':    sid,
                     'title': chapter_title,
                     'score': sc,
+                    '_has_sub': False,
                 })
+
+        # ── 二级排序：有 subtopic 精确匹配的条目优先排在前面 ──
+        # 这样 topics[0] 总是最具体的知识点，而不是通用章节（如 M1-1 数学建模）
+        result.sort(key=lambda x: (0 if x.get('_has_sub') else 1, -x['score']))
+        # 清除内部排序标记
+        for r in result:
+            r.pop('_has_sub', None)
+
         # 最多返回 3 个（头栏空间有限；score 已降序）
         return result[:3]
     else:
@@ -1825,25 +1835,36 @@ _MATHS_CHAPTER_RULES = [
                'r = f(theta)','cardioid','rose curve',
                'convert.*polar','polar.*cartesian'], []),
     # ── M1 ──
-    ('M1-1', ['model','particle','rigid body','smooth','rough','light','inextensible',
-              'assumption','mathematical model'], []),
+    # M1-1: Mathematical Models in Mechanics
+    # 只匹配真正讨论"建立模型/验证模型/建模假设"的题，不匹配泛用力学关键词
+    ('M1-1', ['mathematical model','validate.*model','improve.*model',
+              'state.*assumption','list.*assumption','modelling assumption',
+              'limitations of the model','comment on.*model',
+              'rigid body assumption','particle assumption'], []),
     ('M1-2', ['constant acceleration','suvat','v = u + at','s = ut',
-              'velocity-time graph','displacement-time',
-              'kinematics','free fall','acceleration due to gravity'], []),
+              'v² = u²','velocity-time graph','displacement-time',
+              'kinematics','free fall','acceleration due to gravity',
+              'uniform acceleration'], []),
     ('M1-3', ['vector.*velocity','vector.*force','resultant vector',
-              'column vector','i.*j component','bearing','component form'], []),
+              'column vector','i.*j component','bearing','component form',
+              'unit vector','position vector','direction of motion',
+              'express.*vector'], []),
     ('M1-4', ['newton','f = ma','equation of motion','dynamics','thrust',
-              'tension','newton.s law','mass.*acceleration',
-              'connected particles','pulley'], []),
+              'tension','newton.s.*law','mass.*acceleration',
+              'connected particles','pulley','resistance to motion',
+              'net force','resultant force'], []),
     ('M1-5', ['friction','normal reaction','coefficient of friction',
               'limiting friction','rough surface','resolve.*forces',
-              'inclined plane'], []),
+              'inclined plane','frictional force','smooth surface.*friction'], []),
     ('M1-6', ['momentum','impulse','conservation of momentum','collision',
-              'impact','explosion','i = mv - mu'], []),
+              'impact','explosion','i = mv - mu','change in momentum',
+              'perfectly elastic','coefficient of restitution'], []),
     ('M1-7', ['equilibrium','statics','lami.*theorem','triangle of forces',
-              'concurrent','resolve.*equilibrium'], []),
+              'concurrent','resolve.*equilibrium','in equilibrium',
+              'system is in equilibrium'], []),
     ('M1-8', ['moment','torque','couple','turning effect','clockwise',
-              'anticlockwise','beam','uniform rod'], []),
+              'anticlockwise','beam','uniform rod','sum of moments',
+              'pivot','fulcrum'], []),
     # ── M2 ── (对齐 syllabus_edexcel_maths.json: M2-1..M2-6)
     ('M2-1', ['projectile','horizontal component','vertical component',
               'trajectory','range.*projectile','maximum height',
@@ -6318,7 +6339,14 @@ def cloud_library_save_questions():
         if not topic1 or topic1 == '未分类':
             qtopics = q.get('topics') or []
             if qtopics:
-                t0 = qtopics[0]
+                # 优先选择有 parent_id（subtopic级）且不是纯通用建模章节的条目
+                # 已知通用章节（代表性差，几乎每道题都匹配）
+                GENERIC_CHAPTERS = {'M1-1', 'M2-1', 'S1-1', 'FP1-1'}
+                t0 = (
+                    next((t for t in qtopics if t.get('parent_id') and t.get('parent_id') not in GENERIC_CHAPTERS), None) or
+                    next((t for t in qtopics if t.get('parent_id')), None) or
+                    qtopics[0]
+                )
                 t0_id       = t0.get('id', '')
                 t0_title    = t0.get('title', '')
                 parent_id   = t0.get('parent_id', '')
@@ -6619,6 +6647,142 @@ def cloud_library_push_from_session():
     与 save_questions 的区别：此接口支持更丰富的批量配置。
     """
     return cloud_library_save_questions()
+
+
+# ── API: 修复云端已存储题目的知识点分类 ──
+@app.route('/api/cloud_library/repair_topics', methods=['POST'])
+def cloud_library_repair_topics():
+    """
+    重新推导云端所有题目的 topic1/topic2，修复旧版 M1-1 过匹配导致的分类错误。
+    对于每道有 topics[] 的题，用新逻辑重新推导 topic1/topic2：
+      - 优先选有 parent_id 且不是通用章节（M1-1/M2-1/S1-1/FP1-1）的 subtopic
+      - 其次选任意有 parent_id 的条目
+      - 最后 fallback 到 topics[0]
+    如果推导结果与存储值不同，则：
+      1. 在新路径写新元数据
+      2. 删除旧路径元数据（旧图片 key 不变，图片不需要移动）
+    返回：{checked: int, repaired: int, failed: int}
+    """
+    data    = request.json or {}
+    subject = data.get('subject', '')
+    board   = data.get('board', '')
+    dry_run = data.get('dry_run', False)   # dry_run=true 仅预览，不写盘
+
+    GENERIC_CHAPTERS = {'M1-1', 'M2-1', 'S1-1', 'FP1-1'}
+
+    # 加载 edexcel_maths 考纲，用于通过章节 id 反查 title
+    maths_syllabus = _load_edexcel_maths_syllabus()
+    maths_title_map: dict[str, str] = {}
+    if maths_syllabus:
+        for _t in maths_syllabus.get('topics', []):
+            maths_title_map[str(_t['id'])] = _t.get('title', '')
+            for _s in _t.get('subtopics', []):
+                maths_title_map[str(_s['id'])] = _s.get('title', '')
+
+    checked = 0
+    repaired = 0
+    failed = 0
+    preview = []
+
+    # 遍历要修复的学科/考试局组合
+    subjects_to_check = [subject] if subject else _CLOUD_SUBJECTS
+    boards_to_check   = [board]   if board   else _CLOUD_BOARDS
+
+    for subj in subjects_to_check:
+        for brd in boards_to_check:
+            keys = _list_cloud_questions(subj, brd)
+            for key in keys:
+                q = _load_cloud_question(key)
+                if not q:
+                    continue
+                checked += 1
+                old_t1 = q.get('topic1', '')
+                old_t2 = q.get('topic2', '')
+                qtopics = q.get('topics') or []
+
+                if not qtopics:
+                    continue   # 无 topics 数组，无法推导，跳过
+
+                # ── 用新逻辑推导 topic1/topic2 ──
+                best = (
+                    next((t for t in qtopics if t.get('parent_id') and
+                          str(t.get('parent_id', '')) not in GENERIC_CHAPTERS), None) or
+                    next((t for t in qtopics if t.get('parent_id')), None) or
+                    qtopics[0]
+                )
+                pt      = best.get('parent_title', '')
+                pid     = str(best.get('parent_id', ''))
+                bt      = best.get('title', '')
+                bid     = str(best.get('id', ''))
+
+                if pt:
+                    new_t1 = pt
+                    new_t2 = bt or new_t1
+                elif pid:
+                    # 查 maths 考纲 title；Cambridge 结构
+                    cam_syl = _load_syllabus()
+                    cam_map: dict[str, str] = {}
+                    if cam_syl:
+                        for _t in cam_syl.get('topics', []):
+                            cam_map[str(_t.get('id', ''))] = _t.get('title', '')
+                    pt_resolved = cam_map.get(pid) or maths_title_map.get(pid) or pid
+                    new_t1 = pt_resolved
+                    new_t2 = bt or new_t1
+                elif re.match(r'^[A-Z0-9]+-\d+(\.\d+)?$', bid):
+                    new_t1 = bt or bid
+                    new_t2 = bt or bid
+                else:
+                    new_t1 = bt or '未分类'
+                    new_t2 = bt or '通用'
+
+                if not new_t2 or new_t2 == '通用':
+                    new_t2 = new_t1
+                if not new_t1:
+                    new_t1 = '未分类'
+
+                # 与当前存储值相同 → 跳过
+                if new_t1 == old_t1 and new_t2 == old_t2:
+                    continue
+
+                preview.append({'qid': q.get('qid', ''), 'old_t1': old_t1, 'old_t2': old_t2,
+                                 'new_t1': new_t1, 'new_t2': new_t2})
+                if dry_run:
+                    repaired += 1
+                    continue
+
+                # ── 写到新路径 ──
+                try:
+                    q['topic1'] = new_t1
+                    q['topic2'] = new_t2
+                    maths_unit  = q.get('maths_unit', '')
+                    new_key = _cloud_prefix(subj, brd, new_t1, new_t2, maths_unit=maths_unit) + \
+                              (f'/{q["qid"]}.json' if storage.is_r2_mode()
+                               else f'{os.sep}{q["qid"]}.json')
+                    _save_cloud_question(new_key, q)
+
+                    # ── 删除旧路径（仅当新旧路径不同时）──
+                    if new_key != key:
+                        if storage.is_r2_mode():
+                            try: storage.delete_object(key)
+                            except Exception: pass
+                        else:
+                            try: os.remove(key)
+                            except Exception: pass
+                    repaired += 1
+                except Exception as e:
+                    print(f'[repair_topics] error qid={q.get("qid","?")}: {e}')
+                    failed += 1
+
+    if not dry_run:
+        _invalidate_stats()
+
+    return jsonify({
+        'checked':  checked,
+        'repaired': repaired,
+        'failed':   failed,
+        'dry_run':  dry_run,
+        'preview':  preview[:50],   # 最多返回前50条预览
+    })
 
 
 # ── API: 获取云端题库可用年份列表 ──
