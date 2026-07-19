@@ -2256,13 +2256,19 @@ async function doExportPdf() {
   // 全局有序列表（保留 sortOrder 排序，跨 gIdx）
   const ordered_items = exportItems.map(q => ({ gIdx: q.gIdx, q_num: q.q_num }));
 
-  // 构建 per-question 答案可见性映射：key = "${gIdx}_${q_num}"，value = true 表示答案当前可见
+  // 构建 per-question 答案可见性映射：key = "${gIdx}_${q_num}"，value = true 表示导出时附加答案
+  const exportMode = document.querySelector('input[name="pdfExportMode"]:checked')?.value || 'question_only';
+  const includeAnswerMode = exportMode === 'question_markscheme';
   const answer_visible_map = {};
   exportItems.forEach(q => {
     const uid = `${q.gIdx}_${q.q_num}`;
-    const ansWrap = document.getElementById(`ans-${uid}`);
-    // display 为 '' 或非 'none' 时认为已显示
-    answer_visible_map[uid] = ansWrap ? ansWrap.style.display !== 'none' : false;
+    if (includeAnswerMode) {
+      // Question + Mark Scheme：凡有 answer_b64 的题目都导出答案，无论界面是否展开
+      answer_visible_map[uid] = !!(q.answer_b64);
+    } else {
+      // Question Only：全部不导出答案
+      answer_visible_map[uid] = false;
+    }
   });
 
   document.getElementById('ldProgWrap').style.display = '';
@@ -2280,7 +2286,7 @@ async function doExportPdf() {
         session_id: sessionId, merged: true,
         sel_by_group, ordered_items, dpi, filename, layout,
         cover_title: (document.getElementById('pdfCoverTitle')?.value||'').trim(),
-        include_answer: (document.querySelector('input[name="pdfExportMode"]:checked')?.value || 'question_only') === 'question_markscheme',
+        include_answer: includeAnswerMode,
         answer_visible_map
       })
     });
