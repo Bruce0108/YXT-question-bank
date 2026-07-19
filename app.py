@@ -3896,14 +3896,17 @@ def _build_pdf_worker(task_id, save_path, paper_type_val, q_nums, dpi, layout, o
 
 
 def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_q,
-                              cover_title='', ordered_items=None, include_answer=True):
+                              cover_title='', ordered_items=None, include_answer=True,
+                              answer_visible_map=None):
     """
     后台线程：多文件合并导出 PDF。
     groups_info: [{path, paper_type, questions, q_nums, g_idx}]
     ordered_items: [{gIdx, q_num}] 全局有序列表（来自前端 exportItems，保留 sortOrder 排序）。
                    若提供则按此全局顺序逐题输出；否则按组顺序输出（降级模式）。
     cover_title: 封面标题，非空时在首页插入封面。
-    include_answer: 是否在PDF中包含答案页（Task3）。
+    include_answer: 是否在PDF中包含答案页（全局开关，Task3）。
+    answer_visible_map: per-question 答案显示状态 {"{gIdx}_{q_num}": bool}，
+                        若存在则以此为准（覆盖全局 include_answer）；否则使用全局开关。
     """
     def upd(prog, status='running', error=None):
         data = {'status': status, 'progress': prog,
@@ -3918,8 +3921,19 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
     try:
         out_doc = fitz.open()
 
-        # Task3: 如果不包含答案，对所有题目清除 answer_b64
-        if not include_answer:
+        # 若提供了 answer_visible_map（per-question 精确控制），优先使用它；
+        # 否则回退到全局 include_answer 开关。
+        if answer_visible_map:
+            # 对每道题根据 answer_visible_map 决定是否保留 answer_b64
+            for ginfo in groups_info:
+                g_idx = ginfo['g_idx']
+                for q in ginfo.get('questions', []):
+                    uid = f"{g_idx}_{q['q_num']}"
+                    visible = answer_visible_map.get(uid, include_answer)
+                    if not visible:
+                        q.pop('answer_b64', None)
+        elif not include_answer:
+            # 全局开关：不包含答案，清除所有题目的 answer_b64
             for ginfo in groups_info:
                 for q in ginfo.get('questions', []):
                     q.pop('answer_b64', None)
@@ -4141,6 +4155,7 @@ def export_pdf():
     merged    = data.get('merged', False)
     cover_title    = data.get('cover_title', '').strip()
     include_answer = data.get('include_answer', True)  # Task3: 是否在PDF中包含答案页
+    answer_visible_map = data.get('answer_visible_map', {})  # per-question 答案显示状态 {"{gIdx}_{q_num}": bool}
 
     safe_name = re.sub(r'[\\/*?:"<>|]', '_', filename)
     if not safe_name.endswith('.pdf'):
@@ -4192,7 +4207,8 @@ def export_pdf():
             target=_build_pdf_merged_worker,
             args=(task_id, groups_info, dpi, layout, out_path, total_q),
             kwargs={'cover_title': cover_title, 'ordered_items': ordered_items,
-                    'include_answer': include_answer},
+                    'include_answer': include_answer,
+                    'answer_visible_map': answer_visible_map},
             daemon=True
         ).start()
 
@@ -4856,6 +4872,11 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
                 if nq["page_idx"] == pg_end:
                     # 下一题在同一页：截到 min(题干底部, 下一题题号) 确保不含下一题内容
                     y_next = max(top + 20, nq["y_start"] - 8)
+                    # ★ 修复：若 y_next 极接近 top（下一题紧接页面顶部），
+                    #   说明该 pg_end 页面几乎没有当前题内容（全属下一题），跳过。
+                    #   阈值 45pt：top=44 时 y_next≤89 就跳过，避免切入下一题注释区
+                    if pg_i != pg_start and y_next <= top + 45:
+                        continue
                     stem_b = _find_edexcel_maths_question_bottom(page, ph)
                     bottom = min(stem_b, y_next)
                 else:
@@ -4926,6 +4947,9 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
             if y_end is not None:
                 # 末页有 y_end（下一题在此页）：取两者中更小的，防止截入下一题
                 bottom = min(stem_bottom, min(ph, y_end))
+                # ★ 修复：若下一题紧接页面顶部（y_end 极小），该页几乎没有当前题内容，跳过
+                if pg_i != pg_start and bottom <= top + 45:
+                    continue
             else:
                 bottom = stem_bottom
         else:
