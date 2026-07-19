@@ -1798,21 +1798,25 @@ function renderTopicTree() {
   // ── Edexcel Maths：两级树（章节 + 子知识点），带题目数量统计 ──
   if (stype === 'edexcel_maths') {
     // 统计每个 topic/subtopic 对应的题目数
-    const topicCount = {};   // id → count
+    // 兼容新格式（id=P3-1.1, parent_id=P3-1）和旧格式（id=P3-1）
+    const topicCount = {};   // id → count（含章节级和subtopic级）
     allQuestions.forEach(q => {
       (q.topics || []).forEach(t => {
-        const id = String(t.id);
-        topicCount[id] = (topicCount[id] || 0) + 1;
-        // 子知识点的父章节也加计数（但不重复）
+        const tid = String(t.id);
+        topicCount[tid] = (topicCount[tid] || 0) + 1;
+        // 若有 parent_id（新格式），也给父章节加计数
+        if (t.parent_id) {
+          const pid = String(t.parent_id);
+          topicCount[pid] = (topicCount[pid] || 0) + 1;
+        }
       });
     });
-    // 章节计数：aggregation
+    // 章节计数：aggregation（确保章节显示正确数量）
     const chapterCount = {};
     curSyllabus.topics.forEach(topic => {
       const chId = String(topic.id);
-      let cnt = topicCount[chId] || 0;
-      (topic.subtopics || []).forEach(sub => { cnt += topicCount[String(sub.id)] || 0; });
-      chapterCount[chId] = cnt;
+      // 直接命中章节的题目 + 命中其 subtopic 的题目（去重已在上面处理）
+      chapterCount[chId] = topicCount[chId] || 0;
     });
 
     curSyllabus.topics.forEach(topic => {
@@ -2042,21 +2046,29 @@ function applyTopicFilter() {
     if (qTopics.length > 0) {
       hit = qTopics.some(t => {
         const tid = String(t.id);
-        // 精确匹配 subtopic id
+        const pid = String(t.parent_id || '');
+
+        // 1. subtopic 精确匹配（支持新格式 id=P3-1.1 和旧格式 id=P3-1）
         if (checkedSubs.has(tid)) return true;
-        // Cambridge: parent_id匹配
-        if (checkedTopics.has(String(t.parent_id))) return true;
-        // Edexcel Maths: 章节级id直接匹配（如 P3-6）
+
+        // 2. 章节勾选匹配 parent_id（Cambridge 和新版 edexcel_maths 均有 parent_id）
+        if (pid && checkedTopics.has(pid)) return true;
+
+        // 3. 章节级 id 直接匹配（旧版 edexcel_maths: id=P3-6，无 parent_id）
         if (checkedTopics.has(tid)) return true;
-        // Edexcel Maths: 题目id是章节级别（P3-6），subtopic勾选了P3-6.x → 检查父章节
-        // e.g. tid="P3-6", checkedSubs含"P3-6.3" → 章节匹配
-        const parentChapter = tid.replace(/\.\d+$/, '');  // P3-6.3 → P3-6
+
+        // 4. 题目 subtopic id（P3-1.1）的父章节（P3-1）被勾选
+        const parentChapter = tid.replace(/\.\d+$/, '');
         if (parentChapter !== tid && checkedTopics.has(parentChapter)) return true;
-        // 题目的chapter-level id匹配某个已勾选的subtopic所在章节
-        // e.g. tid="P3-6", checkedSubs含"P3-6.x"
+
+        // 5. 章节级 id（旧格式），某个勾选的 subtopic 属于该章节
         for (const sid of checkedSubs) {
-          if (sid.startsWith(tid + '.')) return true;  // sid=P3-6.3, tid=P3-6
+          if (sid.startsWith(tid + '.')) return true;
         }
+
+        // 6. subtopic 勾选，题目的父章节匹配（新格式 parent_id = P3-1）
+        if (pid && checkedSubs.has(tid)) return true;
+
         return false;
       });
     } else {
@@ -4147,17 +4159,23 @@ async function doCloudSave() {
       }
     }
 
-    // ── 无筛选器 → 从题目自身 topics 推断（原有逻辑）──
+    // ── 无筛选器 → 从题目自身 topics 推断 ──
     let autoT1 = '未分类', autoT2 = '通用';
     if (q.topics && q.topics.length > 0) {
       const t0 = q.topics[0];
-      const tId = t0.id || '';
-      if (t0.parent_id) {
-        // Cambridge 结构：parent_id 是一级编号 → 查 syllabus 得到 title
+      const tId = String(t0.id || '');
+
+      if (t0.parent_id && t0.parent_title) {
+        // 新版 Edexcel Maths subtopic 格式：parent_id=章节id, parent_title=章节title
+        // 与筛选面板两级结构完全对齐：topic1=章节, topic2=subtopic
+        autoT1 = t0.parent_title;
+        autoT2 = t0.title || autoT1;
+      } else if (t0.parent_id) {
+        // Cambridge 结构（parent_id 是数字）或旧版 edexcel_maths
         const parentTitle = camTopicTitleMap[String(t0.parent_id)] || t0.parent_id;
         autoT1 = parentTitle;
         autoT2 = t0.title || autoT1;
-      } else if (tId.match(/^[A-Z0-9]+-\d+$/)) {
+      } else if (tId.match(/^[A-Z0-9]+-\d+(\.\d+)?$/)) {
         // Edexcel 章节 ID（如 P3-1, M1-2, S1-4）→ 直接用 title 作为 topic1
         autoT1 = t0.title || tId;
         autoT2 = t0.title || tId;

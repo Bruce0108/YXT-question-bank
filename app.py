@@ -1585,12 +1585,14 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
     # 加载考纲标题映射
     if syllabus_type == 'edexcel_maths':
         syllabus = _load_edexcel_maths_syllabus()
-        # Edexcel Maths：从章节条目（topics 列表顶层）构建 title_map
-        title_map: dict[str, str] = {}
+        # Edexcel Maths：构建章节 title_map 和 subtopic 结构
+        title_map: dict[str, str] = {}     # chapter_id → title
+        chapter_subtopics: dict[str, list] = {}  # chapter_id → [{id, title}]
         if syllabus:
             for t in syllabus['topics']:
                 tid = str(t['id'])
                 title_map[tid] = t.get('title', tid)
+                chapter_subtopics[tid] = t.get('subtopics', [])
 
         if not scores:
             # ── fallback：无命中时，对所有规则做宽松单词匹配，取分最高 ──
@@ -1614,13 +1616,49 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
                 if rules:
                     scores = {rules[0][0]: 1}
 
+        # ── 章节内 subtopic 精确匹配 ──
+        # 对每个已命中的章节，用 subtopic 标题关键词在题目文本中进一步定位
+        # 返回的 topic 条目带 parent_id（章节 id）和 parent_title（章节 title）
+        # 这使得 q.topics[] 结构与 Cambridge 一致，cloud save 可做两级分类
+        def _find_best_subtopic(chapter_id: str) -> dict | None:
+            subs = chapter_subtopics.get(chapter_id, [])
+            if not subs:
+                return None
+            best_sub = None
+            best_sc  = 0
+            for sub in subs:
+                sub_title = sub.get('title', '').lower()
+                # 用 subtopic title 中的单词（≥4字符）匹配题目文本
+                sc = 0
+                for word in re.findall(r'[a-z]{4,}', sub_title):
+                    if word in text_lower:
+                        sc += 1
+                if sc > best_sc:
+                    best_sc = sc
+                    best_sub = sub
+            return best_sub if best_sc > 0 else None
+
         result = []
         for sid, sc in sorted(scores.items(), key=lambda x: -x[1]):
-            result.append({
-                'id':    sid,
-                'title': title_map.get(sid, sid),
-                'score': sc,
-            })
+            chapter_title = title_map.get(sid, sid)
+            best_sub = _find_best_subtopic(sid)
+            if best_sub:
+                # 有 subtopic 匹配：返回 subtopic 级别的条目
+                # id = subtopic id（P3-1.1），parent_id = chapter id（P3-1）
+                result.append({
+                    'id':           best_sub['id'],
+                    'title':        best_sub.get('title', best_sub['id']),
+                    'parent_id':    sid,
+                    'parent_title': chapter_title,
+                    'score':        sc,
+                })
+            else:
+                # 无 subtopic 匹配：返回章节级别（保持向后兼容）
+                result.append({
+                    'id':    sid,
+                    'title': chapter_title,
+                    'score': sc,
+                })
         # 最多返回 3 个（头栏空间有限；score 已降序）
         return result[:3]
     else:
@@ -6281,10 +6319,17 @@ def cloud_library_save_questions():
             qtopics = q.get('topics') or []
             if qtopics:
                 t0 = qtopics[0]
-                t0_id    = t0.get('id', '')
-                t0_title = t0.get('title', '')
-                parent_id = t0.get('parent_id', '')
-                if parent_id:
+                t0_id       = t0.get('id', '')
+                t0_title    = t0.get('title', '')
+                parent_id   = t0.get('parent_id', '')
+                parent_title = t0.get('parent_title', '')  # 新格式：edexcel_maths subtopic 带 parent_title
+
+                if parent_title:
+                    # 新版 Edexcel Maths subtopic 格式：parent_title 直接可用
+                    # topic1 = 章节 title，topic2 = subtopic title
+                    topic1 = parent_title
+                    topic2 = t0_title or topic1
+                elif parent_id:
                     # Cambridge 结构：parent_id 是数字编号 → 查 syllabus 得到人类可读 title
                     cam_syl = _load_syllabus()
                     cam_title_map = {}
