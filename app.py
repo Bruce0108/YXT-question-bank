@@ -1303,11 +1303,17 @@ def _is_answer_writing_page(page):
         r'|[A-Z]{2,4}\d{4,}|\s*$)',
         re.IGNORECASE
     )
-    # Edexcel Maths 续页提示文字不算有效题目内容
+    # 续页/答题区提示文字：不计为有效题目内容
+    # 新增：(Total for Question N is X marks) 也是提示文字，不是题目
     CONTINUE_RE = re.compile(
-        r'^(question\s+\d+\s+continued|total\s+for\s+question|answer\s+space|'
-        r'answer\s+in\s+the\s+space|write\s+your\s+answer|leave\s+blank|'
-        r'additional\s+(answer\s+)?space)',
+        r'^(question\s+\d+\s+continued|'
+        r'total\s+for\s+(question|this\s+question)[\s\d]*|'
+        r'\(total\s+for\s+(question|this\s+question)[^)]*\)|'
+        r'answer\s+space|answer\s+in\s+the\s+space|'
+        r'write\s+your\s+answer|leave\s+blank|'
+        r'additional\s+(answer\s+)?space|'
+        r'do\s+not\s+write\s+(in\s+this\s+space|here|outside)|'
+        r'for\s+examiner[\'s]*\s+use|examiner\s+only)',
         re.IGNORECASE
     )
     real_content_chars = 0
@@ -1317,8 +1323,8 @@ def _is_answer_writing_page(page):
         x0, y0, x1, y1, txt, bno, btype = b
         if btype != 0:
             continue
-        # 跳过页眉（顶部 50pt）和页脚（底部 50pt）
-        if y1 < 50 or y0 > ph - 50:
+        # 跳过页眉（顶部 50pt）和页脚（底部 55pt，略微扩大以覆盖 Total for Question）
+        if y1 < 50 or y0 > ph - 55:
             continue
         ts = txt.strip()
         if not ts:
@@ -1327,14 +1333,20 @@ def _is_answer_writing_page(page):
             continue
         if CONTINUE_RE.match(ts):
             continue
-        # 统计横线字符
+        # 统计横线字符（下划线/破折线全组成的行）
         clean = ts.replace(' ', '').replace('\n', '').replace('\t', '')
         if clean and all(c in '_-–—' for c in clean):
             underscore_chars += len(clean)
         else:
             real_content_chars += len(ts)
 
-    # 几乎没有实质内容（≤ 15 字符），且文字极少
+    # 判断答题页：优先看下划线字符数量
+    # 规则A：大量下划线（>200字符）+ 有效内容很少（≤ 50字符）→ 答题页
+    # 这覆盖了 "Question N continued + 满页下划线" 的情况
+    if underscore_chars > 200 and real_content_chars <= 50:
+        return True
+
+    # 规则B：几乎没有实质内容（≤ 15 字符）
     if real_content_chars <= 15:
         # 进一步检查：是否有大量横线（绘制路径）
         try:
