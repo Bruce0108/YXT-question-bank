@@ -595,27 +595,45 @@ def crop_question_image(doc, questions, q_idx, dpi=150, paper_type='mcq'):
     q = questions[q_idx]
     pg_start = q["page_idx"]
 
-    # ── Edexcel Maths 专用：单页截到 marks，不含答题横线 ──
+    # ── Edexcel Maths 专用：使用 _collect_question_slices() 支持跨页题目 ──
+    # 与 PDF 导出逻辑完全一致（M1/M2/S1/S2/D1 等有大图跨页题同样生效）
     if paper_type == 'edexcel_maths':
-        page = doc[pg_start]
-        pw, ph = page.rect.width, page.rect.height
-        left  = 42   # 跳过左边框线（x=35~36.5），内容起始 x≈42.5
-        right = min(pw - 36, 560)
-        _right_lim = _detect_right_content_limit(page, pw, ph,
-                                                  sample_y0=44, sample_y1=ph - 40)
-        if _right_lim < right:
-            right = _right_lim
-        y_start = q.get("y_start", 0)
-        top    = max(0, y_start - 8) if y_start > 10 else 48
-        bottom = _find_edexcel_maths_question_bottom(page, ph)
-        if bottom <= top + 10:
-            bottom = ph - 25
-        clip = fitz.Rect(left, top, right, bottom)
-        pix  = page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csRGB)
-        data = pix.tobytes("png")
-        w, h = pix.width, pix.height
-        del pix
-        return data, w, h
+        slices = _collect_question_slices(doc, questions, q_idx, 'edexcel_maths')
+        if not slices:
+            # fallback：截整页
+            page = doc[pg_start]
+            pix  = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+            return pix.tobytes("png"), pix.width, pix.height
+
+        if len(slices) == 1:
+            src_page, clip = slices[0]
+            pix  = src_page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csRGB)
+            data = pix.tobytes("png")
+            w, h = pix.width, pix.height
+            del pix
+            return data, w, h
+
+        # 多页拼接（跨页题目）
+        imgs = []
+        for src_page, clip in slices:
+            pix = src_page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csRGB)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            imgs.append(img)
+            del pix
+
+        sep_h = 3
+        total_h = sum(im.height for im in imgs) + sep_h * (len(imgs) - 1)
+        max_w   = max(im.width for im in imgs)
+        merged  = Image.new("RGB", (max_w, total_h), (255, 255, 255))
+        y_off = 0
+        for i, im in enumerate(imgs):
+            merged.paste(im, (0, y_off))
+            y_off += im.height
+            if i < len(imgs) - 1:
+                y_off += sep_h
+        buf = io.BytesIO()
+        merged.save(buf, format='PNG')
+        return buf.getvalue(), max_w, total_h
     y_top = q["y_start"] - 8  # 稍微往上留一点空间
 
     # 确定结束位置
@@ -937,18 +955,25 @@ def _detect_right_content_limit(page, pw, ph, sample_y0=None, sample_y1=None):
 def _find_edexcel_maths_question_bottom(page, page_height):
     """
     Edexcel Maths 题目页专用：只截取题干，不含答题横线。
+    适用所有单元：P1/P2/P3/P4/FP1/FP2/S1/S2/M1/M2/D1。
 
     策略：
-      1. 在右侧（x > 430）找所有 marks 标记 (N) 的位置
+      1. 在右侧（x > 页宽×60%）找所有 marks 标记 (N) 的位置
+         使用相对阈值而非硬编码 430，适应不同 paper 的版式差异
       2. 取最后一个 marks 的 y1 作为截剪下边界（marks 后立即是答题横线）
       3. 加 8pt padding，确保括号完整显示
       4. 如果找不到 marks（题目页无分值），退回到找最后一个非横线内容块底部
 
-    注意：只查找 x>430 的 marks，避免误匹配题干中的数学表达式 (N)。
+    注意：只查找页面右侧 60% 区域的 marks，避免误匹配题干中的数学表达式 (N)。
     """
     blocks = page.get_text('blocks')
-    # 右侧 marks：格式为单独的 '(N)' 块，x > 430，页脚区(y > ph-60)排除
-    MARKS_PAT = re.compile(r'^\(\d+\)$')     # 精确匹配 '(3)' '(10)' 等
+    pw = page.rect.width
+    # 右侧 marks 的 x 阈值：页宽 60%（适应 P/FP/S/M/D 各系列版式）
+    # P3 标准页宽≈595pt → 60%=357pt；但实际 marks 在 x≈480 区域
+    # 使用 max(350, pw*0.60) 确保在各种页面尺寸下都有效
+    marks_x_min = max(350, pw * 0.60)
+    # 精确匹配 '(3)' '(10)' 等 marks 格式
+    MARKS_PAT = re.compile(r'^\(\d+\)$')
 
     marks_y1 = None
     for b in blocks:
@@ -956,8 +981,8 @@ def _find_edexcel_maths_question_bottom(page, page_height):
         if btype != 0:
             continue
         ts = txt.strip()
-        # 右侧 marks：x>430（避免误匹配题干内的括号）且不在页脚
-        if x0 > 430 and y0 < page_height - 60 and MARKS_PAT.match(ts):
+        # 右侧 marks（相对 x 阈值）且不在页脚
+        if x0 > marks_x_min and y0 < page_height - 60 and MARKS_PAT.match(ts):
             marks_y1 = y1   # 取最后一个（持续更新）
 
     if marks_y1 is not None:
@@ -1026,7 +1051,9 @@ def _is_answer_writing_page(page):
         return False
 
     SKIP_RE = re.compile(
-        r'^(DO NOT WRITE|Turn over|©|UCLES|\d{1,4}$|9702/|\*P|P\d{4,}[A-Z]|WMA\d|[A-Z]{2,4}\d{4,}|\s*$)',
+        r'^(DO NOT WRITE|Turn over|©|UCLES|\d{1,4}$|9702/|\*P|P\d{4,}[A-Z]'
+        r'|WMA\d{2}|WFM\d{2}|WST\d{2}|WME\d{2}|WDM\d{2}|WMS\d{2}|WPM\d{2}'  # Edexcel Applied Maths 卷号
+        r'|[A-Z]{2,4}\d{4,}|\s*$)',
         re.IGNORECASE
     )
     # Edexcel Maths 续页提示文字不算有效题目内容

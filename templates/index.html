@@ -676,6 +676,9 @@
       <div id="cloudSaveInfo" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;color:#1d4ed8">
         将保存 <strong id="cloudSaveCount">0</strong> 道题目到云端题库
       </div>
+      <!-- 筛选器知识点同步提示 -->
+      <div id="cloudSaveFilterInfo" style="display:none;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 12px;margin-bottom:16px;font-size:12px;color:#166534;line-height:1.5">
+      </div>
 
       <!-- 学科 -->
       <div style="margin-bottom:12px">
@@ -3929,6 +3932,10 @@ async function openCloudSaveDialog() {
     paperBadge.style.display = 'none';
   }
 
+  // ── Task B：读取当前知识点筛选器状态 ──
+  // 将筛选器里勾选的知识点同步为云端保存的 topic1/topic2
+  _syncFilterTopicsToCloudSave();
+
   await updateCloudSaveTopics();
   document.getElementById('cloudSaveMo').classList.add('show');
   document.getElementById('cloudSaveProgWrap').style.display = 'none';
@@ -4002,6 +4009,70 @@ function selectCloudBoard(btn) {
   updateCloudSaveTopics();
 }
 
+// ── Task B：从知识点筛选器同步到云端保存的知识点 ──
+// 读取 #topicTree 中当前勾选的知识点，构建 ID→Title 映射，
+// 存入 window._filterTopicInfo 供 doCloudSave() 使用。
+function _syncFilterTopicsToCloudSave() {
+  const stype = window._activeSyllabusType || 'cambridge';
+  const curSyllabus = stype === 'edexcel_maths' ? mathsSyllabus : syllabus;
+
+  // 构建 id→title 映射（chapter级 + subtopic级）
+  const idToTitle = {};
+  const idToParentTitle = {};   // subtopic id → 父章节 title
+  if (curSyllabus && curSyllabus.topics) {
+    curSyllabus.topics.forEach(topic => {
+      const topicId = String(topic.id);
+      idToTitle[topicId] = topic.title;
+      (topic.subtopics || []).forEach(sub => {
+        const subId = String(sub.id);
+        idToTitle[subId] = sub.title;
+        idToParentTitle[subId] = topic.title;   // 子项 → 父章节 title
+      });
+    });
+  }
+
+  // 读取已勾选的 subtopic 和 chapter
+  const checkedSubs   = getCheckedSubIds();    // e.g. ["P3-1.1", "P3-2.3"]
+  const checkedTopics = getCheckedTopicIds();  // e.g. ["P3-1"] 或 Cambridge ["1", "2"]
+
+  // 无筛选时清空并显示提示
+  const filterInfo = document.getElementById('cloudSaveFilterInfo');
+  if (checkedSubs.length === 0 && checkedTopics.length === 0) {
+    window._filterTopicInfo = null;
+    if (filterInfo) filterInfo.style.display = 'none';
+    return;
+  }
+
+  // 优先取 subtopic 勾选（最精确）→ topic1=父章节, topic2=子知识点
+  // 若只勾选了章节级 → topic1=章节 title, topic2=章节 title
+  // 若同时勾选多个不同章节 → 按题目自身 topics 匹配最佳
+  const subInfoList   = checkedSubs.map(sid => ({
+    id:          sid,
+    title:       idToTitle[sid] || sid,
+    parentTitle: idToParentTitle[sid] || (idToTitle[sid] || sid),
+  }));
+  const topicInfoList = checkedTopics.map(tid => ({
+    id:    tid,
+    title: idToTitle[tid] || tid,
+  }));
+
+  window._filterTopicInfo = {
+    subs:   subInfoList,    // [{id, title, parentTitle}]
+    topics: topicInfoList,  // [{id, title}]
+    idToTitle,
+    idToParentTitle,
+  };
+
+  // 更新弹窗里的筛选提示
+  if (filterInfo) {
+    const labels = [];
+    subInfoList.forEach(s => labels.push(`${s.id} ${s.title}`));
+    topicInfoList.forEach(t => labels.push(`${t.id} ${t.title} (全章)`));
+    filterInfo.textContent = `🔍 将使用筛选器知识点：${labels.join(' / ')}`;
+    filterInfo.style.display = 'block';
+  }
+}
+
 async function doCloudSave() {
   const subject = document.getElementById('cloudSaveSubject').value;
   const board   = document.querySelector('.cloud-board-btn.active')?.dataset.board || 'CAIE';
@@ -4021,13 +4092,62 @@ async function doCloudSave() {
     });
   }
 
-  // 构建 payload（为每题附加云端题库分类信息）
-  const questions = selQ.map(q => {
-    // 从题目已有 topics 提取一级/二级标题
-    // edexcel_maths: topics[0] = {id:'P3-1', title:'Algebraic Methods', score:4}
-    //   → topic1 = 'Algebraic Methods', topic2 = 'Algebraic Methods'（章节级，无二级细分）
-    // cambridge: topics[0] = {id:'1.1', title:'Physical quantities', parent_id:'1'}
-    //   → topic1 = '1' → 查表 → 'Physical quantities and units', topic2 = 'Physical quantities'
+  // ── Task B：读取筛选器状态，为每题派发最匹配的 topic1/topic2 ──
+  const filterInfo = window._filterTopicInfo;  // 由 _syncFilterTopicsToCloudSave() 设置
+
+  // 构建 per-question topic 解析函数
+  function resolveTopicForQuestion(q) {
+    // 优先级：用户手动选择 > 筛选器勾选 > 题目自身 topics 推断
+    if (topic1) {
+      // 用户在弹窗下拉框中手动选了 topic1
+      return { t1: topic1, t2: topic2 || topic1 };
+    }
+
+    // ── 筛选器有勾选 → 找与该题 topics[] 最匹配的筛选项 ──
+    if (filterInfo) {
+      const qTopics = Array.isArray(q.topics) ? q.topics : [];
+      const qTopicIds = new Set(qTopics.map(t => String(t.id)));
+
+      // 尝试匹配 subtopic 级勾选（最精确）
+      for (const sub of filterInfo.subs) {
+        if (qTopicIds.has(sub.id)) {
+          // 题目恰好有这个 subtopic → topic1=父章节, topic2=subtopic
+          return { t1: sub.parentTitle, t2: sub.title };
+        }
+        // 题目 id 是章节级(如 P3-6)，而勾选的 subtopic 属于该章节(P3-6.x)
+        for (const tid of qTopicIds) {
+          if (sub.id.startsWith(tid + '.')) {
+            return { t1: filterInfo.idToTitle[tid] || tid, t2: sub.title };
+          }
+        }
+      }
+
+      // 尝试匹配章节级勾选
+      for (const tp of filterInfo.topics) {
+        if (qTopicIds.has(tp.id)) {
+          return { t1: tp.title, t2: tp.title };
+        }
+        // 题目 subtopic 属于勾选章节（如题目有 P3-1.2，勾选了 P3-1）
+        for (const tid of qTopicIds) {
+          if (tid.startsWith(tp.id + '.')) {
+            const subTitle = filterInfo.idToTitle[tid] || tid;
+            return { t1: tp.title, t2: subTitle };
+          }
+        }
+      }
+
+      // 筛选器有勾选但本题无匹配 → 用筛选器第一项作为 fallback
+      if (filterInfo.subs.length > 0) {
+        const s = filterInfo.subs[0];
+        return { t1: s.parentTitle, t2: s.title };
+      }
+      if (filterInfo.topics.length > 0) {
+        const t = filterInfo.topics[0];
+        return { t1: t.title, t2: t.title };
+      }
+    }
+
+    // ── 无筛选器 → 从题目自身 topics 推断（原有逻辑）──
     let autoT1 = '未分类', autoT2 = '通用';
     if (q.topics && q.topics.length > 0) {
       const t0 = q.topics[0];
@@ -4046,14 +4166,20 @@ async function doCloudSave() {
         autoT2 = t0.title || '通用';
       }
     }
+    return { t1: autoT1, t2: autoT2 };
+  }
+
+  // 构建 payload（为每题附加云端题库分类信息）
+  const questions = selQ.map(q => {
+    const { t1: autoT1, t2: autoT2 } = resolveTopicForQuestion(q);
     // Feature 4: paper 覆盖逻辑 — 弹窗手填 > 题目自带 maths_unit
     const resolvedPaper = paperOverride || q.maths_unit || '';
     return {
       ...q,
       subject,
       board,
-      topic1: topic1 || autoT1,
-      topic2: topic2 || autoT2,
+      topic1: autoT1,
+      topic2: autoT2,
       maths_unit: resolvedPaper,  // Feature 4: 确保 maths_unit 被传递
     };
   });
