@@ -579,134 +579,125 @@ def _find_content_bottom(page, ph, margin_bottom=30):
 
 def _find_question_stem_bottom(page, ph, paper_type='structured'):
     """
-    通用题干结束位置检测：找到题目内容（题干 + 小图 + 子题问题）的真正底部，
-    排除后面的"答题区"（横线、空白方格、"Answer space"提示等）。
+    通用题干结束位置检测：找到题目内容（题干 + 图表 + 子题）的真正底部，
+    截止到答题区（密集横线/空白写答区）开始之前。
 
-    适用于 Cambridge structured / Edexcel 大题 (所有 paper_type != 'edexcel_maths')。
+    适用于 Cambridge structured / Edexcel 大题（paper_type != 'edexcel_maths'）。
     Edexcel Maths 有专用函数 _find_edexcel_maths_question_bottom，不使用此函数。
 
-    策略（按优先级）：
-    1. 找 marks 标记：Cambridge "(3 marks)" / Edexcel "[3]" 等括号分值，
-       这是题干的明确结束标志，取最后一个 marks 的 y1 + 小 padding
-    2. 找答题区开始标志：
-       - 文字："Answer space" / "Write your answer" / "Leave blank" /
-              "Question N continued" / "Total for Question"
-       - 大量横线 drawing（连续 3+ 条，跨度 >30% 页宽）
-       - 大型空白矩形框（宽>40% 页宽，高>30pt，无文字）
-    3. fallback：扫描所有非答题内容块，取最后一个题目性内容块的 y1
-       （跳过横线、DO NOT WRITE、页码、纯空白行）
-    4. 最终 fallback：_find_content_bottom(page, ph)
+    核心策略（按优先级）：
+    1. 横线密集区检测（最可靠）：找连续 3+ 条跨度 >30% 页宽的水平线，
+       取第一段密集区起始 y，截止于此
+    2. 答题区文字标志：Answer space / Write your answer / Question N continued 等
+    3. marks 标记辅助：若找到 "(3 marks)" / "[4]" 等分值，在其下方再留少量余量
+    4. fallback：取所有非横线、非答题提示的最后一个内容块 y1
     """
     pw = page.rect.width
-    MARKS_PAT = re.compile(
-        r'\(\d+\s*marks?\)$'            # Cambridge: (3 marks)
-        r'|\[\d+\]$'                     # Edexcel:   [3]
-        r'|\(\d+\)$',                    # edexcel_maths style: (3)
-        re.IGNORECASE
-    )
-    # 答题区开始的文字特征
+
+    # 答题区文字特征
     ANSWERZONE_RE = re.compile(
         r'^(answer\s+(space|here|in\s+the\s+space|on\s+the\s+grid)|'
         r'write\s+your\s+answer|leave\s+(this\s+)?blank|'
         r'question\s+\d+\s+continued|total\s+for\s+(question|this\s+question)|'
-        r'do\s+not\s+write\s+(here|in\s+this|outside)|'
         r'additional\s+(answer\s+)?space|'
         r'use\s+(this\s+)?space\s+(for\s+)?your\s+(working|answer)|'
-        r'space\s+for\s+(rough\s+)?working|'
-        r'you\s+must\s+show\s+your\s+working)',
+        r'space\s+for\s+(rough\s+)?working)',
         re.IGNORECASE
     )
-    # 页眉/页脚/水印等无关文字
     SKIP_RE = re.compile(
         r'^(DO NOT WRITE|Turn over|©|UCLES|Permission to reproduce|\d{1,4}$'
         r'|9702/|WMA\d{2}|WFM\d{2}|WST\d{2}|WME\d{2}|WDM\d{2}|WMS\d{2}|WPM\d{2}'
         r'|[A-Z]{2,4}\d{4,}|\s*$)',
         re.IGNORECASE
     )
+    MARKS_PAT = re.compile(
+        r'\(\d+\s*marks?\)$|\[\d+\]$|\(\d+\)$',
+        re.IGNORECASE
+    )
 
-    try:
-        blocks = page.get_text('blocks')
-    except Exception:
-        return _find_content_bottom(page, ph)
-
-    # ── 阶段1：找最后一个 marks 标记（题干明确结束点）──
-    marks_y1 = None
-    for b in blocks:
-        x0, y0, x1, y1, txt, bno, btype = b
-        if btype != 0:
-            continue
-        if y0 > ph - 55:       # 页脚区忽略
-            continue
-        ts = txt.strip()
-        # marks 通常在行末或单独一行，且x坐标偏右（>40% 页宽）或居中
-        if MARKS_PAT.search(ts) and x0 > pw * 0.35:
-            marks_y1 = y1
-
-    # ── 阶段2：找答题区开始位置（答题区第一行的 y0）──
-    answer_zone_y0 = ph   # 默认为页底（即不存在答题区）
-    for b in blocks:
-        x0, y0, x1, y1, txt, bno, btype = b
-        if btype != 0:
-            continue
-        if y0 < 40 or y0 > ph - 40:   # 忽略页眉/页脚
-            continue
-        ts = txt.strip()
-        if not ts:
-            continue
-        if ANSWERZONE_RE.match(ts):
-            answer_zone_y0 = min(answer_zone_y0, y0)
-
-    # ── 阶段2b：通过 drawing 检测横线密集区起始位置 ──
-    # 当 drawing 中连续出现 3+ 条长横线（跨度 >30% 页宽）时，认为进入答题区
+    # ── 阶段1：通过 drawing 找横线密集区起始 y（最可靠信号）──
+    hline_start = None
     try:
         drawings = page.get_drawings()
-        hlines_y = []  # 所有长横线的 y 坐标
+        hlines_y = []
         for d in drawings:
             for item in d.get('items', []):
                 if item[0] == 'l':
                     p1, p2 = item[1], item[2]
-                    dy = abs(p2.y - p1.y)
-                    dx = abs(p2.x - p1.x)
+                    dy  = abs(p2.y - p1.y)
+                    dx  = abs(p2.x - p1.x)
                     mid_y = (p1.y + p2.y) / 2
+                    # 水平线：高度偏差<3pt，横跨>30%页宽，在页面内容区
                     if dy < 3 and dx > pw * 0.30 and 40 < mid_y < ph - 40:
                         hlines_y.append(mid_y)
                 elif item[0] == 're':
-                    r = item[1]
-                    rh = abs(r.y1 - r.y0)
-                    rw = abs(r.x1 - r.x0)
+                    r    = item[1]
+                    rh   = abs(r.y1 - r.y0)
+                    rw   = abs(r.x1 - r.x0)
                     mid_y = (r.y0 + r.y1) / 2
+                    # 细宽矩形（横线替代）
                     if rh < 4 and rw > pw * 0.30 and 40 < mid_y < ph - 40:
                         hlines_y.append(mid_y)
         if len(hlines_y) >= 3:
             hlines_y.sort()
-            # 找第一段连续横线（间距 < 25pt）的起点
+            # 找第一段连续横线（相邻间距 < 28pt 的3条）的起始位置
             for idx in range(len(hlines_y) - 2):
-                y_a, y_b, y_c = hlines_y[idx], hlines_y[idx+1], hlines_y[idx+2]
-                if (y_b - y_a) < 25 and (y_c - y_b) < 25:
-                    # 这是连续横线区的起始，往上留 6pt 空间
-                    hline_start = max(0, y_a - 6)
-                    answer_zone_y0 = min(answer_zone_y0, hline_start)
+                y_a = hlines_y[idx]
+                y_b = hlines_y[idx + 1]
+                y_c = hlines_y[idx + 2]
+                if (y_b - y_a) < 28 and (y_c - y_b) < 28:
+                    hline_start = max(0, y_a - 6)   # 往上留 6pt 空间
                     break
     except Exception:
         pass
 
-    # ── 阶段3：综合 marks + 答题区 → 确定底部 ──
-    if marks_y1 is not None:
-        # marks 后 +10pt padding，但不超过答题区起始
-        stem_bottom = min(marks_y1 + 10, answer_zone_y0)
-        # 如果 answer_zone 紧接 marks（差距<20pt），优先以 marks 为准
-        if answer_zone_y0 - marks_y1 < 20:
-            stem_bottom = marks_y1 + 10
-        if stem_bottom > 60:
-            return min(stem_bottom, ph - 25)
+    # ── 阶段2：答题区文字标志 ──
+    answer_zone_y0 = ph
+    try:
+        blocks = page.get_text('blocks')
+    except Exception:
+        blocks = []
+    for b in blocks:
+        x0, y0, x1, y1, txt, bno, btype = b
+        if btype != 0:
+            continue
+        if y0 < 40 or y0 > ph - 40:
+            continue
+        ts = txt.strip()
+        if ts and ANSWERZONE_RE.match(ts):
+            answer_zone_y0 = min(answer_zone_y0, y0)
 
+    # ── 综合：取横线密集区 和 文字标志 中更早出现的 ──
+    candidates = []
+    if hline_start is not None:
+        candidates.append(hline_start)
     if answer_zone_y0 < ph - 40:
-        # 找到了答题区起始：取其 y0 作为底部（题干到这里结束）
-        # 往上留 4pt 留白
-        return max(60, answer_zone_y0 - 4)
+        candidates.append(answer_zone_y0 - 4)
 
-    # ── 阶段4：fallback — 扫描所有"题目性"内容块，取最后一个的 y1 ──
-    last_stem_y1 = 0
+    if candidates:
+        cut_y = min(candidates)   # 取最早出现的答题区边界
+
+        # ── 阶段3（辅助）：marks 标记微调 ──
+        # 如果 marks 在 cut_y 附近（marks y1 < cut_y + 20），
+        # 以 marks y1 + 10pt 为准（更精确，避免把 marks 本身截掉）
+        marks_y1 = None
+        for b in blocks:
+            x0, y0, x1, y1, txt, bno, btype = b
+            if btype != 0 or y0 > ph - 55:
+                continue
+            ts = txt.strip()
+            if MARKS_PAT.search(ts) and x0 > pw * 0.35:
+                marks_y1 = y1
+
+        if marks_y1 is not None and marks_y1 < cut_y + 20:
+            # marks 就在答题区前：用 marks 下边界（更紧凑、更精确）
+            cut_y = max(cut_y, marks_y1 + 10)
+
+        if cut_y > 60:
+            return min(cut_y, ph - 25)
+
+    # ── 阶段4 fallback：扫描所有题目性内容块，取最后一个 y1 ──
+    last_y = 0
     for b in blocks:
         x0, y0, x1, y1, txt, bno, btype = b
         if btype != 0:
@@ -720,19 +711,16 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
             continue
         if ANSWERZONE_RE.match(ts):
             continue
-        # 跳过横线（下划线字符填充）
         clean = ts.replace(' ', '').replace('\n', '').replace('\t', '')
         if clean and all(c in '_-–—' for c in clean):
             continue
-        # 跳过纯数字（页码残留）
         if re.match(r'^\d{1,3}$', ts):
             continue
-        last_stem_y1 = max(last_stem_y1, y1)
+        last_y = max(last_y, y1)
 
-    if last_stem_y1 > 60:
-        return min(last_stem_y1 + 10, ph - 25)
+    if last_y > 60:
+        return min(last_y + 10, ph - 25)
 
-    # 终极 fallback
     return _find_content_bottom(page, ph)
 
 
@@ -4967,7 +4955,8 @@ def _draw_difficulty_stars(page, x_start, y_center, n_filled, n_total=5,
 
 def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
                          area_rect, label, header_h, gap, font_sz,
-                         show_header=False, q_meta=None, draw_logo=True):
+                         show_header=False, q_meta=None, draw_logo=True,
+                         fit_to_width=True):
     """
     把一段 JPEG 图像放入输出 PDF 页的 area_rect 区域。
     白色背景，干净排版：
@@ -4975,6 +4964,8 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
       - 无蓝色背景色块，仅用细线和文字颜色区分
       - 图片紧跟信息行下方，左对齐，宽度铺满
     q_meta: dict {difficulty, topics, exam_date} 或 None
+    fit_to_width: True（默认）→ 按宽度铺满，不受高度约束（大题一题一页模式）
+                  False → min(w_scale, h_scale)，防止超出区域（MCQ 多题共页模式）
     """
     x0, y0, x1, y1 = area_rect.x0, area_rect.y0, area_rect.x1, area_rect.y1
 
@@ -5134,7 +5125,13 @@ def _place_jpeg_on_page(out_page, jpeg_bytes, img_w, img_h,
     if img_area_h < 10 or img_area_w < 10:
         return
 
-    scale  = min(img_area_w / img_w, img_area_h / img_h)
+    if fit_to_width:
+        # 大题一题一页模式：始终按宽度铺满，不受高度约束
+        # 截掉答题区后图片变矮，不能因为高度小就缩小图片
+        scale  = img_area_w / img_w
+    else:
+        # MCQ 多题共页模式：同时约束宽高，防止单题超出分配区域
+        scale  = min(img_area_w / img_w, img_area_h / img_h)
     draw_w = img_w * scale
     draw_h = img_h * scale
     # 左对齐（与原版相同）
@@ -5367,7 +5364,7 @@ def _export_mcq_packed(out_doc, src_doc, questions, q_nums, dpi,
                     if (diff_mc is not None or topics_mc or exam_date_mc) else None
         area = fitz.Rect(M, cur_y, PW - M, cur_y + actual_draw_h + 2 * GAP)
         _place_jpeg_on_page(cur_page, jpeg, w, h, area, f'Q{export_seq:02d}', 0, GAP, 11,
-                            q_meta=q_meta_mc)
+                            q_meta=q_meta_mc, fit_to_width=False)
         del jpeg
 
         cur_y += actual_draw_h + 2 * GAP + ITEM_GAP
@@ -5408,7 +5405,8 @@ def _export_two_per_page(out_doc, src_doc, questions, q_nums, dpi,
                 x0   = M + col * (COL_W + COL_GAP)
                 area = fitz.Rect(x0, M, x0 + COL_W, M + COL_H)
                 _place_jpeg_on_page(page, jpeg, w, h, area,
-                                    label, HH, GAP, FS, q_meta=q_meta)
+                                    label, HH, GAP, FS, q_meta=q_meta,
+                                    fit_to_width=False)
                 del jpeg  # 立即释放
             done += 1
             if progress_cb: progress_cb(done)
