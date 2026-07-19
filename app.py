@@ -586,22 +586,30 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
     Edexcel Maths 有专用函数 _find_edexcel_maths_question_bottom，不使用此函数。
 
     核心策略（按优先级）：
-    1. 横线密集区检测（最可靠）：找连续 3+ 条跨度 >30% 页宽的水平线，
-       取第一段密集区起始 y，截止于此
-    2. 答题区文字标志：Answer space / Write your answer / Question N continued 等
-    3. marks 标记辅助：若找到 "(3 marks)" / "[4]" 等分值，在其下方再留少量余量
+    1. 横线检测（最可靠，分两档）：
+       - 单条超宽横线（>70% 页宽）：这本身就是答题区起始，立即截止
+       - 连续2条普通宽横线（>30% 页宽，间距<32pt）：密集区起始，截止
+    2. 答题区文字标志：Answer space / Write your answer / Do not write here 等
+    3. marks 标记辅助：若 marks 紧贴 cut_y 之前，以 marks y1+8 为下界（防截断）
     4. fallback：取所有非横线、非答题提示的最后一个内容块 y1
     """
     pw = page.rect.width
 
-    # 答题区文字特征
+    # 答题区文字特征（扩展版，覆盖更多 Cambridge/Edexcel 格式）
     ANSWERZONE_RE = re.compile(
-        r'^(answer\s+(space|here|in\s+the\s+space|on\s+the\s+grid)|'
-        r'write\s+your\s+answer|leave\s+(this\s+)?blank|'
-        r'question\s+\d+\s+continued|total\s+for\s+(question|this\s+question)|'
+        r'^(answer\s+(space|here|in\s+the\s+space|on\s+the\s+grid|lines?|area)|'
+        r'write\s+(your\s+)?(answer|working)|'
+        r'leave\s+(this\s+)?(space\s+)?blank|'
+        r'do\s+not\s+write\s+(in\s+this\s+space|here|outside)|'
+        r'question\s+\d+\s+continued|'
+        r'total\s+for\s+(question|this\s+question)\s*[\d\s]*|'
         r'additional\s+(answer\s+)?space|'
-        r'use\s+(this\s+)?space\s+(for\s+)?your\s+(working|answer)|'
-        r'space\s+for\s+(rough\s+)?working)',
+        r'use\s+(this\s+)?(page\s+)?space\s+(for\s+)?(your\s+)?(working|answer)|'
+        r'space\s+for\s+(rough\s+)?working|'
+        r'working\s+space|'
+        r'show\s+your\s+working|'
+        r'for\s+examiner[\'s]*\s+use|'
+        r'examiner\s+only)',
         re.IGNORECASE
     )
     SKIP_RE = re.compile(
@@ -615,71 +623,94 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
         re.IGNORECASE
     )
 
-    # ── 阶段1：通过 drawing 找横线密集区起始 y（最可靠信号）──
+    # ── 阶段1：通过 drawing 找横线区域起始 y（最可靠信号）──
+    # 分两档：超宽单条线（单独触发）+ 普通宽线密集区（2条以上）
     hline_start = None
     try:
         drawings = page.get_drawings()
-        hlines_y = []
+        wide_hlines  = []   # 超宽线 dx > 70% 页宽
+        normal_hlines = []  # 普通宽线 dx > 30% 页宽
         for d in drawings:
             for item in d.get('items', []):
                 if item[0] == 'l':
                     p1, p2 = item[1], item[2]
-                    dy  = abs(p2.y - p1.y)
-                    dx  = abs(p2.x - p1.x)
+                    dy    = abs(p2.y - p1.y)
+                    dx    = abs(p2.x - p1.x)
                     mid_y = (p1.y + p2.y) / 2
-                    # 水平线：高度偏差<3pt，横跨>30%页宽，在页面内容区
-                    if dy < 3 and dx > pw * 0.30 and 40 < mid_y < ph - 40:
-                        hlines_y.append(mid_y)
+                    if dy < 3 and 40 < mid_y < ph - 40:
+                        if dx > pw * 0.70:
+                            wide_hlines.append(mid_y)
+                        elif dx > pw * 0.30:
+                            normal_hlines.append(mid_y)
                 elif item[0] == 're':
-                    r    = item[1]
-                    rh   = abs(r.y1 - r.y0)
-                    rw   = abs(r.x1 - r.x0)
+                    r     = item[1]
+                    rh    = abs(r.y1 - r.y0)
+                    rw    = abs(r.x1 - r.x0)
                     mid_y = (r.y0 + r.y1) / 2
-                    # 细宽矩形（横线替代）
-                    if rh < 4 and rw > pw * 0.30 and 40 < mid_y < ph - 40:
-                        hlines_y.append(mid_y)
-        if len(hlines_y) >= 3:
-            hlines_y.sort()
-            # 找第一段连续横线（相邻间距 < 28pt 的3条）的起始位置
-            for idx in range(len(hlines_y) - 2):
-                y_a = hlines_y[idx]
-                y_b = hlines_y[idx + 1]
-                y_c = hlines_y[idx + 2]
-                if (y_b - y_a) < 28 and (y_c - y_b) < 28:
-                    hline_start = max(0, y_a - 6)   # 往上留 6pt 空间
+                    if rh < 4 and 40 < mid_y < ph - 40:
+                        if rw > pw * 0.70:
+                            wide_hlines.append(mid_y)
+                        elif rw > pw * 0.30:
+                            normal_hlines.append(mid_y)
+
+        # 档位1：超宽单条横线 → 直接截止（答题区起始最可靠信号）
+        if wide_hlines:
+            wide_hlines.sort()
+            hline_start = max(0, wide_hlines[0] - 6)
+
+        # 档位2：普通宽线，只要有连续2条（间距<32pt）即触发
+        if hline_start is None and len(normal_hlines) >= 2:
+            normal_hlines.sort()
+            for idx in range(len(normal_hlines) - 1):
+                y_a = normal_hlines[idx]
+                y_b = normal_hlines[idx + 1]
+                if (y_b - y_a) < 32:
+                    hline_start = max(0, y_a - 6)
+                    break
+
+        # 档位2b: 3条普通线即使间距稍大（<50pt）也触发
+        if hline_start is None and len(normal_hlines) >= 3:
+            normal_hlines.sort()
+            for idx in range(len(normal_hlines) - 2):
+                y_a = normal_hlines[idx]
+                y_b = normal_hlines[idx + 1]
+                y_c = normal_hlines[idx + 2]
+                if (y_b - y_a) < 50 and (y_c - y_b) < 50:
+                    hline_start = max(0, y_a - 6)
                     break
     except Exception:
         pass
 
-    # ── 阶段2：答题区文字标志 ──
+    # ── 阶段2：答题区文字标志（扫描所有文字块）──
     answer_zone_y0 = ph
     try:
         blocks = page.get_text('blocks')
     except Exception:
         blocks = []
+
     for b in blocks:
         x0, y0, x1, y1, txt, bno, btype = b
         if btype != 0:
             continue
-        if y0 < 40 or y0 > ph - 40:
+        if y0 < 40 or y0 > ph - 20:
             continue
         ts = txt.strip()
         if ts and ANSWERZONE_RE.match(ts):
             answer_zone_y0 = min(answer_zone_y0, y0)
 
-    # ── 综合：取横线密集区 和 文字标志 中更早出现的 ──
+    # ── 综合：取横线信号 和 文字标志 中更早出现的 ──
     candidates = []
     if hline_start is not None:
         candidates.append(hline_start)
-    if answer_zone_y0 < ph - 40:
+    if answer_zone_y0 < ph - 20:
         candidates.append(answer_zone_y0 - 4)
 
     if candidates:
         cut_y = min(candidates)   # 取最早出现的答题区边界
 
         # ── 阶段3（辅助）：marks 标记微调 ──
-        # 如果 marks 在 cut_y 附近（marks y1 < cut_y + 20），
-        # 以 marks y1 + 10pt 为准（更精确，避免把 marks 本身截掉）
+        # 若 marks 在 cut_y 之前（marks y1 < cut_y + 24pt 内），
+        # 说明 marks 就在答题区入口处，需确保 marks 完整显示
         marks_y1 = None
         for b in blocks:
             x0, y0, x1, y1, txt, bno, btype = b
@@ -689,9 +720,9 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
             if MARKS_PAT.search(ts) and x0 > pw * 0.35:
                 marks_y1 = y1
 
-        if marks_y1 is not None and marks_y1 < cut_y + 20:
-            # marks 就在答题区前：用 marks 下边界（更紧凑、更精确）
-            cut_y = max(cut_y, marks_y1 + 10)
+        if marks_y1 is not None and marks_y1 < cut_y + 24:
+            # marks 就在答题区前：用 marks 下边界（保证 marks 完整可见）
+            cut_y = max(cut_y, marks_y1 + 8)
 
         if cut_y > 60:
             return min(cut_y, ph - 25)
@@ -809,26 +840,27 @@ def crop_question_image(doc, questions, q_idx, dpi=150, paper_type='mcq'):
             left, right = 36, min(pw - 36, 550)
 
         if pg_i == pg_start and pg_i == pg_end:
-            # 同页
+            # 同页：先用题干底部检测，再和 y_end 取 min（确保不含下一题）
             top = max(0, y_top)
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type)
             if y_end is not None:
-                bottom = min(ph, y_end)
+                bottom = min(stem_bottom, min(ph, y_end))
             else:
-                # 最后一题：用题干底部检测（不含答题区）
-                bottom = _find_question_stem_bottom(page, ph, paper_type)
+                bottom = stem_bottom
         elif pg_i == pg_start:
             # 首页：从题号到题干底部（不含本页的答题区横线）
             top = max(0, y_top)
             bottom = _find_question_stem_bottom(page, ph, paper_type)
         elif pg_i == pg_end:
-            # 末页：从页顶内容区到下一题位置
+            # 末页：从页顶到 min(题干底部, 下一题题号)
             top = 55  # 跳过页眉
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type)
             if y_end is not None:
-                bottom = min(ph, y_end)
+                bottom = min(stem_bottom, min(ph, y_end))
             else:
-                bottom = _find_question_stem_bottom(page, ph, paper_type)
+                bottom = stem_bottom
         else:
-            # 中间页（多页大题中间部分）
+            # 中间页（多页大题中间部分）：题干底部截止（不含答题区）
             top = 55
             bottom = _find_question_stem_bottom(page, ph, paper_type)
 
@@ -1099,20 +1131,76 @@ def _find_edexcel_maths_question_bottom(page, page_height):
     Edexcel Maths 题目页专用：只截取题干，不含答题横线。
     适用所有单元：P1/P2/P3/P4/FP1/FP2/S1/S2/M1/M2/D1。
 
-    策略：
-      1. 在右侧（x > 页宽×60%）找所有 marks 标记 (N) 的位置
-         使用相对阈值而非硬编码 430，适应不同 paper 的版式差异
-      2. 取最后一个 marks 的 y1 作为截剪下边界（marks 后立即是答题横线）
-      3. 加 8pt padding，确保括号完整显示
-      4. 如果找不到 marks（题目页无分值），退回到找最后一个非横线内容块底部
-
-    注意：只查找页面右侧 60% 区域的 marks，避免误匹配题干中的数学表达式 (N)。
+    策略（按优先级）：
+      1. 横线区域检测（与 _find_question_stem_bottom 一致）：
+         - 单条超宽线（>70% 页宽）直接截止
+         - 连续2条普通宽线（>30% 页宽，间距<32pt）截止
+         此信号优先于 marks，防止 marks 与答题线之间存在间隔时截入横线
+      2. 在右侧（x > 页宽×60%）找所有 marks 标记 (N) 的位置
+         取最后一个 marks y1 + 8pt
+      3. 综合：取 min(hline_signal, marks_signal)，取更保守的那个
+      4. fallback：找最后一个非横线内容块底部
     """
-    blocks = page.get_text('blocks')
     pw = page.rect.width
+    ph = page_height
+
+    # ── 信号1：横线区域检测（同 _find_question_stem_bottom，两档）──
+    hline_start = None
+    try:
+        drawings = page.get_drawings()
+        wide_hlines   = []
+        normal_hlines = []
+        for d in drawings:
+            for item in d.get('items', []):
+                if item[0] == 'l':
+                    p1, p2 = item[1], item[2]
+                    dy    = abs(p2.y - p1.y)
+                    dx    = abs(p2.x - p1.x)
+                    mid_y = (p1.y + p2.y) / 2
+                    if dy < 3 and 40 < mid_y < ph - 40:
+                        if dx > pw * 0.70:
+                            wide_hlines.append(mid_y)
+                        elif dx > pw * 0.30:
+                            normal_hlines.append(mid_y)
+                elif item[0] == 're':
+                    r     = item[1]
+                    rh    = abs(r.y1 - r.y0)
+                    rw    = abs(r.x1 - r.x0)
+                    mid_y = (r.y0 + r.y1) / 2
+                    if rh < 4 and 40 < mid_y < ph - 40:
+                        if rw > pw * 0.70:
+                            wide_hlines.append(mid_y)
+                        elif rw > pw * 0.30:
+                            normal_hlines.append(mid_y)
+
+        if wide_hlines:
+            wide_hlines.sort()
+            hline_start = max(0, wide_hlines[0] - 6)
+
+        if hline_start is None and len(normal_hlines) >= 2:
+            normal_hlines.sort()
+            for idx in range(len(normal_hlines) - 1):
+                y_a = normal_hlines[idx]
+                y_b = normal_hlines[idx + 1]
+                if (y_b - y_a) < 32:
+                    hline_start = max(0, y_a - 6)
+                    break
+
+        if hline_start is None and len(normal_hlines) >= 3:
+            normal_hlines.sort()
+            for idx in range(len(normal_hlines) - 2):
+                y_a = normal_hlines[idx]
+                y_b = normal_hlines[idx + 1]
+                y_c = normal_hlines[idx + 2]
+                if (y_b - y_a) < 50 and (y_c - y_b) < 50:
+                    hline_start = max(0, y_a - 6)
+                    break
+    except Exception:
+        pass
+
+    # ── 信号2：右侧 marks (N) 标记 ──
+    blocks = page.get_text('blocks')
     # 右侧 marks 的 x 阈值：页宽 60%（适应 P/FP/S/M/D 各系列版式）
-    # P3 标准页宽≈595pt → 60%=357pt；但实际 marks 在 x≈480 区域
-    # 使用 max(350, pw*0.60) 确保在各种页面尺寸下都有效
     marks_x_min = max(350, pw * 0.60)
     # 精确匹配 '(3)' '(10)' 等 marks 格式
     MARKS_PAT = re.compile(r'^\(\d+\)$')
@@ -1124,14 +1212,31 @@ def _find_edexcel_maths_question_bottom(page, page_height):
             continue
         ts = txt.strip()
         # 右侧 marks（相对 x 阈值）且不在页脚
-        if x0 > marks_x_min and y0 < page_height - 60 and MARKS_PAT.match(ts):
+        if x0 > marks_x_min and y0 < ph - 60 and MARKS_PAT.match(ts):
             marks_y1 = y1   # 取最后一个（持续更新）
 
+    marks_bottom = None
     if marks_y1 is not None:
-        # marks y1 + 8pt padding（保留括号完整显示空间）
-        return min(marks_y1 + 8, page_height - 25)
+        marks_bottom = min(marks_y1 + 8, ph - 25)
 
-    # 退回方案：找最后一个非横线、非 DO NOT WRITE、非页码的内容块底部
+    # ── 综合取最保守（更小）的信号 ──
+    candidates = []
+    if hline_start is not None and hline_start > 60:
+        candidates.append(hline_start)
+    if marks_bottom is not None:
+        candidates.append(marks_bottom)
+
+    if candidates:
+        result = min(candidates)
+        # 如果 marks 存在且恰好在横线截止点之前，确保 marks 完整
+        if marks_bottom is not None and hline_start is not None:
+            if marks_bottom > hline_start:
+                # marks 在横线区之后（异常情况：横线先出现再是marks）
+                # 保守处理：使用 marks_bottom 以确保题干完整
+                result = marks_bottom
+        return min(result, ph - 25)
+
+    # ── fallback：找最后一个非横线、非 DO NOT WRITE、非页码的内容块底部 ──
     last_y = 0
     for b in blocks:
         x0, y0, x1, y1, txt, bno, btype = b
@@ -1142,7 +1247,7 @@ def _find_edexcel_maths_question_bottom(page, page_height):
             continue
         if 'DO NOT WRITE' in ts:
             continue
-        if y0 > page_height - 60:   # 页脚区域
+        if y0 > ph - 60:   # 页脚区域
             continue
         if re.match(r'^\d{1,3}$', ts):
             continue
@@ -1152,7 +1257,7 @@ def _find_edexcel_maths_question_bottom(page, page_height):
             continue
         last_y = max(last_y, y1)
 
-    return min(last_y + 8, page_height - 25) if last_y > 50 else page_height - 25
+    return min(last_y + 8, ph - 25) if last_y > 50 else ph - 25
 
 
 def _is_answer_writing_page(page):
@@ -4667,16 +4772,19 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
             if pg_i == pg_end and q_idx + 1 < len(questions):
                 nq = questions[q_idx + 1]
                 if nq["page_idx"] == pg_end:
-                    # 下一题在同一页：截到下一题题号上方
-                    bottom = max(top + 20, nq["y_start"] - 8)
+                    # 下一题在同一页：截到 min(题干底部, 下一题题号) 确保不含下一题内容
+                    y_next = max(top + 20, nq["y_start"] - 8)
+                    stem_b = _find_edexcel_maths_question_bottom(page, ph)
+                    bottom = min(stem_b, y_next)
                 else:
                     bottom = _find_edexcel_maths_question_bottom(page, ph)
             else:
                 bottom = _find_edexcel_maths_question_bottom(page, ph)
 
-            # 退化保护
+            # 退化保护：如果 bottom 异常小，用题干检测兜底（而非直接 ph-25）
             if bottom <= top + 10:
-                bottom = ph - 25
+                fallback = _find_edexcel_maths_question_bottom(page, ph)
+                bottom = fallback if fallback > top + 10 else ph - 25
 
             if bottom > top + 10:
                 slices.append((page, fitz.Rect(left, top, right, bottom)))
@@ -4716,26 +4824,30 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
             left, right = 30, pw - 15
 
         if pg_i == pg_start and pg_i == pg_end:
-            # 同一页：从题号到下一题题号（若有），否则找题干底部
+            # 同一页：先用题干底部检测，再和 y_end 取 min（确保不含下一题）
             top = y_top
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type)
             if y_end is not None:
-                bottom = min(ph, y_end)
+                bottom = min(stem_bottom, min(ph, y_end))
             else:
-                # 最后一题：用题干底部检测（不含答题区）
-                bottom = _find_question_stem_bottom(page, ph, paper_type)
+                bottom = stem_bottom
         elif pg_i == pg_start:
             # 首页：从题号到题干底部（不含本页的答题区）
+            # 同时：如果下一题也在本页（pg_end==pg_start 已处理），此处 pg_end>pg_start，
+            # 首页的 stem_bottom 不受 y_end 约束（y_end 在其他页）
             top    = y_top
             bottom = _find_question_stem_bottom(page, ph, paper_type)
         elif pg_i == pg_end:
-            # 末页：从页顶到下一题题号（若有），否则找题干底部
-            top    = 50 if is_edexcel else 55
+            # 末页：从页顶到 min(题干底部, 下一题题号)
+            top = 50 if is_edexcel else 55
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type)
             if y_end is not None:
-                bottom = min(ph, y_end)
+                # 末页有 y_end（下一题在此页）：取两者中更小的，防止截入下一题
+                bottom = min(stem_bottom, min(ph, y_end))
             else:
-                bottom = _find_question_stem_bottom(page, ph, paper_type)
+                bottom = stem_bottom
         else:
-            # 中间页（多页大题的中间部分）
+            # 中间页（多页大题的中间部分）：题干底部截止（不含答题区）
             top    = 50 if is_edexcel else 55
             bottom = _find_question_stem_bottom(page, ph, paper_type)
 
