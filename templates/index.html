@@ -2734,18 +2734,37 @@ function setDiffQuick(uid, gIdx, qNum, stars, e) {
 }
 
 function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
-  if (e) e.stopPropagation();
+  if (e) { e.stopPropagation(); e.preventDefault(); }
   // uid 是唯一定位键：优先用 _seq 前缀（s123），其次用 gIdx_qNum
   let q;
   if (uid && uid.startsWith('s')) {
     const seq = +uid.slice(1);
     q = allQuestions.find(x => x._seq === seq);
+    // fallback: seq 解析失败时用 NaN，防止 find 错误
+    if (!q && !isNaN(seq)) {
+      // 再尝试旧格式解析（兼容 sessionStorage restore 可能丢失 _seq 的情况）
+      const parts = uid.slice(1).split('_');
+      if (parts.length === 1) {
+        // 纯数字 seq，找不到时打 warning
+        console.warn('[openEditMeta] seq not found:', seq, 'allQ:', allQuestions.length,
+                     'sample _seq:', allQuestions.slice(0,3).map(x=>x._seq));
+      }
+    }
   } else if (uid) {
-    const [gi, qn] = uid.split('_').map(Number);
+    const parts = uid.split('_').map(Number);
+    const [gi, qn] = parts;
     // 同一 gIdx 下 q_num 可能重复，取第一个（兼容旧数据）
     q = allQuestions.find(x => x.gIdx === gi && x.q_num === qn);
   }
-  if (!q) { console.error('[openEditMeta] q not found, uid='+uid+' allQ='+allQuestions.length); return; }
+  // 最终兜底：用 _gIdxLegacy / _qNumLegacy 参数（旧调用路径）
+  if (!q && _gIdxLegacy != null && _qNumLegacy != null) {
+    q = allQuestions.find(x => x.gIdx === +_gIdxLegacy && x.q_num === +_qNumLegacy);
+  }
+  if (!q) {
+    console.error('[openEditMeta] q not found, uid='+uid+' allQ='+allQuestions.length);
+    toast('找不到题目数据，请重新上传文件', 'err');
+    return;
+  }
 
   // 从 q 对象中取得 gIdx 和 qNum（不再依赖传参）
   const gIdx = q.gIdx;
@@ -2871,7 +2890,8 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
   // 存储当前编辑题目的 uid（供替换图片使用）
   _editMeta._uid = uid;
 
-  document.getElementById('editMetaMo').style.display = 'flex';
+  // ★ 先打开弹框（让用户立即看到），知识点树异步加载
+  document.getElementById('editMetaMo').classList.add('show');
 }
 
 // ── 替换题目图片 ──
@@ -3092,7 +3112,7 @@ function editNavQ(dir) {
 }
 
 function closeEditMeta() {
-  document.getElementById('editMetaMo').style.display = 'none';
+  document.getElementById('editMetaMo').classList.remove('show');
 }
 
 // ── 编辑模态框内答案显示/隐藏切换 ──

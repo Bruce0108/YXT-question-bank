@@ -139,9 +139,34 @@ def detect_structured_questions(doc):
     questions = []
     seen_nums = set()
 
+    # ── 前置：识别 Data Booklet / Formulae 页，这些页不含题目 ──
+    DATA_PAGE_KEYWORDS = {
+        'data booklet', 'physics data', 'formulae', 'mathematical formulae',
+        'data sheet', 'list of data', 'useful formulae', 'physical constants',
+        'values of constants', 'mathematical data',
+    }
+
+    def _is_data_page(pg):
+        """检测页面是否为 Data Sheet / Formulae 页（不含题目）"""
+        try:
+            pg_text_raw = pg.get_text().upper()
+            # 页面前 40% 文字（通常是页眉/标题区）
+            lines = pg_text_raw.split('\n')
+            head_text = ' '.join(lines[:max(8, len(lines)//3)]).lower()
+            for kw in DATA_PAGE_KEYWORDS:
+                if kw in head_text:
+                    return True
+        except Exception:
+            pass
+        return False
+
     for pg_i in range(doc.page_count):
         page = doc[pg_i]
         ph   = page.rect.height
+
+        # ── 跳过 Data Sheet / Formulae 页（9702 试卷前几页的常量/公式表）──
+        if _is_data_page(page):
+            continue
 
         try:
             d = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
@@ -2980,8 +3005,11 @@ def _detect_9702_ms_table(doc):
     返回：
       {q_num: [(page_idx, y_top, y_bottom, x_left, x_right), ...]}
     """
-    # 表头关键词（大小写不敏感）
-    HDR_WORDS = {'question', 'answer', 'marks'}
+    # 表头关键词（大小写不敏感）— 9702 MS 表头含 Question / Answer / Marks
+    # 支持多种拼写：有时 "Question" 和 "Answer" 分布在相邻 span/行
+    HDR_WORDS      = {'question', 'answer', 'marks'}
+    # 备用：只有 answer 和 marks（某些 MS 无 "Question" 列头）
+    HDR_WORDS_ALT  = {'answer', 'marks'}
     # 题号模式：1-2位数字，可后跟 (a)(b)(i) 等子题（只取整数部分）
     Q_NUM_PAT = re.compile(r'^(\d{1,2})\b')
 
@@ -3000,7 +3028,7 @@ def _detect_9702_ms_table(doc):
             if b.get('type') != 0:
                 continue
             for line in b.get('lines', []):
-                ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
+                ltxt = ''.join(s['text'] for s in line['spans']).strip()
                 if ltxt:
                     bbox = line['bbox']
                     tlines.append((bbox[1], bbox[3], bbox[0], bbox[2], ltxt))
@@ -3010,30 +3038,38 @@ def _detect_9702_ms_table(doc):
         i = 0
         while i < n:
             y0_i = tlines[i][0]
-            # 在 20pt 范围内收集同行词
+            # 在 25pt 范围内收集同行/相邻行的词（表头可能跨 2 行）
             words = set()
             j = i
-            while j < n and tlines[j][0] - y0_i < 20:
+            while j < n and tlines[j][0] - y0_i < 25:
                 for w in tlines[j][4].split():
-                    words.add(w.lower().strip(':.'))
+                    words.add(w.lower().strip(':.()/'))
                 j += 1
-            if HDR_WORDS.issubset(words):
-                # 找到表头行
+            # 宽松匹配：question+answer+marks（全匹配）或 answer+marks（部分匹配）
+            is_hdr = HDR_WORDS.issubset(words) or HDR_WORDS_ALT.issubset(words)
+            if is_hdr:
+                # 找到表头行 — 记录位置
                 hdr_y0 = tlines[i][0]
                 hdr_y1 = max(tlines[k][1] for k in range(i, j))
-                header_blocks.append((pg_i, hdr_y0, hdr_y1))
+                # 避免重复：若本页已有表头且 y 距离 < 30，跳过
+                if not header_blocks or header_blocks[-1][0] != pg_i or (hdr_y0 - header_blocks[-1][2]) > 30:
+                    header_blocks.append((pg_i, hdr_y0, hdr_y1))
                 i = j
                 continue
             i += 1
 
+    print(f'[9702_ms_table] found {len(header_blocks)} header blocks: '
+          + str([(h[0], round(h[1],1)) for h in header_blocks]))
+
     if not header_blocks:
+        # fallback: 尝试全文搜索 "Mark Scheme" + 第一页题号检测
         return {}
 
     # ── 按表头分段，解析每段中的题号和行范围 ──
     result = {}  # q_num → [(pg_i, y_top, y_bot, x_left, x_right)]
 
     for seg_idx, (pg_i, hdr_y0, hdr_y1) in enumerate(header_blocks):
-        # 本段结束位置：下一个同页表头，或页末
+        # 本段结束位置：下一个表头，或页末
         if seg_idx + 1 < len(header_blocks):
             next_pg, next_y0, _ = header_blocks[seg_idx + 1]
             seg_end_pg  = next_pg
@@ -3050,8 +3086,6 @@ def _detect_9702_ms_table(doc):
                 blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
             except Exception:
                 continue
-            ph = page.rect.height
-            pw = page.rect.width
             for b in blocks:
                 if b.get('type') != 0:
                     continue
@@ -3061,7 +3095,7 @@ def _detect_9702_ms_table(doc):
                         continue
                     bbox = line['bbox']
                     ly0, ly1, lx0, lx1 = bbox[1], bbox[3], bbox[0], bbox[2]
-                    # 跳过表头行本身
+                    # 跳过表头行本身（含 2pt 容差）
                     if scan_pg == pg_i and ly0 < hdr_y1 + 2:
                         continue
                     # 跳过下一段的表头
@@ -3070,49 +3104,61 @@ def _detect_9702_ms_table(doc):
                     seg_lines.append((scan_pg, ly0, ly1, lx0, lx1, ltxt))
 
         # 在本段中按左列题号分组
-        # Cambridge 9702 MS：题号列在最左侧（x0 < 100pt）
-        current_q   = None
-        q_y_start   = {}   # q_num → (pg_i, y_top)
-        q_y_end     = {}   # q_num → (pg_i, y_bot)
+        # Cambridge 9702 MS：题号列通常在左侧（x0 < 120pt），放宽至 150pt 兼容不同排版
+        q_y_start = {}   # q_num → (pg_i, y_top)
 
         for (spg, ly0, ly1, lx0, lx1, ltxt) in seg_lines:
-            if lx0 < 100:
+            if lx0 < 150:  # 放宽至 150pt（原为 100pt）
                 m = Q_NUM_PAT.match(ltxt.strip())
                 if m:
                     qn = int(m.group(1))
                     if 1 <= qn <= 30:
                         if qn not in q_y_start:
                             q_y_start[qn] = (spg, ly0)
-                        current_q = qn
+
+        print(f'[9702_ms_table] seg {seg_idx} (pg{pg_i}): found q_nums={sorted(q_y_start.keys())}')
 
         # 确定每题的 y_end（下一题 y_start - 2，或段末）
         for qn in sorted(q_y_start.keys()):
             pg_s, y_s = q_y_start[qn]
-            # 找下一道题的 y_start
+            # 找下一道题的 y_start（同页优先）
             next_qs = [(k, v) for k, v in q_y_start.items() if k > qn]
             if next_qs:
-                next_q = min(next_qs, key=lambda x: x[0])
+                # 先取同页的下一题，再取跨页的
+                same_pg_next = [(k, v) for k, v in next_qs if v[0] == pg_s]
+                if same_pg_next:
+                    next_q = min(same_pg_next, key=lambda x: x[0])
+                else:
+                    next_q = min(next_qs, key=lambda x: x[0])
                 pg_e, y_e = next_q[1]
-                y_bot = y_e - 2
+                # 跨页时取当前页末，不截到下一页
+                if pg_e != pg_s:
+                    y_bot = doc[pg_s].rect.height - 20
+                    pg_e  = pg_s
+                else:
+                    y_bot = y_e - 2
             else:
-                # 最后一题：取段内最后一行底部，但不超过页末
-                last_line = max(
-                    ((sl[0], sl[2]) for sl in seg_lines if sl[0] == pg_s and sl[1] >= y_s),
-                    default=(pg_s, y_s + 40)
-                )
-                pg_e, y_bot = last_line
-                y_bot += 4
+                # 最后一题：取段内最后一行底部
+                last_lines = [(sl[0], sl[2]) for sl in seg_lines if sl[0] == pg_s and sl[1] >= y_s - 2]
+                if last_lines:
+                    pg_e, y_bot = max(last_lines, key=lambda x: x[1])
+                    y_bot += 4
+                else:
+                    pg_e  = pg_s
+                    y_bot = doc[pg_s].rect.height - 20
 
             page = doc[pg_s]
-            pw = page.rect.width
-            # 整行宽度（含 Answer 和 Marks 列）
+            pw   = page.rect.width
             x_left  = 30
             x_right = min(pw - 10, 560)
 
             if qn not in result:
                 result[qn] = []
-            result[qn].append((pg_s, y_s - 2, min(y_bot, doc[pg_e].rect.height - 20), x_left, x_right))
+            # 确保 y_bot 不超过页面高度
+            y_bot_clamped = min(y_bot, doc[pg_e if pg_e == pg_s else pg_s].rect.height - 15)
+            result[qn].append((pg_s, max(0, y_s - 3), y_bot_clamped, x_left, x_right))
 
+    print(f'[9702_ms_table] final result: {sorted(result.keys())} questions')
     return result
 
 
@@ -3138,7 +3184,17 @@ def _render_9702_ms_answers(ms_doc, dpi=150):
         try:
             for (pg_i, y_top, y_bot, x_left, x_right) in slices:
                 page = ms_doc[pg_i]
-                clip = fitz.Rect(x_left, y_top, x_right, y_bot)
+                ph_pg = page.rect.height
+                pw_pg = page.rect.width
+                # 确保 clip 坐标合法，避免 "Invalid bandwriter header" 错误
+                x0_c = max(0.0, float(x_left))
+                y0_c = max(0.0, float(y_top))
+                x1_c = min(float(pw_pg), float(x_right))
+                y1_c = min(float(ph_pg), float(y_bot))
+                if y1_c - y0_c < 4 or x1_c - x0_c < 10:
+                    print(f'[9702_ms] skip tiny clip q{q_num}: ({x0_c:.1f},{y0_c:.1f},{x1_c:.1f},{y1_c:.1f})')
+                    continue
+                clip = fitz.Rect(x0_c, y0_c, x1_c, y1_c)
                 pix  = page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csRGB)
                 w, h = pix.width, pix.height
                 data = _pixmap_to_jpeg_bytes(pix)
