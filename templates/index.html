@@ -2742,6 +2742,10 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
   }
   if (!q) { console.error('[openEditMeta] q not found, uid='+uid+' allQ='+allQuestions.length); return; }
 
+  // 从 q 对象中取得 gIdx 和 qNum（不再依赖传参）
+  const gIdx = q.gIdx;
+  const qNum = q.q_num;
+
   // 当前题目已有的topics（含is_core标记）
   const existingTopics = Array.isArray(q.topics) ? q.topics : [];
   const existingIds    = new Set(existingTopics.map(t => String(t.id)));
@@ -3057,12 +3061,17 @@ function clearAllTopicSel() {
 function editNavQ(dir) {
   const vis = getVisibleQuestions();
   const cur = _editMeta;
-  const visIdx = vis.findIndex(x => x.gIdx === cur.gIdx && x.q_num === cur.qNum);
+  // 用 _seq 或 gIdx+qNum 在 vis 里定位当前题
+  const visIdx = cur._uid && cur._uid.startsWith('s')
+    ? vis.findIndex(x => x._seq === +cur._uid.slice(1))
+    : vis.findIndex(x => x.gIdx === cur.gIdx && x.q_num === cur.qNum);
   const next = vis[visIdx + dir];
   if (next) {
     // 先自动保存当前题
     _applyEditMetaToMemory();
-    openEditMeta(`${next.gIdx}_${next.q_num}`, next.gIdx, next.q_num, null, null);
+    // 用 next 的 _seq uid（或 gIdx_qNum 兼容）
+    const nextUid = next._seq != null ? `s${next._seq}` : `${next.gIdx}_${next.q_num}`;
+    openEditMeta(nextUid, null, null, null, null);
   }
 }
 
