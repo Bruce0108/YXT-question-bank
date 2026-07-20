@@ -1353,7 +1353,7 @@ async function doUpload(files) {
           try {
             const d = JSON.parse(xhr.responseText);
             reject(new Error(d.error || `HTTP ${xhr.status}`));
-          } catch { reject(new Error(`HTTP ${xhr.status}`)); }
+          } catch(e) { reject(new Error(`HTTP ${xhr.status}`)); }
         }
       };
       xhr.onerror = () => reject(new Error('网络连接失败'));
@@ -3031,7 +3031,7 @@ async function saveEditMeta() {
       renderGrid();
       toast(`Q${String(qNum).padStart(2,'0')} 已保存`, 'ok');
     }
-  } catch {
+  } catch(e) {
     toast('网络错误', 'err');
   }
 }
@@ -3407,13 +3407,21 @@ async function loadFromLib(board, subject, wbId, title) {
     setLdProgress(85, `加载 ${d.count} 道题目…`);
     await new Promise(r => setTimeout(r, 150));
 
-    _applyLoadedWorkbook(d);
+    try {
+      _applyLoadedWorkbook(d);
+    } catch(applyErr) {
+      console.error('[loadFromLib] _applyLoadedWorkbook 异常:', applyErr.stack || applyErr);
+      hideLd();
+      toast('读取题册失败（应用数据出错）：' + applyErr.message, 'err');
+      return;
+    }
 
     setLdProgress(100, '读取完成！');
     await new Promise(r => setTimeout(r, 400));
     hideLd();
     toast(`✅ 题册《${d.title}》已读取，共 ${d.count} 题，可继续编辑`, 'ok');
   } catch(e) {
+    console.error('[loadFromLib] 异常:', e.stack || e);
     hideLd(); toast('读取题册失败：' + e.message, 'err');
   }
 }
