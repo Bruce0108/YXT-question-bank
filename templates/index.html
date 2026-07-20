@@ -2797,19 +2797,30 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
   treeWrap.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px">⏳ 加载中...</div>';
 
   const grp = groups[gIdx] || {};
-  // 推导 unit：优先 group.maths_unit，其次从该题目的 topics id 前缀推导
-  let unit = grp.maths_unit || null;
-  if (!unit && q.topics && q.topics.length > 0) {
-    const unitSet = _inferUnitsFromQuestions([q]);
-    const unitArr = [...unitSet].filter(Boolean);
-    if (unitArr.length === 1) unit = unitArr[0];
+  // 判断来源：cambridge题目用9702知识点，edexcel_maths用对应unit的知识点
+  const grpSource = grp.source || q.source || '';
+  const isCambridge = (grpSource === 'cambridge');
+
+  let apiUrl;
+  if (isCambridge) {
+    // Cambridge 9702 物理：使用 /api/syllabus（9702知识点，与筛选侧栏一致）
+    apiUrl = '/api/syllabus';
+  } else {
+    // Edexcel Maths：根据unit过滤
+    let unit = grp.maths_unit || null;
+    if (!unit && q.topics && q.topics.length > 0) {
+      const unitSet = _inferUnitsFromQuestions([q]);
+      const unitArr = [...unitSet].filter(Boolean);
+      if (unitArr.length === 1) unit = unitArr[0];
+    }
+    apiUrl = unit
+      ? `/api/syllabus/edexcel_maths?unit=${encodeURIComponent(unit)}`
+      : '/api/syllabus/edexcel_maths';
   }
-  const apiUrl = unit
-    ? `/api/syllabus/edexcel_maths?unit=${encodeURIComponent(unit)}`
-    : '/api/syllabus/edexcel_maths';
 
   fetch(apiUrl).then(r => r.json()).then(data => {
     _editMeta.sessionTopics = data.topics || [];
+    _editMeta.isCambridge   = isCambridge;  // 供 _renderEditTopicTree 使用
     _renderEditTopicTree(treeWrap);
   }).catch(() => {
     treeWrap.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:8px">加载考纲失败</div>';

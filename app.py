@@ -121,79 +121,118 @@ def detect_mcq_questions(doc):
 def detect_structured_questions(doc):
     """
     检测大题（结构化问答题）PDF 中的题号。
-    特征：
-    - 每道大题起始行格式为 "N " 开头（N为题号），位于页面顶部
-    - x≈49.6, y≈63.8（页面内容起始位置）
-    - 也需处理两位数题号（如"10 (a)..."）
-    - 跨多页的题目：后续页没有新题号
+    适用于 Cambridge 9702 及类似 structured paper 格式。
+
+    题号特征（按优先级）：
+    - 页面内容区顶部（y ≈ 55-100pt）出现独立题号 span（1-2位数字）
+    - x ≈ 42-65pt（左边距，适当放宽以兼容不同印刷版本）
+    - font size 9-14pt
+    - 非粗体（Cambridge structured 题号通常非粗体）
+    - 或：block 以 "数字 " 或 "数字\n" 开头，x 在合理范围内
+
+    修复点：
+    - 放宽 y 范围至 45-110（第一题可能在页面较高位置）
+    - 放宽 x 范围至 40-75（兼容不同扫描/排版偏差）
+    - 增加从页面顶部块文字中提取题号的逻辑
+    - 增加 fallback：扫描所有页面的大字号题号
     """
     questions = []
     seen_nums = set()
 
     for pg_i in range(doc.page_count):
         page = doc[pg_i]
-        d = page.get_text("dict")
+        ph   = page.rect.height
 
-        # 获取该页所有span
-        page_spans = []
+        try:
+            d = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        except Exception:
+            continue
+
+        # ── 方法1：span 级别检测（最精确）──
+        # 题号独立成 span，仅含1-2位数字，在页面内容区左上
         for block in d.get("blocks", []):
             if block.get("type") != 0:
                 continue
             for line in block.get("lines", []):
                 for span in line.get("spans", []):
-                    page_spans.append(span)
+                    txt = span["text"].strip()
+                    if not re.match(r'^\d{1,2}$', txt):
+                        continue
+                    q_num = int(txt)
+                    if not (1 <= q_num <= 30):
+                        continue
+                    x0   = span["bbox"][0]
+                    y0   = span["bbox"][1]
+                    size = span.get("size", 0)
 
-        # 方法1：检测页面顶部区域（y<100）是否有 "N (a)..." 格式的block
-        blocks = page.get_text("blocks")
-        for b in blocks:
+                    # Cambridge structured paper 题号特征：
+                    # - 左边距较小（40-75pt），不同印刷版本略有差异
+                    # - y 在页面内容区上方（不低于页面中部）
+                    # - font size 8.5-16pt（区分正文中偶现的小数字）
+                    is_left         = 38 <= x0 <= 78
+                    is_content_zone = 40 <= y0 <= ph * 0.55   # 页面上半区
+                    is_q_size       = 8.5 <= size <= 16
+
+                    if is_left and is_content_zone and is_q_size and q_num not in seen_nums:
+                        seen_nums.add(q_num)
+                        questions.append({
+                            "q_num":    q_num,
+                            "page_idx": pg_i,
+                            "y_start":  y0,
+                            "x_start":  x0
+                        })
+
+        # ── 方法2：block 文字开头检测（题号和内容在同一 block）──
+        # 格式："1 \n题目文字..." 或 "10 (a)..."
+        try:
+            blocks_plain = page.get_text("blocks")
+        except Exception:
+            blocks_plain = []
+
+        for b in blocks_plain:
             x0, y0, x1, y1, text, _, btype = b
             if btype != 0:
                 continue
-            text_stripped = text.strip()
-            # 大题特征：在页面顶部，以"数字 "或"数字\n"开头
-            # y0在63-70范围，x0≈49.6
-            if abs(x0 - 49.6) < 8 and 55 <= y0 <= 80:
-                # 匹配 "1 \n..." 或 "10 (a)..." 格式
-                m = re.match(r'^(\d{1,2})\s*[\n\r(]', text_stripped)
-                if m:
-                    q_num = int(m.group(1))
-                    if 1 <= q_num <= 99 and q_num not in seen_nums:
-                        seen_nums.add(q_num)
-                        questions.append({
-                            "q_num": q_num,
-                            "page_idx": pg_i,
-                            "y_start": y0,
-                            "x_start": x0
-                        })
-                        break  # 每页最多一个大题题号
-
-        # 方法2：检测span级别（处理题号单独成span的情况）
-        for span in page_spans:
-            text = span["text"].strip()
-            if not re.match(r'^\d{1,2}$', text):
+            text_s = text.strip()
+            # 条件：左边距，页面内容区上部，以数字开头
+            if not (38 <= x0 <= 78 and 40 <= y0 <= ph * 0.55):
                 continue
-            q_num = int(text)
-            if not (1 <= q_num <= 99):
-                continue
-            x0 = span["bbox"][0]
-            y0 = span["bbox"][1]
-            size = span["size"]
-
-            # 大题题号：非粗体，x≈49.6，y≈63.8，size≈11
-            is_left = abs(x0 - 49.6) < 8
-            is_top = abs(y0 - 63.8) < 8
-            is_right_size = 9 <= size <= 14
-
-            if is_left and is_top and is_right_size and q_num not in seen_nums:
-                seen_nums.add(q_num)
-                questions.append({
-                    "q_num": q_num,
-                    "page_idx": pg_i,
-                    "y_start": y0,
-                    "x_start": x0
-                })
+            # 匹配 "1\n" / "1 " / "10 (a)" / "10\t" 等格式
+            m = re.match(r'^(\d{1,2})\s*[\n\r\t (]', text_s)
+            if not m:
+                # 也尝试纯数字行（某些版本题号单独成 block）
+                m = re.match(r'^(\d{1,2})\s*$', text_s)
+            if m:
+                q_num = int(m.group(1))
+                if 1 <= q_num <= 30 and q_num not in seen_nums:
+                    seen_nums.add(q_num)
+                    questions.append({
+                        "q_num":    q_num,
+                        "page_idx": pg_i,
+                        "y_start":  y0,
+                        "x_start":  x0
+                    })
 
     questions.sort(key=lambda x: x["q_num"])
+
+    # ── 后处理：去除可能的误检（题号不连续且差距>2的后半段不可信）──
+    if len(questions) >= 2:
+        # 验证题号连续性（允许间隔1，剔除明显跳跃的孤立题号）
+        valid = [questions[0]]
+        for i in range(1, len(questions)):
+            prev_num = valid[-1]["q_num"]
+            curr_num = questions[i]["q_num"]
+            if curr_num <= prev_num:
+                continue  # 重复，跳过
+            if curr_num - prev_num <= 3:  # 允许最多跳2题（有些题号不连续）
+                valid.append(questions[i])
+            elif curr_num == 1:
+                # 可能是多份试卷，但此处处理单份，跳过
+                pass
+            else:
+                valid.append(questions[i])  # 保守：不过滤，避免漏题
+        questions = valid
+
     return questions
 
 
@@ -683,16 +722,34 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
             hline_start = max(0, wide_hlines[0] - 6)
 
         # 档位2：普通宽线，只要有连续2条（间距<32pt）即触发
+        # ── 修复：排除数学/物理函数图网格线 ──
+        # 图形网格特征：大量短间距线（间距 < 8pt），且分布在页面某个矩形区域内
+        # 答题横线特征：少量长间距线（间距 10-30pt），分布较稀疏
+        # 判断方法：若连续线条中最小间距 < 7pt，且线条数量 > 6 → 是网格图，不触发
         if hline_start is None and len(normal_hlines) >= 2:
             normal_hlines.sort()
             for idx in range(len(normal_hlines) - 1):
                 y_a = normal_hlines[idx]
                 y_b = normal_hlines[idx + 1]
-                if (y_b - y_a) < 32:
-                    hline_start = max(0, y_a - 6)
-                    break
+                gap = y_b - y_a
+                if gap < 32:
+                    # 检查该组连续线是否是网格：统计相邻线的最小间距
+                    # 若大量相邻线间距 < 7pt → 图形网格，跳过
+                    group_lines = [y_a, y_b]
+                    k = idx + 2
+                    while k < len(normal_hlines) and normal_hlines[k] - group_lines[-1] < 32:
+                        group_lines.append(normal_hlines[k])
+                        k += 1
+                    if len(group_lines) >= 2:
+                        gaps = [group_lines[j+1] - group_lines[j] for j in range(len(group_lines)-1)]
+                        min_gap = min(gaps)
+                        # 网格判断：超过4条线 且 最小间距 < 6pt（密集网格）
+                        is_graph_grid = (len(group_lines) > 4 and min_gap < 6)
+                        if not is_graph_grid:
+                            hline_start = max(0, y_a - 6)
+                            break
 
-        # 档位2b: 3条普通线即使间距稍大（<50pt）也触发
+        # 档位2b: 3条普通线即使间距稍大（<50pt）也触发（但排除网格）
         if hline_start is None and len(normal_hlines) >= 3:
             normal_hlines.sort()
             for idx in range(len(normal_hlines) - 2):
@@ -700,8 +757,11 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
                 y_b = normal_hlines[idx + 1]
                 y_c = normal_hlines[idx + 2]
                 if (y_b - y_a) < 50 and (y_c - y_b) < 50:
-                    hline_start = max(0, y_a - 6)
-                    break
+                    # 同样排除网格
+                    min_gap = min(y_b - y_a, y_c - y_b)
+                    if min_gap >= 6:  # 不是密集网格
+                        hline_start = max(0, y_a - 6)
+                        break
     except Exception:
         pass
 
@@ -1419,9 +1479,12 @@ def _is_answer_writing_page(page):
     # 规则B：几乎没有实质内容（≤ 15 字符）
     if real_content_chars <= 15:
         # 进一步检查：是否有大量横线（绘制路径）
+        # 注意：物理/数学图形网格也有大量横线，需要区分
         try:
             drawings = page.get_drawings()
-            hline_count = 0
+            hline_count  = 0
+            grid_count   = 0   # 密集网格线计数（间距 < 6pt）
+            all_hlines_y = []
             for d in drawings:
                 for item in d.get('items', []):
                     if item[0] == 'l':
@@ -1431,6 +1494,7 @@ def _is_answer_writing_page(page):
                         # 近似水平线，且跨度 > 页面宽度 30%
                         if dy < 3 and dx > pw * 0.30:
                             hline_count += 1
+                            all_hlines_y.append((p1.y + p2.y) / 2)
                     elif item[0] == 're':
                         r = item[1]
                         rh = abs(r.y1 - r.y0)
@@ -1438,6 +1502,16 @@ def _is_answer_writing_page(page):
                         # 横向细矩形（细线条）
                         if rh < 3 and rw > pw * 0.30:
                             hline_count += 1
+                            all_hlines_y.append((r.y0 + r.y1) / 2)
+
+            # 检测是否为图形网格：若有超过5条线且最小间距 < 6pt → 是网格图不是答题页
+            if hline_count >= 5 and all_hlines_y:
+                all_hlines_y.sort()
+                gaps = [all_hlines_y[i+1] - all_hlines_y[i] for i in range(len(all_hlines_y)-1)]
+                if gaps and min(gaps) < 6:
+                    # 密集网格图 → 不是答题页
+                    return False
+
             # 有 3 条以上横线且实质内容 ≤ 15 字符 → 答题页
             if hline_count >= 3:
                 return True
@@ -2804,6 +2878,60 @@ def _is_markscheme_filename(filename: str) -> bool:
             fn.endswith('_ms.pdf') or '-ms-' in fn or '-ms.' in fn)
 
 
+def _is_markscheme_by_content(doc) -> bool:
+    """
+    通过 PDF 首页内容判断是否为 Mark Scheme。
+    Cambridge 9702 MS 首页固定包含 "MARK SCHEME" 字样。
+    返回 True 表示该文件是 Mark Scheme。
+    """
+    try:
+        # 只扫描前2页，避免遍历整个文档
+        for pg_i in range(min(2, doc.page_count)):
+            text = doc[pg_i].get_text()
+            upper = text.upper()
+            if 'MARK SCHEME' in upper:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _extract_9702_paper_info(filename: str) -> dict:
+    """
+    从 Cambridge 9702 文件名提取试卷信息。
+    格式示例：9702_m20_qp_42.pdf / 9702_m20_ms_42.pdf
+               9702_s21_qp_12.pdf / 9702_s21_ms_12.pdf
+               9702_w19_qp_41.pdf / 9702_w19_ms_41.pdf
+    返回: {
+        'code': '9702',
+        'session': 'm20',       # 考试季：m=Mar, s=Jun, w=Nov
+        'type': 'qp' | 'ms',   # 试卷类型
+        'variant': '42',         # 卷号
+        'session_key': '9702_m20_42',  # 用于匹配 QP/MS 对
+    }
+    若无法解析，返回 {}
+    """
+    fn = filename.lower().rstrip('.pdf').replace('.pdf', '')
+    # 匹配格式：9702_s21_qp_12 或 9702_m20_ms_42
+    m = re.match(
+        r'(9702)_([mswMSW]\d{2})_(qp|ms)_(\d{1,2}[a-z]?)',
+        fn, re.IGNORECASE
+    )
+    if not m:
+        return {}
+    code    = m.group(1)
+    session = m.group(2).lower()
+    ptype   = m.group(3).lower()
+    variant = m.group(4).lower()
+    return {
+        'code':        code,
+        'session':     session,
+        'type':        ptype,
+        'variant':     variant,
+        'session_key': f'{code}_{session}_{variant}',
+    }
+
+
 def _is_examiner_report_filename(filename: str) -> bool:
     """判断文件名是否为 Examiner Report（支持多种命名格式）"""
     fn = filename.lower()
@@ -2830,6 +2958,225 @@ def _extract_unit_from_filename(filename: str) -> str | None:
         code = m2.group(1).upper()
         return _EDEXCEL_MATHS_CODE_MAP.get(code)
     return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cambridge 9702 Physics Mark Scheme — 表格式答案提取
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_9702_ms_table(doc):
+    """
+    解析 Cambridge 9702 物理 Mark Scheme PDF 中的表格答案。
+
+    表格结构（标准格式）：
+      表头行：Question | Answer | Marks
+      数据行：题号（整数）| 答案文字 | 分值
+
+    切割规则：
+      - 扫描所有页面，找含 Question / Answer / Marks 三列的表头行
+      - 表头之后直到下一个表头（或页末）为该题组区域
+      - 按题号分组，返回每题的坐标切片
+
+    返回：
+      {q_num: [(page_idx, y_top, y_bottom, x_left, x_right), ...]}
+    """
+    # 表头关键词（大小写不敏感）
+    HDR_WORDS = {'question', 'answer', 'marks'}
+    # 题号模式：1-2位数字，可后跟 (a)(b)(i) 等子题（只取整数部分）
+    Q_NUM_PAT = re.compile(r'^(\d{1,2})\b')
+
+    header_blocks = []   # [(page_idx, hdr_y0, hdr_y1)]
+
+    for pg_i in range(doc.page_count):
+        page = doc[pg_i]
+        try:
+            blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
+        except Exception:
+            continue
+
+        # 收集该页所有文字行（y0, y1, x0, x1, text）
+        tlines = []
+        for b in blocks:
+            if b.get('type') != 0:
+                continue
+            for line in b.get('lines', []):
+                ltxt = ''.join(s['text'] for s in line['spans']).strip().lower()
+                if ltxt:
+                    bbox = line['bbox']
+                    tlines.append((bbox[1], bbox[3], bbox[0], bbox[2], ltxt))
+        tlines.sort(key=lambda x: x[0])
+
+        n = len(tlines)
+        i = 0
+        while i < n:
+            y0_i = tlines[i][0]
+            # 在 20pt 范围内收集同行词
+            words = set()
+            j = i
+            while j < n and tlines[j][0] - y0_i < 20:
+                for w in tlines[j][4].split():
+                    words.add(w.lower().strip(':.'))
+                j += 1
+            if HDR_WORDS.issubset(words):
+                # 找到表头行
+                hdr_y0 = tlines[i][0]
+                hdr_y1 = max(tlines[k][1] for k in range(i, j))
+                header_blocks.append((pg_i, hdr_y0, hdr_y1))
+                i = j
+                continue
+            i += 1
+
+    if not header_blocks:
+        return {}
+
+    # ── 按表头分段，解析每段中的题号和行范围 ──
+    result = {}  # q_num → [(pg_i, y_top, y_bot, x_left, x_right)]
+
+    for seg_idx, (pg_i, hdr_y0, hdr_y1) in enumerate(header_blocks):
+        # 本段结束位置：下一个同页表头，或页末
+        if seg_idx + 1 < len(header_blocks):
+            next_pg, next_y0, _ = header_blocks[seg_idx + 1]
+            seg_end_pg  = next_pg
+            seg_end_y   = next_y0
+        else:
+            seg_end_pg  = doc.page_count - 1
+            seg_end_y   = None
+
+        # 收集本段所有文字块（跨页）
+        seg_lines = []
+        for scan_pg in range(pg_i, min(seg_end_pg + 1, doc.page_count)):
+            page = doc[scan_pg]
+            try:
+                blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
+            except Exception:
+                continue
+            ph = page.rect.height
+            pw = page.rect.width
+            for b in blocks:
+                if b.get('type') != 0:
+                    continue
+                for line in b.get('lines', []):
+                    ltxt = ''.join(s['text'] for s in line['spans']).strip()
+                    if not ltxt:
+                        continue
+                    bbox = line['bbox']
+                    ly0, ly1, lx0, lx1 = bbox[1], bbox[3], bbox[0], bbox[2]
+                    # 跳过表头行本身
+                    if scan_pg == pg_i and ly0 < hdr_y1 + 2:
+                        continue
+                    # 跳过下一段的表头
+                    if seg_end_y and scan_pg == seg_end_pg and ly0 >= seg_end_y - 2:
+                        continue
+                    seg_lines.append((scan_pg, ly0, ly1, lx0, lx1, ltxt))
+
+        # 在本段中按左列题号分组
+        # Cambridge 9702 MS：题号列在最左侧（x0 < 100pt）
+        current_q   = None
+        q_y_start   = {}   # q_num → (pg_i, y_top)
+        q_y_end     = {}   # q_num → (pg_i, y_bot)
+
+        for (spg, ly0, ly1, lx0, lx1, ltxt) in seg_lines:
+            if lx0 < 100:
+                m = Q_NUM_PAT.match(ltxt.strip())
+                if m:
+                    qn = int(m.group(1))
+                    if 1 <= qn <= 30:
+                        if qn not in q_y_start:
+                            q_y_start[qn] = (spg, ly0)
+                        current_q = qn
+
+        # 确定每题的 y_end（下一题 y_start - 2，或段末）
+        for qn in sorted(q_y_start.keys()):
+            pg_s, y_s = q_y_start[qn]
+            # 找下一道题的 y_start
+            next_qs = [(k, v) for k, v in q_y_start.items() if k > qn]
+            if next_qs:
+                next_q = min(next_qs, key=lambda x: x[0])
+                pg_e, y_e = next_q[1]
+                y_bot = y_e - 2
+            else:
+                # 最后一题：取段内最后一行底部，但不超过页末
+                last_line = max(
+                    ((sl[0], sl[2]) for sl in seg_lines if sl[0] == pg_s and sl[1] >= y_s),
+                    default=(pg_s, y_s + 40)
+                )
+                pg_e, y_bot = last_line
+                y_bot += 4
+
+            page = doc[pg_s]
+            pw = page.rect.width
+            # 整行宽度（含 Answer 和 Marks 列）
+            x_left  = 30
+            x_right = min(pw - 10, 560)
+
+            if qn not in result:
+                result[qn] = []
+            result[qn].append((pg_s, y_s - 2, min(y_bot, doc[pg_e].rect.height - 20), x_left, x_right))
+
+    return result
+
+
+def _render_9702_ms_answers(ms_doc, dpi=150):
+    """
+    用 _detect_9702_ms_table() 定位 9702 MS 答案区，渲染为 JPEG base64。
+    返回 {q_num: {'b64': str, 'w': int, 'h': int}}。
+    """
+    import base64 as _b64
+    from PIL import Image as _PILImg
+
+    table_slices = _detect_9702_ms_table(ms_doc)
+    if not table_slices:
+        return {}
+
+    result = {}
+    scale  = dpi / 72.0
+    mat    = fitz.Matrix(scale, scale)
+
+    for q_num, slices in table_slices.items():
+        parts = []
+        total_w, total_h = 0, 0
+        try:
+            for (pg_i, y_top, y_bot, x_left, x_right) in slices:
+                page = ms_doc[pg_i]
+                clip = fitz.Rect(x_left, y_top, x_right, y_bot)
+                pix  = page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csRGB)
+                w, h = pix.width, pix.height
+                data = _pixmap_to_jpeg_bytes(pix)
+                del pix
+                parts.append((data, w, h))
+                total_w = max(total_w, w)
+                total_h += h
+
+            if not parts:
+                continue
+
+            if len(parts) == 1:
+                jpeg_out, cw, ch = parts[0]
+            else:
+                canvas = _PILImg.new('RGB', (total_w, total_h), (255, 255, 255))
+                y_off  = 0
+                for (jpeg_part, pw, ph) in parts:
+                    img_part = _PILImg.open(io.BytesIO(jpeg_part))
+                    if pw != total_w:
+                        img_part = img_part.resize(
+                            (total_w, int(ph * total_w / pw)), _PILImg.LANCZOS)
+                        ph = img_part.size[1]
+                    canvas.paste(img_part, (0, y_off))
+                    y_off += ph
+                buf = io.BytesIO()
+                canvas.save(buf, format='JPEG', quality=88)
+                jpeg_out = buf.getvalue()
+                cw, ch   = total_w, y_off
+
+            result[q_num] = {
+                'b64': _b64.b64encode(jpeg_out).decode('utf-8'),
+                'w':   cw,
+                'h':   ch,
+            }
+        except Exception as e:
+            print(f'[9702_ms] render error q{q_num}: {e}')
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3221,6 +3568,18 @@ def upload_multi():
 
         try:
             doc = fitz.open(tmp_path)
+
+            # ── 功能1: 若文件名未识别为MS，通过内容检测（MARK SCHEME字样）补充判断 ──
+            if not is_ms and not is_report:
+                if _is_markscheme_by_content(doc):
+                    is_ms = True
+                    print(f'[upload] Content-detected MS: {file.filename}')
+
+            # ── 功能2: Cambridge 9702 文件名解析（9702_m20_qp_42 / 9702_m20_ms_42）──
+            paper9702 = _extract_9702_paper_info(file.filename)
+            if paper9702.get('type') == 'ms':
+                is_ms = True
+
             if paper_type_hint == 'auto':
                 pt = detect_paper_type(doc)
             else:
@@ -3270,7 +3629,26 @@ def upload_multi():
                     ms_pt = 'edexcel_maths'
                     if not maths_unit:
                         maths_unit = ms_fn_unit
-                # 检测题目边界，渲染答案图片
+
+                # ── 功能3: Cambridge 9702 物理 MS —— 解析 Question/Answer/Marks 表格 ──
+                is_9702_ms = (paper9702.get('type') == 'ms' or
+                              (source == 'cambridge' and _is_markscheme_by_content(doc)))
+                if is_9702_ms and ms_pt != 'edexcel_maths':
+                    ms_answers = _render_9702_ms_answers(doc, dpi=150)
+                    if ms_answers:
+                        print(f'[upload] 9702 MS parsed: {file.filename} → {sorted(ms_answers.keys())} questions')
+                        ms_registry.append({
+                            'filename':    file.filename,
+                            'unit':        maths_unit,
+                            'source':      source,
+                            'answers':     ms_answers,
+                            'session':     _extract_exam_session(file.filename),
+                            'paper9702':   paper9702,
+                        })
+                        doc.close()
+                        continue  # MS 不加入 qp_groups
+
+                # 检测题目边界，渲染答案图片（Edexcel Maths / 通用格式）
                 ms_questions = _detect_questions_ms(doc, ms_pt)
                 ms_answers   = _render_ms_questions_b64(doc, ms_questions, ms_pt, dpi=150)
                 ms_registry.append({
@@ -3279,6 +3657,7 @@ def upload_multi():
                     'source':     source,
                     'answers':    ms_answers,  # {q_num: {b64, w, h}}
                     'session':    _extract_exam_session(file.filename),
+                    'paper9702':  paper9702,
                 })
                 doc.close()
                 continue  # MS 不加入 qp_groups
@@ -3337,6 +3716,7 @@ def upload_multi():
                 'total_questions': len(questions),
                 'total_pages':     fitz.open(tmp_path).page_count,
                 'has_ms':          False,   # 更新后会设为 True
+                'paper9702':       paper9702,  # 9702试卷信息，用于精确匹配MS
             })
 
         except Exception as e:
@@ -3355,6 +3735,7 @@ def upload_multi():
 
     # ── 第二遍：将 MS 答案注入对应 QP 题目 ──
     # 匹配优先级（从高到低）：
+    #   ⓪ 9702 文件名精确匹配（session_key = code_session_variant 完全一致）
     #   ① unit + session 精确匹配（如 P3 + 2023_jun）
     #   ② unit 匹配 + 只有一个同 unit QP 未匹配
     #   ③ unit 匹配 + 选得分最多（答案题号覆盖最多）的 QP
@@ -3387,10 +3768,25 @@ def upload_multi():
         ms_answers = ms_info['answers']
         ms_source  = ms_info['source']
         ms_session = ms_info.get('session')   # 如 '2023_jun' 或 '2023'
+        ms_p9702   = ms_info.get('paper9702', {})
         matched    = False
 
+        # ── 优先级⓪：9702 文件名精确匹配（session_key 完全一致）──
+        # 例：9702_m20_ms_42 精确匹配 9702_m20_qp_42
+        if ms_p9702.get('session_key'):
+            ms_sk = ms_p9702['session_key']
+            for grp in qp_groups:
+                grp_p9702 = grp.get('paper9702', {})
+                if (grp_p9702.get('session_key') == ms_sk and
+                        grp_p9702.get('type') == 'qp'):
+                    cnt = _inject_answers(grp, ms_answers, ms_info['filename'])
+                    print(f'[MS match⓪] 9702 filename: {ms_info["filename"]} → {grp["filename"]} '
+                          f'(session_key={ms_sk}, answers={cnt})')
+                    matched = True
+                    break
+
         # ── 优先级①：unit + session 完全匹配 ──
-        if ms_unit and ms_session:
+        if not matched and ms_unit and ms_session:
             for grp in qp_groups:
                 if grp.get('maths_unit') == ms_unit and grp.get('session') == ms_session:
                     cnt = _inject_answers(grp, ms_answers, ms_info['filename'])
