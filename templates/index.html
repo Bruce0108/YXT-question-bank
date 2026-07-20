@@ -1729,12 +1729,12 @@ function renderGrid() {
       // uid 用 _seq（全局唯一序号）确保唯一，避免 workbook 题目同 gIdx 下 q_num 重复
       const uid = q._seq != null ? `s${q._seq}` : `${q.gIdx}_${q.q_num}`;
       let pgInfo = q.page_idx != null ? `P${q.page_idx+1}` : '';
-      if (st) {
+      if (st && q.page_idx != null) {
         const allGrpQs = allQuestions.filter(x => x.gIdx === q.gIdx);
-        const localIdx = allGrpQs.findIndex(x => x.q_num === q.q_num);
+        const localIdx = allGrpQs.findIndex(x => x._seq != null ? x._seq === q._seq : x.q_num === q.q_num);
         if (localIdx + 1 < allGrpQs.length) {
           const ep = allGrpQs[localIdx+1].page_idx;
-          if (ep > q.page_idx) pgInfo = `P${q.page_idx+1}~P${ep}`;
+          if (ep != null && ep > q.page_idx) pgInfo = `P${q.page_idx+1}~P${ep}`;
         } else {
           pgInfo = `P${q.page_idx+1}~`;
         }
@@ -3364,10 +3364,10 @@ async function confirmSaveLib() {
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           try { resolve(JSON.parse(xhr.responseText)); }
-          catch { reject(new Error('响应解析失败')); }
+          catch(e) { reject(new Error('响应解析失败')); }
         } else {
           try { reject(new Error(JSON.parse(xhr.responseText).error || `HTTP ${xhr.status}`)); }
-          catch { reject(new Error(`HTTP ${xhr.status}`)); }
+          catch(e) { reject(new Error(`HTTP ${xhr.status}`)); }
         }
       };
       xhr.onerror = () => reject(new Error('网络错误'));
