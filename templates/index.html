@@ -1409,13 +1409,33 @@ async function doUpload(files) {
 
     hideLd();
 
-    const msGroups = data.groups.filter(g => g.has_ms);
-    const srcLabels = [...new Set(groups.map(g => g.source))].join(' + ');
+    // ── 上传完成 toast：显示精确匹配详情 ──
+    const msGroups     = data.groups.filter(g => g.has_ms);
+    const unmatchedMs  = data.unmatched_ms || [];
+    const srcLabels    = [...new Set(groups.map(g => g.source))].join(' + ');
+    const baseMsg      = `成功识别 ${total} 道题（${srcLabels}，共 ${data.groups.length} 份试卷）`;
+
     if (msGroups.length > 0) {
-      const msNames = msGroups.map(g => g.ms_file || 'Mark Scheme').join(', ');
-      toast(`成功识别 ${total} 道题（${srcLabels}，共 ${data.groups.length} 份试卷）✅ 已关联 Mark Scheme：${msNames}`, 'ok');
+      // 构造每份 QP → MS 的对应关系说明
+      const matchLines = msGroups.map(g => {
+        const qpName = g.filename.replace(/\.pdf$/i, '');
+        const msName = (g.ms_file || 'Mark Scheme').replace(/\.pdf$/i, '');
+        const msCount = g.questions.filter(q => q.answer_b64).length;
+        return `${qpName} ↔ ${msName}（${msCount} 题有答案）`;
+      });
+      const matchSummary = matchLines.length <= 3
+        ? matchLines.join('；')
+        : `${matchLines.length} 份试卷各自已关联`;
+      toast(`${baseMsg}\n✅ MS 匹配成功：${matchSummary}`, 'ok');
     } else {
-      toast(`成功识别 ${total} 道题（${srcLabels}，共 ${data.groups.length} 份试卷）`, 'ok');
+      toast(baseMsg, 'ok');
+    }
+
+    // 未匹配的 MS 文件单独弹红色警告
+    if (unmatchedMs.length > 0) {
+      setTimeout(() => {
+        toast(`⚠️ 以下 Mark Scheme 未找到对应试卷，请检查文件名：\n${unmatchedMs.join('\n')}`, 'err');
+      }, 800);
     }
 
   } catch(e) {
@@ -1442,7 +1462,12 @@ function renderFileList() {
                    : g.source === 'edexcel_maths' ? 'EDX-M'
                    : g.source === 'edexcel' ? 'EDX' : '?';
     const msBadge = g.has_ms
-      ? `<span style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:5px;background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;flex-shrink:0" title="已关联 Mark Scheme: ${g.ms_file||''}">MS✓</span>`
+      ? (() => {
+          const msName   = g.ms_file || 'Mark Scheme';
+          const msShort  = msName.replace(/\.pdf$/i, '');
+          const ansCount = (g.questions || []).filter(q => q.answer_b64).length;
+          return `<span style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:5px;background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;flex-shrink:0" title="已关联：${msShort}（${ansCount} 题有答案）">MS✓${ansCount ? ' '+ansCount : ''}</span>`;
+        })()
       : '';
     div.innerHTML = `
       <span class="fi-src ${g.source}">${srcShort}</span>

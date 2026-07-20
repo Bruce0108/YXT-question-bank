@@ -2578,7 +2578,61 @@ def _extract_year_from_filename(filename: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-# 月份名称列表（全写和缩写）
+# 月份名称 → 标准月份编号（用于 session key 规范化）
+_MONTH_TO_NUM = {
+    'january':1,'february':2,'march':3,'april':4,'may':5,'june':6,
+    'july':7,'august':8,'september':9,'october':10,'november':11,'december':12,
+    'jan':1,'feb':2,'mar':3,'apr':4,'jun':6,'jul':7,
+    'aug':8,'sep':9,'oct':10,'nov':11,'dec':12,
+}
+
+# Edexcel IAL 考试通常在 Jan / June / Oct 三个 session
+# 规范化：把 October/Nov/Dec → 'oct'，May/Jun/Jul → 'jun'，Jan/Feb → 'jan'
+_MONTH_NUM_TO_SESSION = {
+    1:'jan', 2:'jan', 3:'jan',
+    4:'jun', 5:'jun', 6:'jun', 7:'jun',
+    8:'oct', 9:'oct', 10:'oct', 11:'oct', 12:'oct',
+}
+
+def _extract_exam_session(filename: str) -> str | None:
+    """
+    从文件名中提取考试 session 标识，格式为 '{year}_{session}'。
+    例如：
+      Questionpaper-Unit3(WMA13)-June2023.pdf  → '2023_jun'
+      Markscheme-WMA11-October2022.pdf         → '2022_oct'
+      WMA13_QP_Jan2021.pdf                     → '2021_jan'
+      P3_June_2021_QP.pdf                      → '2021_jun'
+    返回 None 表示无法提取。
+    """
+    if not filename:
+        return None
+    fn = filename
+    # 模式1：MonthName + 4位年份（顺序，如 June2023 / June 2023 / June-2023）
+    m = re.search(r'([A-Za-z]+)[-_ ]?(20\d{2})', fn, re.IGNORECASE)
+    if m:
+        month_str = m.group(1).lower()
+        year_str  = m.group(2)
+        if month_str in _MONTH_TO_NUM:
+            mnum = _MONTH_TO_NUM[month_str]
+            sess = _MONTH_NUM_TO_SESSION[mnum]
+            return f'{year_str}_{sess}'
+    # 模式2：4位年份 + MonthName（反序，如 2023_June / 2023June）
+    m2 = re.search(r'(20\d{2})[-_ ]?([A-Za-z]+)', fn, re.IGNORECASE)
+    if m2:
+        year_str  = m2.group(1)
+        month_str = m2.group(2).lower()
+        if month_str in _MONTH_TO_NUM:
+            mnum = _MONTH_TO_NUM[month_str]
+            sess = _MONTH_NUM_TO_SESSION[mnum]
+            return f'{year_str}_{sess}'
+    # 只有年份：返回年份字符串（宽松匹配用）
+    m3 = re.search(r'(20\d{2})', fn)
+    if m3:
+        return m3.group(1)  # 只有年份，无 session 区分
+    return None
+
+
+# 月份名称列表（全写和缩写），供 _extract_exam_date_label 使用
 _MONTH_NAMES = [
     'January','February','March','April','May','June',
     'July','August','September','October','November','December',
@@ -3224,6 +3278,7 @@ def upload_multi():
                     'unit':       maths_unit,
                     'source':     source,
                     'answers':    ms_answers,  # {q_num: {b64, w, h}}
+                    'session':    _extract_exam_session(file.filename),
                 })
                 doc.close()
                 continue  # MS 不加入 qp_groups
@@ -3277,6 +3332,7 @@ def upload_multi():
                 'paper_type':      pt,
                 'maths_unit':      maths_unit,
                 'exam_date':       exam_date_label,
+                'session':         _extract_exam_session(file.filename),
                 'questions':       questions,
                 'total_questions': len(questions),
                 'total_pages':     fitz.open(tmp_path).page_count,
@@ -3298,40 +3354,100 @@ def upload_multi():
             })
 
     # ── 第二遍：将 MS 答案注入对应 QP 题目 ──
+    # 匹配优先级（从高到低）：
+    #   ① unit + session 精确匹配（如 P3 + 2023_jun）
+    #   ② unit 匹配 + 只有一个同 unit QP 未匹配
+    #   ③ unit 匹配 + 选得分最多（答案题号覆盖最多）的 QP
+    #   ④ source 相同且只有一份 QP（兼容 Cambridge 等）
+    #   ⑤ 同 source 中第一个尚未匹配的 QP（最终 fallback）
+    unmatched_ms = []  # 记录未匹配的 MS 供前端提示
+
+    def _inject_answers(grp, ms_answers, ms_filename):
+        """将 ms_answers 注入到 grp 的题目中，返回注入数量"""
+        count = 0
+        for q in grp['questions']:
+            q_num = q.get('q_num')
+            if q_num in ms_answers:
+                ans = ms_answers[q_num]
+                q['answer_b64'] = ans['b64']
+                q['answer_w']   = ans['w']
+                q['answer_h']   = ans['h']
+                count += 1
+        grp['has_ms']  = True
+        grp['ms_file'] = ms_filename
+        return count
+
+    def _score_match(grp, ms_answers):
+        """计算 MS 与 QP 的题号覆盖得分（交集题数）"""
+        qp_nums = {q.get('q_num') for q in grp['questions']}
+        return len(qp_nums & set(ms_answers.keys()))
+
     for ms_info in ms_registry:
         ms_unit    = ms_info['unit']
         ms_answers = ms_info['answers']
         ms_source  = ms_info['source']
-        matched = False
-        for grp in qp_groups:
-            # 匹配条件：① 同一单元代码 或 ② 均为同一来源且只有一份 QP
-            if (ms_unit and grp.get('maths_unit') == ms_unit) or \
-               (not ms_unit and grp['source'] == ms_source and len(qp_groups) == 1):
-                for q in grp['questions']:
-                    q_num = q.get('q_num')
-                    if q_num in ms_answers:
-                        ans = ms_answers[q_num]
-                        q['answer_b64'] = ans['b64']
-                        q['answer_w']   = ans['w']
-                        q['answer_h']   = ans['h']
-                grp['has_ms']   = True
-                grp['ms_file']  = ms_info['filename']
-                matched = True
-                break
-        if not matched:
-            # 没找到精确匹配：尝试按题号直接注入给第一个 QP 组
+        ms_session = ms_info.get('session')   # 如 '2023_jun' 或 '2023'
+        matched    = False
+
+        # ── 优先级①：unit + session 完全匹配 ──
+        if ms_unit and ms_session:
             for grp in qp_groups:
-                if grp['source'] in (ms_source, 'edexcel_maths', 'edexcel'):
-                    for q in grp['questions']:
-                        q_num = q.get('q_num')
-                        if q_num in ms_answers:
-                            ans = ms_answers[q_num]
-                            q['answer_b64'] = ans['b64']
-                            q['answer_w']   = ans['w']
-                            q['answer_h']   = ans['h']
-                    grp['has_ms']  = True
-                    grp['ms_file'] = ms_info['filename']
+                if grp.get('maths_unit') == ms_unit and grp.get('session') == ms_session:
+                    cnt = _inject_answers(grp, ms_answers, ms_info['filename'])
+                    print(f'[MS match①] {ms_info["filename"]} → {grp["filename"]} '
+                          f'(unit={ms_unit}, session={ms_session}, answers={cnt})')
+                    matched = True
                     break
+
+        # ── 优先级②：unit 匹配，选覆盖得分最高且尚未匹配的 QP ──
+        if not matched and ms_unit:
+            candidates = [g for g in qp_groups
+                          if g.get('maths_unit') == ms_unit and not g.get('has_ms')]
+            if len(candidates) == 1:
+                grp = candidates[0]
+                cnt = _inject_answers(grp, ms_answers, ms_info['filename'])
+                print(f'[MS match②-single] {ms_info["filename"]} → {grp["filename"]} '
+                      f'(unit={ms_unit}, answers={cnt})')
+                matched = True
+            elif len(candidates) > 1:
+                # 选覆盖得分最高的
+                best = max(candidates, key=lambda g: _score_match(g, ms_answers))
+                best_score = _score_match(best, ms_answers)
+                if best_score > 0:
+                    cnt = _inject_answers(best, ms_answers, ms_info['filename'])
+                    print(f'[MS match②-best] {ms_info["filename"]} → {best["filename"]} '
+                          f'(unit={ms_unit}, score={best_score}, answers={cnt})')
+                    matched = True
+
+        # ── 优先级③：Cambridge 等非数学：source 相同且只有一份 QP ──
+        if not matched and not ms_unit:
+            same_src = [g for g in qp_groups if g['source'] == ms_source]
+            if len(same_src) == 1:
+                grp = same_src[0]
+                cnt = _inject_answers(grp, ms_answers, ms_info['filename'])
+                print(f'[MS match③] {ms_info["filename"]} → {grp["filename"]} '
+                      f'(source={ms_source}, answers={cnt})')
+                matched = True
+
+        # ── 优先级④：覆盖得分最高的同 source 未匹配 QP（最终 fallback）──
+        if not matched:
+            fallback_cands = [g for g in qp_groups
+                              if g['source'] in (ms_source, 'edexcel_maths', 'edexcel')
+                              and not g.get('has_ms')]
+            if not fallback_cands:
+                # 若全部都已有 MS，也允许覆盖（例如重复上传 MS 文件时）
+                fallback_cands = [g for g in qp_groups
+                                  if g['source'] in (ms_source, 'edexcel_maths', 'edexcel')]
+            if fallback_cands:
+                best = max(fallback_cands, key=lambda g: _score_match(g, ms_answers))
+                cnt = _inject_answers(best, ms_answers, ms_info['filename'])
+                print(f'[MS match④-fallback] {ms_info["filename"]} → {best["filename"]} '
+                      f'(answers={cnt})')
+                matched = True
+
+        if not matched:
+            print(f'[MS unmatched] {ms_info["filename"]} (unit={ms_unit}, session={ms_session})')
+            unmatched_ms.append(ms_info['filename'])
 
     groups = qp_groups
 
@@ -3356,12 +3472,14 @@ def upload_multi():
 
     return jsonify({
         'session_id': session_id,
+        'unmatched_ms': unmatched_ms,   # 未成功匹配任何 QP 的 MS 文件名列表
         'groups': [{
             'filename':        g['filename'],
             'source':          g['source'],
             'paper_type':      g['paper_type'],
             'maths_unit':      g.get('maths_unit'),
             'exam_date':       g.get('exam_date', ''),
+            'session':         g.get('session', ''),
             'has_ms':          g.get('has_ms', False),
             'ms_file':         g.get('ms_file', ''),
             'questions':       g['questions'],
