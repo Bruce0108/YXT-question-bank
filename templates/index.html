@@ -922,12 +922,19 @@
       </div>
       <!-- 右侧：题目预览图 -->
       <div class="preview-panel">
-        <div style="font-size:11px;color:#6b7280;margin-bottom:6px;font-weight:600;display:flex;align-items:center;gap:8px">
+        <div style="font-size:11px;color:#6b7280;margin-bottom:6px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span>📷 题目预览</span>
           <button id="editAnsToggleBtn" onclick="toggleEditAns()"
             style="display:none;padding:3px 10px;font-size:11px;border-radius:5px;border:1px solid #bbf7d0;background:#f0fdf4;color:#15803d;cursor:pointer;font-weight:600">
             👁 显示答案
           </button>
+          <!-- 替换图片按钮 -->
+          <button id="replaceImgBtn" onclick="document.getElementById('replaceImgInput').click()"
+            style="padding:3px 10px;font-size:11px;border-radius:5px;border:1px solid #d1d5db;background:#f9fafb;color:#374151;cursor:pointer;font-weight:600">
+            🖼️ 替换图片
+          </button>
+          <input type="file" id="replaceImgInput" accept="image/*" style="display:none"
+            onchange="replaceQuestionImage(this.files[0])">
         </div>
         <div id="editPreviewWrap" style="text-align:center;flex:1;overflow:auto">
           <div id="editPreviewLoad" style="padding:40px;color:#94a3b8">⏳ 加载中...</div>
@@ -1407,11 +1414,12 @@ async function doUpload(files) {
     window._activeSyllabusType = null;
 
     allQuestions = [];
+    let _seqCtr = 0;
     groups.forEach((g, gi) => {
       g.questions.forEach(q => {
         allQuestions.push({ ...q, gIdx: gi, source: g.source, paper_type: g.paper_type,
                             maths_unit: g.maths_unit || null,
-                            exam_date: g.exam_date || '' });
+                            exam_date: g.exam_date || '', _seq: _seqCtr++ });
       });
     });
 
@@ -1718,8 +1726,9 @@ function renderGrid() {
     wrap.appendChild(section);
 
     sg.qs.forEach((q, idx) => {
-      const uid = `${q.gIdx}_${q.q_num}`;
-      let pgInfo = `P${q.page_idx+1}`;
+      // uid 用 _seq（全局唯一序号）确保唯一，避免 workbook 题目同 gIdx 下 q_num 重复
+      const uid = q._seq != null ? `s${q._seq}` : `${q.gIdx}_${q.q_num}`;
+      let pgInfo = q.page_idx != null ? `P${q.page_idx+1}` : '';
       if (st) {
         const allGrpQs = allQuestions.filter(x => x.gIdx === q.gIdx);
         const localIdx = allGrpQs.findIndex(x => x.q_num === q.q_num);
@@ -1738,8 +1747,8 @@ function renderGrid() {
       const topTagsHtml = qTopics.slice(0,3).map((t,i) => {
         const isMatch = activeSubs.has(String(t.id)) || activeParents.has(String(t.parent_id)) || activeParents.has(String(t.id));
         const cls = isMatch ? 'topic-tag matched' : (i===0 ? 'topic-tag top1' : 'topic-tag');
-        return `<span class="${cls}" title="点击修改知识点" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},'topics',event)">${t.id} ${t.title}</span>`;
-      }).join('') + `<span class="topic-tag add-tag" title="添加/修改知识点" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},'topics',event)">✏️</span>`;
+        return `<span class="${cls}" title="点击修改知识点" onclick="openEditMeta('${uid}',null,null,'topics',event)">${t.id} ${t.title}</span>`;
+      }).join('') + `<span class="topic-tag add-tag" title="添加/修改知识点" onclick="openEditMeta('${uid}',null,null,'topics',event)">✏️</span>`;
 
       // 构建难度星级 HTML（可点击编辑）
       const diffLevel = typeof q.difficulty === 'number' ? q.difficulty : null;
@@ -1752,7 +1761,7 @@ function renderGrid() {
                     <span class="diff-stars">${starsHtml}</span>
                     <span class="diff-badge diff-${diffLevel}">${lbl}</span>`;
       } else {
-        diffHtml = `<span class="diff-label no-diff" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},'difficulty',event)">点击设置难度</span>`;
+        diffHtml = `<span class="diff-label no-diff" onclick="openEditMeta('${uid}',null,null,'difficulty',event)">点击设置难度</span>`;
       }
 
       const card = document.createElement('div');
@@ -1790,7 +1799,7 @@ function renderGrid() {
                 onclick="toggleAnswer('${uid}',event)">👁 答案</button>`
             : ''
           }
-          <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1" onclick="openEditMeta('${uid}',${q.gIdx},${q.q_num},null,event)">✏️ 编辑</button>
+          <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1" onclick="openEditMeta('${uid}',null,null,null,event)">✏️ 编辑</button>
           <button class="btn btn-primary btn-sm" onclick="dlOne(${q.q_num},${q.gIdx},event)">⬇️ 下载</button>
         </div>`;
       card.addEventListener('click', e => { if(e.target.tagName==='BUTTON') return; toggleSel(uid); });
@@ -2719,10 +2728,19 @@ function setDiffQuick(uid, gIdx, qNum, stars, e) {
   }).catch(() => toast('网络错误', 'err'));
 }
 
-function openEditMeta(uid, gIdx, qNum, focusField, e) {
+function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
   if (e) e.stopPropagation();
-  const q = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
-  if (!q) return;
+  // uid 是唯一定位键：优先用 _seq 前缀（s123），其次用 gIdx_qNum
+  let q;
+  if (uid && uid.startsWith('s')) {
+    const seq = +uid.slice(1);
+    q = allQuestions.find(x => x._seq === seq);
+  } else if (uid) {
+    const [gi, qn] = uid.split('_').map(Number);
+    // 同一 gIdx 下 q_num 可能重复，取第一个（兼容旧数据）
+    q = allQuestions.find(x => x.gIdx === gi && x.q_num === qn);
+  }
+  if (!q) { console.error('[openEditMeta] q not found, uid='+uid+' allQ='+allQuestions.length); return; }
 
   // 当前题目已有的topics（含is_core标记）
   const existingTopics = Array.isArray(q.topics) ? q.topics : [];
@@ -2788,18 +2806,24 @@ function openEditMeta(uid, gIdx, qNum, focusField, e) {
     treeWrap.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:8px">加载考纲失败</div>';
   });
 
-  // ── 加载预览图 ──
+  // ── 加载预览图（优先用缓存的 _img_b64，否则走 API）──
   const prevImg  = document.getElementById('editPreviewImg');
   const prevLoad = document.getElementById('editPreviewLoad');
   prevImg.style.display = 'none';
   prevLoad.style.display = '';
   prevLoad.textContent = '⏳ 加载中...';
-  const tok = uploadToken;
-  const imgSrc = `/api/preview/${qNum}?dpi=150&session_id=${sessionId}&file_idx=${gIdx}&_t=${tok}`;
-  const tmpImg = new Image();
-  tmpImg.onload = () => { prevImg.src = tmpImg.src; prevImg.style.display=''; prevLoad.style.display='none'; };
-  tmpImg.onerror = () => { prevLoad.textContent = '⚠️ 预览加载失败'; };
-  tmpImg.src = imgSrc;
+  if (q._img_b64) {
+    prevImg.src = `data:image/jpeg;base64,${q._img_b64}`;
+    prevImg.style.display = '';
+    prevLoad.style.display = 'none';
+  } else {
+    const tok = uploadToken;
+    const imgSrc = `/api/preview/${q.q_num}?dpi=150&session_id=${sessionId}&file_idx=${q.gIdx}&_t=${tok}`;
+    const tmpImg = new Image();
+    tmpImg.onload = () => { prevImg.src = tmpImg.src; prevImg.style.display=''; prevLoad.style.display='none'; };
+    tmpImg.onerror = () => { prevLoad.textContent = '⚠️ 预览加载失败'; };
+    tmpImg.src = imgSrc;
+  }
 
   // ── 答案区域初始化 ──
   const ansToggleBtn = document.getElementById('editAnsToggleBtn');
@@ -2824,7 +2848,50 @@ function openEditMeta(uid, gIdx, qNum, focusField, e) {
   document.getElementById('editNavPrev').disabled = visIdx <= 0;
   document.getElementById('editNavNext').disabled = visIdx < 0 || visIdx >= vis.length - 1;
 
+  // 存储当前编辑题目的 uid（供替换图片使用）
+  _editMeta._uid = uid;
+
   document.getElementById('editMetaMo').style.display = 'flex';
+}
+
+// ── 替换题目图片 ──
+function replaceQuestionImage(file) {
+  if (!file) return;
+  const uid = _editMeta._uid;
+  if (!uid) return;
+  let q;
+  if (uid.startsWith('s')) {
+    const seq = +uid.slice(1);
+    q = allQuestions.find(x => x._seq === seq);
+  } else {
+    const [gi, qn] = uid.split('_').map(Number);
+    q = allQuestions.find(x => x.gIdx === gi && x.q_num === qn);
+  }
+  if (!q) { toast('找不到题目数据', 'err'); return; }
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const dataUrl = ev.target.result;
+    // 取 base64 部分（去掉 data:image/xxx;base64, 前缀）
+    const b64 = dataUrl.split(',')[1] || '';
+    // 更新内存中的题目图片
+    q._img_b64 = b64;
+    // 刷新弹框预览
+    const prevImg  = document.getElementById('editPreviewImg');
+    const prevLoad = document.getElementById('editPreviewLoad');
+    prevImg.src = dataUrl;
+    prevImg.style.display = '';
+    prevLoad.style.display = 'none';
+    // 刷新卡片缩略图
+    const thImg = document.getElementById(`th-${uid}`);
+    if (thImg) { thImg.src = dataUrl; thImg.style.display = ''; }
+    const tldEl = document.getElementById(`tld-${uid}`);
+    if (tldEl) tldEl.style.display = 'none';
+    toast('✅ 图片已替换，保存题册后永久生效', 'ok');
+  };
+  reader.readAsDataURL(file);
+  // 清空 input，允许重复选同一文件
+  document.getElementById('replaceImgInput').value = '';
 }
 
 function _renderEditTopicTree(treeWrap) {
@@ -3548,6 +3615,7 @@ function _applyLoadedWorkbook(d) {
       paper_type:    g.paper_type,
       maths_unit:    g.maths_unit,
       gIdx:          newGIdx,
+      _seq:          baseSeq + i,    // 全局唯一序号，用于 uid 定位
       // 图片缓存（base64）
       _img_b64:      q.img_bytes_b64 || '',
       _img_w:        q.img_w || 0,
