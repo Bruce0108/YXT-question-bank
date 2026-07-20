@@ -1926,6 +1926,16 @@ function procThumbQ() {
 // ══════════════════════════════════════════════════════════
 //  SELECTION
 // ══════════════════════════════════════════════════════════
+// uid 可能是新格式 s{_seq} 或旧格式 gIdx_qNum，统一解析
+function _uidToQ(uid) {
+  if (!uid) return null;
+  if (uid.startsWith('s')) {
+    const seq = +uid.slice(1);
+    return allQuestions.find(x => x._seq === seq) || null;
+  }
+  const [gi, qn] = uid.split('_').map(Number);
+  return allQuestions.find(x => x.gIdx === gi && x.q_num === qn) || null;
+}
 function toggleSel(uid) {
   const card = document.getElementById(`qc-${uid}`);
   const ck   = document.getElementById(`ck-${uid}`);
@@ -1936,7 +1946,7 @@ function toggleSel(uid) {
 }
 function selAll(on) {
   getVisibleQuestions().forEach(q => {
-    const uid = `${q.gIdx}_${q.q_num}`;
+    const uid = q._seq != null ? `s${q._seq}` : `${q.gIdx}_${q.q_num}`;
     const card = document.getElementById(`qc-${uid}`);
     const ck   = document.getElementById(`ck-${uid}`);
     if (!card) return;
@@ -2403,10 +2413,7 @@ function _syncPdfQualityRadio(val) {
 
 function openPdfModal(scope) {
   pdfExportScope = scope;
-  const nums = scope==='all' ? getVisibleQuestions() : [...selNums].map(uid => {
-    const [gi, qn] = uid.split('_').map(Number);
-    return allQuestions.find(q => q.gIdx===gi && q.q_num===qn);
-  }).filter(Boolean);
+  const nums = scope==='all' ? getVisibleQuestions() : [...selNums].map(_uidToQ).filter(Boolean);
 
   if (!nums.length) { toast('没有可导出的题目','err'); return; }
   document.getElementById('pdfQCount').textContent = nums.length;
@@ -2439,10 +2446,7 @@ async function doExportPdf() {
   if (pdfExportScope === 'all') {
     exportItems = getVisibleQuestions();
   } else {
-    exportItems = [...selNums].map(uid => {
-      const [gi, qn] = uid.split('_').map(Number);
-      return allQuestions.find(q => q.gIdx===gi && q.q_num===qn);
-    }).filter(Boolean);
+    exportItems = [...selNums].map(_uidToQ).filter(Boolean);
   }
 
   if (!exportItems.length) { toast('没有可导出的题目','err'); return; }
@@ -2603,9 +2607,10 @@ async function dlSelected() {
   // 按 gIdx 分组所有选中题目（支持多文件跨文件下载）
   const byGroup = {};
   [...selNums].forEach(uid => {
-    const [gi, qn] = uid.split('_').map(Number);
-    if (!byGroup[gi]) byGroup[gi] = [];
-    byGroup[gi].push(qn);
+    const q = _uidToQ(uid);
+    if (!q) return;
+    if (!byGroup[q.gIdx]) byGroup[q.gIdx] = [];
+    byGroup[q.gIdx].push(q.q_num);
   });
 
   const totalSel = selNums.size;
@@ -2614,9 +2619,9 @@ async function dlSelected() {
     // 统一走合并导出接口（复用 export_pdf 的合并模式）
     const sel_by_group = Object.entries(byGroup).map(([gi, qns]) => ({gIdx: Number(gi), q_nums: qns}));
     const ordered_items = [...selNums].map(uid => {
-      const [gi, qn] = uid.split('_').map(Number);
-      return {gIdx: gi, q_num: qn};
-    });
+      const q = _uidToQ(uid);
+      return q ? {gIdx: q.gIdx, q_num: q.q_num} : null;
+    }).filter(Boolean);
 
     const startRes = await fetch('/api/export_pdf', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -4703,33 +4708,24 @@ async function doCloudSave() {
 }
 
 // ── 获取选中题目（复用现有数据结构）──
-// 全局变量：selNums (Set<"gIdx_q_num">) / groups (array) / allQuestions (flat array)
+// 支持新格式 uid s{_seq} 和旧格式 gIdx_qNum
 function getSelectedQuestions() {
-  const result = [];
-  // selNums 是 Set，存的是 "gIdx_q_num" 格式
-  if (typeof selNums === 'undefined' || selNums.size === 0) return result;
-  if (typeof groups === 'undefined') return result;
-
-  // 遍历 groups 数组，找到 selNums 中匹配的题目
-  groups.forEach((group, gIdx) => {
-    const questions = group.questions || [];
-    for (const q of questions) {
-      const uid = `${gIdx}_${q.q_num}`;
-      if (selNums.has(uid)) {
-        result.push({
-          ...q,
-          file_idx:   gIdx,
-          gIdx:       gIdx,
-          source:     group.source      || '',
-          paper_type: group.paper_type  || '',
-          maths_unit: group.maths_unit  || '',
-          filename:   group.filename    || '',
-          exam_date:  q.exam_date       || group.exam_date || '',
-        });
-      }
-    }
-  });
-  return result;
+  if (typeof selNums === 'undefined' || selNums.size === 0) return [];
+  return [...selNums].map(uid => {
+    const q = _uidToQ(uid);
+    if (!q) return null;
+    const group = (typeof groups !== 'undefined' && groups[q.gIdx]) || {};
+    return {
+      ...q,
+      file_idx:   q.gIdx,
+      gIdx:       q.gIdx,
+      source:     q.source      || group.source      || '',
+      paper_type: q.paper_type  || group.paper_type  || '',
+      maths_unit: q.maths_unit  || group.maths_unit  || '',
+      filename:   group.filename || '',
+      exam_date:  q.exam_date   || group.exam_date   || '',
+    };
+  }).filter(Boolean);
 }
 
 // ── 页面初始化 ──
