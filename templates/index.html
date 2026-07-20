@@ -135,11 +135,13 @@
   .pdf-preview-info{background:var(--g50);border:1px solid var(--g200);border-radius:8px;padding:12px;font-size:12px;color:var(--g600);margin-bottom:14px}
   .pdf-preview-info b{color:var(--g800)}
 
-  /* PDF progress bar */
-  .ld-prog-wrap{width:260px;margin-top:4px}
-  .ld-prog-bar{height:8px;background:var(--g200);border-radius:4px;overflow:hidden}
-  .ld-prog-fill{height:100%;background:var(--purple);border-radius:4px;transition:width .3s}
-  .ld-prog-txt{font-size:12px;color:var(--g600);margin-top:6px;text-align:center}
+  /* Loading overlay progress bar */
+  .ld-prog-wrap{width:300px;margin-top:8px}
+  .ld-prog-outer{height:10px;background:rgba(0,0,0,.08);border-radius:6px;overflow:hidden}
+  .ld-prog-fill{height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);border-radius:6px;transition:width .35s cubic-bezier(.4,0,.2,1)}
+  .ld-prog-row{display:flex;align-items:center;justify-content:space-between;margin-top:5px}
+  .ld-prog-txt{font-size:12px;color:var(--g600);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ld-prog-pct{font-size:13px;font-weight:700;color:#6366f1;margin-left:8px;min-width:38px;text-align:right}
 
   /* Buttons */
   .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:8px;border:none;font:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;text-decoration:none}
@@ -1016,8 +1018,11 @@
   <div class="ld-sp"></div>
   <div class="ld-txt" id="ldTxt">处理中...</div>
   <div class="ld-prog-wrap" id="ldProgWrap" style="display:none">
-    <div class="ld-prog-bar"><div class="ld-prog-fill" id="ldProgFill" style="width:0%"></div></div>
-    <div class="ld-prog-txt" id="ldProgTxt">0 / 0</div>
+    <div class="ld-prog-outer"><div class="ld-prog-fill" id="ldProgFill" style="width:0%"></div></div>
+    <div class="ld-prog-row">
+      <div class="ld-prog-txt" id="ldProgTxt">准备中…</div>
+      <div class="ld-prog-pct" id="ldProgPct">0%</div>
+    </div>
   </div>
 </div>
 
@@ -1208,8 +1213,39 @@ const toast = (msg, type='info', ms=3500) => {
   w.appendChild(el);
   setTimeout(() => el.remove(), ms);
 };
-const showLd = t => { document.getElementById('ldTxt').textContent = t; document.getElementById('ldOv').classList.add('show'); };
-const hideLd = ()  => document.getElementById('ldOv').classList.remove('show');
+// ── Loading overlay 控制 ──
+const showLd = t => {
+  document.getElementById('ldTxt').textContent = t;
+  document.getElementById('ldProgWrap').style.display = 'none';
+  document.getElementById('ldOv').classList.add('show');
+};
+const hideLd = () => {
+  document.getElementById('ldOv').classList.remove('show');
+  document.getElementById('ldProgWrap').style.display = 'none';
+};
+
+// 带进度条的 loading：showLdProgress(title, pct, label)
+// pct: 0–100，label: 进度说明文字
+function showLdProgress(title, pct, label) {
+  const ov = document.getElementById('ldOv');
+  document.getElementById('ldTxt').textContent = title;
+  const wrap = document.getElementById('ldProgWrap');
+  wrap.style.display = '';
+  _setLdPct(pct, label);
+  ov.classList.add('show');
+}
+// 更新进度（不改标题）
+function setLdProgress(pct, label) {
+  const wrap = document.getElementById('ldProgWrap');
+  wrap.style.display = '';
+  _setLdPct(pct, label);
+}
+function _setLdPct(pct, label) {
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  document.getElementById('ldProgFill').style.width = p + '%';
+  document.getElementById('ldProgPct').textContent  = p + '%';
+  if (label !== undefined) document.getElementById('ldProgTxt').textContent = label;
+}
 const getDPI = ()  => +document.getElementById('dpiR').value;
 const getFmt = ()  => document.getElementById('fmtSel').value;
 
@@ -1267,36 +1303,92 @@ async function doUpload(files) {
   document.getElementById('fileTag').textContent = files.length === 1 ? files[0].name : `${files.length} 个文件`;
   document.getElementById('fileTag').style.display = '';
 
+  // 顶部小进度条（上传区域内）
   const prog = document.getElementById('prog');
   const fill = document.getElementById('progFill');
   const ptxt = document.getElementById('progTxt');
   prog.style.display = 'block';
-  fill.style.width = '20%'; ptxt.textContent = `上传 ${files.length} 个文件...`;
+  fill.style.width = '0%';
+  ptxt.textContent = '准备上传…';
+
+  // 主 loading overlay 带进度
+  const totalSize = files.reduce((s, f) => s + f.size, 0);
+  const sizeStr = totalSize > 1048576 ? (totalSize/1048576).toFixed(1)+' MB' : Math.round(totalSize/1024)+' KB';
+  showLdProgress(
+    `正在上传 ${files.length} 个文件（${sizeStr}）`,
+    0, '等待上传…'
+  );
 
   const fd = new FormData();
   files.forEach(f => fd.append('files[]', f));
   fd.append('paper_type', chosenPT);
 
   try {
-    fill.style.width = '60%'; ptxt.textContent = '解析题号...';
-    const res  = await fetch('/api/upload_multi', { method:'POST', body:fd });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || '上传失败');
+    // ── Phase 1: XHR 上传，监听真实字节进度 ──
+    const data = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload_multi');
 
-    fill.style.width = '100%';
+      xhr.upload.onprogress = e => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round(e.loaded / e.total * 85); // 上传占 0–85%
+        const loadedStr = e.loaded > 1048576
+          ? (e.loaded/1048576).toFixed(1)+' MB'
+          : Math.round(e.loaded/1024)+' KB';
+        const totalStr = e.total > 1048576
+          ? (e.total/1048576).toFixed(1)+' MB'
+          : Math.round(e.total/1024)+' KB';
+        // 更新主 overlay
+        setLdProgress(pct, `上传中 ${loadedStr} / ${totalStr}`);
+        // 同步顶部小进度条
+        fill.style.width = pct + '%';
+        ptxt.textContent = `上传 ${pct}%…`;
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch(e) { reject(new Error('响应解析失败')); }
+        } else {
+          try {
+            const d = JSON.parse(xhr.responseText);
+            reject(new Error(d.error || `HTTP ${xhr.status}`));
+          } catch { reject(new Error(`HTTP ${xhr.status}`)); }
+        }
+      };
+      xhr.onerror = () => reject(new Error('网络连接失败'));
+      xhr.ontimeout = () => reject(new Error('上传超时'));
+      xhr.timeout = 300000; // 5 分钟
+
+      xhr.send(fd);
+    });
+
+    if (data.error) throw new Error(data.error);
+
+    // ── Phase 2: 服务端解析（85% → 100%）──
+    setLdProgress(88, '服务端解析题号…');
+    fill.style.width = '90%'; ptxt.textContent = '解析题号…';
+    await new Promise(r => setTimeout(r, 300)); // 视觉停顿
+
+    setLdProgress(95, '加载题目列表…');
+    fill.style.width = '95%';
+    await new Promise(r => setTimeout(r, 200));
+
+    // ── 完成 ──
     const total = data.groups.reduce((s,g) => s + g.total_questions, 0);
+    setLdProgress(100, `识别到 ${total} 道题目`);
+    fill.style.width = '100%';
     ptxt.textContent = `识别到 ${total} 道题目（${data.groups.length} 个文件）`;
-    setTimeout(() => { prog.style.display = 'none'; }, 2000);
+    setTimeout(() => { prog.style.display = 'none'; }, 2500);
 
     sessionId = data.session_id;
     groups    = data.groups;
     activeGIdx = 0;
     selNums.clear();
     filteredNums = null;
-    activeDiffFilter = 0;  // 重置难度筛选
-    window._activeSyllabusType = null;  // 强制由文件内容重新决定考纲类型
+    activeDiffFilter = 0;
+    window._activeSyllabusType = null;
 
-    // 构建 allQuestions（带 gIdx）
     allQuestions = [];
     groups.forEach((g, gi) => {
       g.questions.forEach(q => {
@@ -1306,20 +1398,17 @@ async function doUpload(files) {
       });
     });
 
-    // 保存到 sessionStorage（刷新后可恢复）
     _saveSession();
-
     renderFileList();
     renderGrid();
     renderStats();
     renderSyllabusCard();
-    _updateDiffFilterVisibility();  // 决定是否显示难度筛选栏
-    _updatePdfAnswerToggle();       // 决定是否显示「包含答案」开关
-
-    // 加载考纲（按需带 unit 过滤）
+    _updateDiffFilterVisibility();
+    _updatePdfAnswerToggle();
     _loadAllSyllabi();
 
-    // MS 关联提示
+    hideLd();
+
     const msGroups = data.groups.filter(g => g.has_ms);
     const srcLabels = [...new Set(groups.map(g => g.source))].join(' + ');
     if (msGroups.length > 0) {
@@ -1330,7 +1419,8 @@ async function doUpload(files) {
     }
 
   } catch(e) {
-    fill.style.width = '0%'; ptxt.textContent = '解析失败';
+    hideLd();
+    fill.style.width = '0%'; ptxt.textContent = '上传失败';
     prog.style.display = 'none';
     dropEl.classList.remove('ok');
     toast(e.message, 'err');
@@ -2316,10 +2406,7 @@ async function doExportPdf() {
     }
   });
 
-  document.getElementById('ldProgWrap').style.display = '';
-  document.getElementById('ldProgFill').style.width = '0%';
-  document.getElementById('ldProgTxt').textContent = `0 / ${totalQ}`;
-  showLd(`正在生成合并 PDF（共 ${totalQ} 道题）…`);
+  showLdProgress(`正在生成合并 PDF（共 ${totalQ} 道题）…`, 0, '提交任务中…');
 
   try {
     // ── 统一走合并模式（单文件也用合并接口，简洁统一）──
@@ -2353,27 +2440,24 @@ async function doExportPdf() {
           const pd = await pr.json();
           if (pd.status==='error') { clearInterval(poll); reject(new Error(pd.error||'生成失败')); return; }
           const pct = pd.total>0 ? Math.round(pd.progress/pd.total*100) : 0;
-          document.getElementById('ldProgFill').style.width = pct+'%';
-          document.getElementById('ldProgTxt').textContent = `${pd.progress} / ${pd.total}  (${pct}%)`;
-          document.getElementById('ldTxt').textContent = `正在生成 PDF… 已处理 ${pd.progress} 题`;
+          setLdProgress(pct, `已处理 ${pd.progress} / ${pd.total} 题`);
+          document.getElementById('ldTxt').textContent = `正在生成 PDF…`;
           if (pd.status==='done') { clearInterval(poll); resolve(); }
         } catch(e) { failCount++; if(failCount>=8){clearInterval(poll);reject(e);} }
       }, 1000);
     });
 
     // 触发下载
-    document.getElementById('ldProgFill').style.width = '100%';
+    setLdProgress(100, '生成完成，正在下载…');
     const a = document.createElement('a');
     a.href = `/api/export_pdf/download/${taskId}`;
     a.download = filename.endsWith('.pdf') ? filename : filename+'.pdf';
     a.click();
 
     hideLd();
-    document.getElementById('ldProgWrap').style.display = 'none';
     toast(`PDF 已生成：${totalQ} 道题目，合并为一个文件`, 'ok');
   } catch(e) {
     hideLd();
-    document.getElementById('ldProgWrap').style.display = 'none';
     toast('PDF 生成失败：'+e.message, 'err');
   }
 }
@@ -3094,13 +3178,13 @@ async function confirmSaveLib() {
   const total = visibles.length;
   if (!total) { toast('没有可见题目', 'err'); return; }
 
-  showLd(`正在保存题册（共 ${total} 题）…`);
+  // 阶段式进度：准备数据 → 上传 → 服务端处理 → 完成
+  showLdProgress(`正在保存题册《${title}》（共 ${total} 题）`, 5, '准备题目数据…');
 
   try {
     const activeG = groups[activeGIdx] || {};
 
-    // ── 新逻辑：直接把题目元数据 + session_id 发给服务端，由服务端裁图 ──
-    // 对于图库加载的题目（有 _img_b64），也传 b64，服务端优先使用
+    // ── 准备 payload（5% → 20%）──
     const questionsPayload = visibles.map(q => {
       const entry = {
         q_num:      q.q_num,
@@ -3110,35 +3194,70 @@ async function confirmSaveLib() {
         exam_date:  q.exam_date || '',
         source:     q.source   || '',
       };
-      // 如果有缓存图片（图库题目），也传给服务端作为 fallback
       if (q._img_b64) {
         entry.img_bytes_b64 = q._img_b64;
         entry.img_w         = q._img_w || 0;
         entry.img_h         = q._img_h || 0;
       }
-      // Task1: 保存答案图片
       if (q.answer_b64) entry.answer_b64 = q.answer_b64;
       return entry;
     });
+    setLdProgress(20, '正在上传数据…');
 
-    const res = await fetch('/api/library/save', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        session_id:    sessionId,
-        title,
-        board,
-        subject,
-        sort_order:    sortOrder,
-        maths_unit:    activeG.maths_unit  || '',
-        syllabus_type: activeG.paper_type  || 'edexcel_maths',
-        questions:     questionsPayload,
-      })
+    // ── 用 XHR 上传，监听真实字节进度（20% → 70%）──
+    const payload = JSON.stringify({
+      session_id:    sessionId,
+      title, board, subject,
+      sort_order:    sortOrder,
+      maths_unit:    activeG.maths_unit  || '',
+      syllabus_type: activeG.paper_type  || 'edexcel_maths',
+      questions:     questionsPayload,
+    });
+    const payloadBytes = new Blob([payload]).size;
+    const payloadStr = payloadBytes > 1048576
+      ? (payloadBytes/1048576).toFixed(1)+' MB'
+      : Math.round(payloadBytes/1024)+' KB';
+
+    const d = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/library/save');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+
+      xhr.upload.onprogress = e => {
+        if (!e.lengthComputable) return;
+        const pct = 20 + Math.round(e.loaded / e.total * 50); // 20–70%
+        const loadedStr = e.loaded > 1048576
+          ? (e.loaded/1048576).toFixed(1)+' MB'
+          : Math.round(e.loaded/1024)+' KB';
+        setLdProgress(pct, `上传中 ${loadedStr} / ${payloadStr}`);
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch { reject(new Error('响应解析失败')); }
+        } else {
+          try { reject(new Error(JSON.parse(xhr.responseText).error || `HTTP ${xhr.status}`)); }
+          catch { reject(new Error(`HTTP ${xhr.status}`)); }
+        }
+      };
+      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.timeout = 120000;
+      xhr.ontimeout = () => reject(new Error('请求超时'));
+      xhr.send(payload);
     });
 
-    const d = await res.json();
+    // ── 服务端处理中（70% → 95%）──
+    setLdProgress(75, '服务端裁图并存储…');
+    await new Promise(r => setTimeout(r, 200));
+    setLdProgress(92, '写入题册索引…');
+    await new Promise(r => setTimeout(r, 150));
+
+    if (!d.ok) { hideLd(); toast(d.error || '保存失败', 'err'); return; }
+
+    setLdProgress(100, '保存完成！');
+    await new Promise(r => setTimeout(r, 400));
     hideLd();
-    if (!res.ok || !d.ok) { toast(d.error || '保存失败', 'err'); return; }
 
     const msg = d.msg || `题册《${title}》已保存，共 ${d.count} 题`;
     toast(`✅ ${msg}`, 'ok');
@@ -3274,14 +3393,25 @@ function toggleLibSubj(key) {
 
 async function loadFromLib(board, subject, wbId, title) {
   closeLoadLibDialog();
-  showLd(`正在读取题册《${title}》…`);
+  showLdProgress(`正在读取题册《${title}》`, 10, '发起请求…');
   try {
+    // 30% → 等待响应
+    setLdProgress(30, '下载题目数据…');
     const r = await fetch(`/api/library/load/${wbId}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}`);
+
+    setLdProgress(70, '解析题目列表…');
     const d = await r.json();
-    hideLd();
-    if (!r.ok || !d.ok) { toast(d.error || '读取失败', 'err'); return; }
+
+    if (!r.ok || !d.ok) { hideLd(); toast(d.error || '读取失败', 'err'); return; }
+
+    setLdProgress(85, `加载 ${d.count} 道题目…`);
+    await new Promise(r => setTimeout(r, 150));
 
     _applyLoadedWorkbook(d);
+
+    setLdProgress(100, '读取完成！');
+    await new Promise(r => setTimeout(r, 400));
+    hideLd();
     toast(`✅ 题册《${d.title}》已读取，共 ${d.count} 题，可继续编辑`, 'ok');
   } catch(e) {
     hideLd(); toast('读取题册失败：' + e.message, 'err');
@@ -4667,32 +4797,54 @@ async function doCloudImport() {
 
   const years = [..._ciYearsSelected];
   document.getElementById('btnDoCloudImport').disabled = true;
-  document.getElementById('ciProgWrap').style.display = 'block';
-  document.getElementById('ciProgFill').style.width = '20%';
-  document.getElementById('ciProgTxt').textContent = '正在从云端加载题目...';
+
+  // 同时更新 Modal 内的小进度条
+  const ciWrap = document.getElementById('ciProgWrap');
+  const ciFill = document.getElementById('ciProgFill');
+  const ciTxt  = document.getElementById('ciProgTxt');
+  ciWrap.style.display = 'block';
+  ciFill.style.width = '0%';
+  ciTxt.textContent = '正在连接云端…';
+
+  const paperLabel = _ciPaper ? ` / ${_ciPaper}` : '';
+  const yearLabel  = years.length ? ` (${years.join('、')})` : '';
+  showLdProgress(
+    `正在导入云端题目${paperLabel}${yearLabel}`,
+    10, '连接云端数据库…'
+  );
 
   try {
     // Task 3: 加入 maths_unit 过滤
     const body = { subject, board: _ciBoard, years };
     if (_ciPaper) body.maths_unit = _ciPaper;
 
+    // 30% — 发送请求
+    setLdProgress(30, '下载题目数据…');
+    ciFill.style.width = '30%'; ciTxt.textContent = '正在下载题目…';
+
     const r = await fetch('/api/cloud_library/import_to_session', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body)
     });
+
+    // 70% — 响应到达
+    setLdProgress(70, '解析题目列表…');
+    ciFill.style.width = '70%'; ciTxt.textContent = '解析中…';
     const d = await r.json();
 
     if (!r.ok || d.error) {
-      document.getElementById('ciProgTxt').textContent = '❌ ' + (d.error || '导入失败');
+      ciFill.style.width = '0%';
+      ciTxt.textContent = '❌ ' + (d.error || '导入失败');
+      hideLd();
       toast(d.error || '导入失败', 'err');
       return;
     }
 
-    document.getElementById('ciProgFill').style.width = '100%';
-    document.getElementById('ciProgTxt').textContent = `✅ 成功加载 ${d.total_questions} 道题目`;
+    // 85% — 注册到 session
+    setLdProgress(85, `注册 ${d.total_questions} 道题目…`);
+    ciFill.style.width = '85%'; ciTxt.textContent = `加载 ${d.total_questions} 题…`;
 
-    // 注册到当前 session（同 upload 响应处理逻辑）
     const isAppend = allQuestions.length > 0;
     const baseGIdx = isAppend ? groups.length : 0;
 
@@ -4706,7 +4858,6 @@ async function doCloudImport() {
     sessionId = d.session_id;
     const grpData = d.groups[0];
 
-    // 把 img_bytes_b64 → _img_b64 供渲染
     const importedQs = grpData.questions.map(q => ({
       ...q,
       gIdx:       baseGIdx,
@@ -4730,15 +4881,21 @@ async function doCloudImport() {
     renderFileList();
     renderGrid();
     renderStats();
-    _loadAllSyllabi();       // 加载知识点筛选树
+    _loadAllSyllabi();
 
-    // toast 显示 paper 信息
-    const paperLabel = _ciPaper ? ` / ${_ciPaper}` : '';
+    // 100% — 完成
+    setLdProgress(100, '导入完成！');
+    ciFill.style.width = '100%';
+    ciTxt.textContent = `✅ 成功加载 ${d.total_questions} 道题目`;
+    await new Promise(r => setTimeout(r, 500));
+
+    hideLd();
     toast(`☁️ 已从云端导入 ${d.total_questions} 道题目（${subject} / ${_ciBoard}${paperLabel}）`, 'ok');
-
     setTimeout(() => closeModal('cloudImportMo'), 1200);
+
   } catch(e) {
     document.getElementById('ciProgTxt').textContent = '❌ 网络错误: ' + e.message;
+    hideLd();
     toast('导入失败: ' + e.message, 'err');
   } finally {
     document.getElementById('btnDoCloudImport').disabled = false;
