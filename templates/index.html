@@ -4655,13 +4655,19 @@ async function doCloudSave() {
     const { t1: autoT1, t2: autoT2 } = resolveTopicForQuestion(q);
     // Feature 4: paper 覆盖逻辑 — 弹窗手填 > 题目自带 maths_unit
     const resolvedPaper = paperOverride || q.maths_unit || '';
+    // 把内存中的 _img_b64 映射为后端期待的 img_bytes_b64 字段
+    // （内存字段名 _img_b64 与后端字段名不同，必须显式转换）
+    const imgB64 = q._img_b64 || q.img_bytes_b64 || '';
+    // 清理不需要传给后端的内部字段，避免 payload 过大
+    const { _img_b64, _img_w, _img_h, _seq, ...rest } = q;
     return {
-      ...q,
+      ...rest,
       subject,
       board,
       topic1: autoT1,
       topic2: autoT2,
-      maths_unit: resolvedPaper,  // Feature 4: 确保 maths_unit 被传递
+      maths_unit: resolvedPaper,
+      img_bytes_b64: imgB64,   // 后端用这个字段判断是否有图片
     };
   });
 

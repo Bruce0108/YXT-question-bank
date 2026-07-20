@@ -6790,14 +6790,19 @@ def cloud_library_save_questions():
     b64_cache   = {}                 # list_pos -> b64 string
 
     for i, q in enumerate(questions):
-        if q.get('img_bytes_b64'):
-            b64_cache[i] = q['img_bytes_b64']
+        # 优先用前端传来的图片 base64（字段名可能是 img_bytes_b64 或 _img_b64）
+        b64_from_frontend = q.get('img_bytes_b64') or q.get('_img_b64') or ''
+        if b64_from_frontend:
+            b64_cache[i] = b64_from_frontend
         else:
             file_groups[int(q.get('file_idx', q.get('gIdx', 0)))].append((i, q))
 
-    # 从 PDF session 裁图
+    # 从 PDF session 裁图（仅当前端没有传图片时才走这里）
     for file_idx, items in file_groups.items():
         if not sess or file_idx >= len(sess):
+            # 没有 PDF session（workbook/cloud 来源），跳过裁图
+            # 这些题目的图片应已由前端通过 img_bytes_b64 传过来
+            print(f'[cloud_save] no sess for file_idx={file_idx}, skip crop ({len(items)} items)')
             continue
         group      = sess[file_idx]
         save_path  = group['path']
