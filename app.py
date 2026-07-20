@@ -4266,7 +4266,7 @@ def export_pdf():
       cover_title: 封面页标题（如 "数学Edexcel P3题册"）；为空则不生成封面
     """
     data      = request.json
-    dpi       = min(int(data.get('dpi', 150)), 150)
+    dpi       = min(int(data.get('dpi', 150)), 1200)   # 允许最高 1200 dpi
     filename  = (data.get('filename') or 'questions').strip()
     layout    = data.get('layout', 'one_per_page')
     sess_id   = data.get('session_id')
