@@ -975,9 +975,26 @@
         </select>
       </div>
       <div class="pdf-field">
-        <label>🖨️ 清晰度（继承导出设置中的 DPI）</label>
-        <div style="background:var(--g50);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--g600)">
-          当前 DPI：<b id="pdfDpiShow">150</b>
+        <label>🖨️ 图片质量</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:2px">
+          <label id="pdfQualityHigh" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:10px 12px;border-radius:8px;border:2px solid #6366f1;background:#eef2ff;transition:all .15s">
+            <input type="radio" name="pdfQuality" value="high" checked
+                   style="width:15px;height:15px;accent-color:#6366f1;flex-shrink:0"
+                   onchange="_syncPdfQualityRadio(this.value)">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#4338ca">⭐ 高清</div>
+              <div style="font-size:10px;color:#6366f1;margin-top:1px">原始切割质量导出</div>
+            </div>
+          </label>
+          <label id="pdfQualityNormal" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:10px 12px;border-radius:8px;border:2px solid var(--g200);background:#fff;transition:all .15s">
+            <input type="radio" name="pdfQuality" value="normal"
+                   style="width:15px;height:15px;accent-color:#6366f1;flex-shrink:0"
+                   onchange="_syncPdfQualityRadio(this.value)">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#374151">📄 普通</div>
+              <div style="font-size:10px;color:var(--g400);margin-top:1px">150 dpi，文件更小</div>
+            </div>
+          </label>
         </div>
       </div>
       <div class="pdf-field" id="pdfAnswerToggleWrap" style="display:none">
@@ -2358,6 +2375,23 @@ function _syncPdfModeRadio(modeVal) {
   });
 }
 
+// 根据质量值更新单选按钮视觉样式：high / normal
+function _syncPdfQualityRadio(val) {
+  const lHigh   = document.getElementById('pdfQualityHigh');
+  const lNormal = document.getElementById('pdfQualityNormal');
+  if (!lHigh || !lNormal) return;
+  if (val === 'high') {
+    lHigh.style.borderColor   = '#6366f1'; lHigh.style.background   = '#eef2ff';
+    lNormal.style.borderColor = 'var(--g200)'; lNormal.style.background = '#fff';
+  } else {
+    lHigh.style.borderColor   = 'var(--g200)'; lHigh.style.background   = '#fff';
+    lNormal.style.borderColor = '#6366f1'; lNormal.style.background = '#eef2ff';
+  }
+  document.querySelectorAll('input[name="pdfQuality"]').forEach(r => {
+    r.checked = (r.value === val);
+  });
+}
+
 function openPdfModal(scope) {
   pdfExportScope = scope;
   const nums = scope==='all' ? getVisibleQuestions() : [...selNums].map(uid => {
@@ -2367,7 +2401,8 @@ function openPdfModal(scope) {
 
   if (!nums.length) { toast('没有可导出的题目','err'); return; }
   document.getElementById('pdfQCount').textContent = nums.length;
-  document.getElementById('pdfDpiShow').textContent = getDPI();
+  // 每次打开重置为高清（默认）
+  _syncPdfQualityRadio('high');
 
   // 根据本次导出范围内是否有题目带答案，决定是否显示导出模式选项
   const hasAnswerInScope = nums.some(q => q && q.answer_b64);
@@ -2386,7 +2421,9 @@ function closePdfModal() { document.getElementById('pdfMo').classList.remove('sh
 async function doExportPdf() {
   const filename = document.getElementById('pdfName').value.trim() || 'questions';
   const layout   = document.getElementById('pdfLayout').value;
-  const dpi      = getDPI();
+  // 根据质量选项决定 dpi：高清=原始切割质量(300dpi)，普通=150dpi
+  const qualityVal = document.querySelector('input[name="pdfQuality"]:checked')?.value || 'high';
+  const dpi = qualityVal === 'high' ? 300 : 150;
 
   // 收集要导出的题目
   let exportItems = [];
