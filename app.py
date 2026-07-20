@@ -2234,7 +2234,7 @@ _MATHS_CHAPTER_RULES = [
     ('FP1-6', ['transformation','rotation','reflection','enlargement',
                'matrix.*transformation','invariant','stretch'], []),
     ('FP1-7', ['series','sum of squares','sum of cubes','standard series',
-               r'r\^2','r\^3','summation','sigma'], []),
+               r'r\^2', r'r\^3','summation','sigma'], []),
     ('FP1-8', ['proof by induction','induction','base case','inductive step',
                'assume.*true for n=k','true for n=k+1'], []),
     # ── FP2 ── (对齐 syllabus_edexcel_maths.json: FP2-1..FP2-8)
@@ -2991,38 +2991,50 @@ def _extract_unit_from_filename(filename: str) -> str | None:
 
 def _detect_9702_ms_table(doc):
     """
-    解析 Cambridge 9702 物理 Mark Scheme PDF 中的表格答案。
+    解析 Cambridge 9702 物理 Mark Scheme PDF 中的答案表格。
 
-    表格结构（标准格式）：
-      表头行：Question | Answer | Marks
-      数据行：题号（整数）| 答案文字 | 分值
+    实际格式（A4 纵向 PDF，rotation=90°横排显示）：
+      - MediaBox = (0,0,595,842)：物理纸面是 A4 纵向
+      - rotation=90 → 逻辑页面显示为横向（842×595）
+      - get_text() 返回物理坐标（595×842 空间内）
+      - get_pixmap(clip=...) 使用逻辑坐标（842×595 空间）
+      - 坐标转换（rotation=90）：
+          物理 (px, py) → 逻辑 (lx, ly) = (py, phys_w - px)
+          其中 phys_w = mediabox.width = 595
 
-    切割规则：
-      - 扫描所有页面，找含 Question / Answer / Marks 三列的表头行
-      - 表头之后直到下一个表头（或页末）为该题组区域
-      - 按题号分组，返回每题的坐标切片
+      物理坐标布局（以 9702/42 March 2020 为例）：
+        - 物理 y ≈ 55-72：Marks 行（B1/C1/A1/M1）—— 显示时在左侧
+        - 物理 y ≈ 394-434：Answer 列头 —— 显示时在中部
+        - 物理 y ≈ 475-720：实际答案文字内容
+        - 物理 y ≈ 731-781：Question 列头 + 题号 —— 显示时在右侧
+        - 物理 x ≈ 56-68：最左列（固定列头 Marks/Answer/Question）
+        - 物理 x ≈ 80-370：各子题列（每列约 25pt 宽）
+      每页只有一道大题（Q1-Q12 各占一页）
 
     返回：
-      {q_num: [(page_idx, y_top, y_bottom, x_left, x_right), ...]}
+      {q_num: [(page_idx, lx0, ly0, lx1, ly1), ...]}
+      其中 lx0/ly0/lx1/ly1 是 get_pixmap(clip=...) 使用的逻辑坐标
     """
-    # 表头关键词（大小写不敏感）— 9702 MS 表头含 Question / Answer / Marks
-    # 支持多种拼写：有时 "Question" 和 "Answer" 分布在相邻 span/行
-    HDR_WORDS      = {'question', 'answer', 'marks'}
-    # 备用：只有 answer 和 marks（某些 MS 无 "Question" 列头）
-    HDR_WORDS_ALT  = {'answer', 'marks'}
-    # 题号模式：1-2位数字，可后跟 (a)(b)(i) 等子题（只取整数部分）
-    Q_NUM_PAT = re.compile(r'^(\d{1,2})\b')
+    Q_NUM_PAT = re.compile(r'^(\d{1,2})\b')    # 提取整数题号
 
-    header_blocks = []   # [(page_idx, hdr_y0, hdr_y1)]
+    result = {}   # q_num(int) → [(pg_i, lx0, ly0, lx1, ly1)]
 
     for pg_i in range(doc.page_count):
         page = doc[pg_i]
+
+        # 只处理 rotation=90 的页面（9702 MS 答案页）
+        if page.rotation != 90:
+            continue
+
+        phys_w = page.mediabox.width    # 物理宽度 ≈ 595
+        phys_h = page.mediabox.height   # 物理高度 ≈ 842
+
         try:
             blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
         except Exception:
             continue
 
-        # 收集该页所有文字行（y0, y1, x0, x1, text）
+        # ── 收集该页所有文字行（物理坐标）──
         tlines = []
         for b in blocks:
             if b.get('type') != 0:
@@ -3031,132 +3043,78 @@ def _detect_9702_ms_table(doc):
                 ltxt = ''.join(s['text'] for s in line['spans']).strip()
                 if ltxt:
                     bbox = line['bbox']
-                    tlines.append((bbox[1], bbox[3], bbox[0], bbox[2], ltxt))
-        tlines.sort(key=lambda x: x[0])
+                    # 物理坐标：(px0, py0, px1, py1, txt)
+                    tlines.append((bbox[0], bbox[1], bbox[2], bbox[3], ltxt))
 
-        n = len(tlines)
-        i = 0
-        while i < n:
-            y0_i = tlines[i][0]
-            # 在 25pt 范围内收集同行/相邻行的词（表头可能跨 2 行）
-            words = set()
-            j = i
-            while j < n and tlines[j][0] - y0_i < 25:
-                for w in tlines[j][4].split():
-                    words.add(w.lower().strip(':.()/'))
-                j += 1
-            # 宽松匹配：question+answer+marks（全匹配）或 answer+marks（部分匹配）
-            is_hdr = HDR_WORDS.issubset(words) or HDR_WORDS_ALT.issubset(words)
-            if is_hdr:
-                # 找到表头行 — 记录位置
-                hdr_y0 = tlines[i][0]
-                hdr_y1 = max(tlines[k][1] for k in range(i, j))
-                # 避免重复：若本页已有表头且 y 距离 < 30，跳过
-                if not header_blocks or header_blocks[-1][0] != pg_i or (hdr_y0 - header_blocks[-1][2]) > 30:
-                    header_blocks.append((pg_i, hdr_y0, hdr_y1))
-                i = j
+        # ── 判断该页是否是答案页：需含 "Question" 标题（物理 x ≈ 56-70，物理 y > 700）──
+        has_question_hdr = any(
+            txt.strip() == 'Question' and px0 < 75 and py0 > 700
+            for px0, py0, px1, py1, txt in tlines
+        )
+        if not has_question_hdr:
+            continue
+
+        # ── 找题号行（物理 y > 730，物理 x > 70）──
+        q_col_pxs = {}   # q_num(int) → [px0, ...]
+        for px0, py0, px1, py1, txt in tlines:
+            if py0 < 730 or px0 < 70:
                 continue
-            i += 1
-
-    print(f'[9702_ms_table] found {len(header_blocks)} header blocks: '
-          + str([(h[0], round(h[1],1)) for h in header_blocks]))
-
-    if not header_blocks:
-        # fallback: 尝试全文搜索 "Mark Scheme" + 第一页题号检测
-        return {}
-
-    # ── 按表头分段，解析每段中的题号和行范围 ──
-    result = {}  # q_num → [(pg_i, y_top, y_bot, x_left, x_right)]
-
-    for seg_idx, (pg_i, hdr_y0, hdr_y1) in enumerate(header_blocks):
-        # 本段结束位置：下一个表头，或页末
-        if seg_idx + 1 < len(header_blocks):
-            next_pg, next_y0, _ = header_blocks[seg_idx + 1]
-            seg_end_pg  = next_pg
-            seg_end_y   = next_y0
-        else:
-            seg_end_pg  = doc.page_count - 1
-            seg_end_y   = None
-
-        # 收集本段所有文字块（跨页）
-        seg_lines = []
-        for scan_pg in range(pg_i, min(seg_end_pg + 1, doc.page_count)):
-            page = doc[scan_pg]
-            try:
-                blocks = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)['blocks']
-            except Exception:
+            # 跳过固定列头和版权行
+            if txt.strip() in ('9702/42', '9702/41', '9702/43', '9702/44',
+                                '© UCLES 2020', '© UCLES 2021', '© UCLES 2022',
+                                '© UCLES 2023', '© UCLES 2024', '[Turn over',
+                                'Question', 'Answer', 'Marks',
+                                'PUBLISHED', 'SEEN', '^', '', ' '):
                 continue
-            for b in blocks:
-                if b.get('type') != 0:
-                    continue
-                for line in b.get('lines', []):
-                    ltxt = ''.join(s['text'] for s in line['spans']).strip()
-                    if not ltxt:
-                        continue
-                    bbox = line['bbox']
-                    ly0, ly1, lx0, lx1 = bbox[1], bbox[3], bbox[0], bbox[2]
-                    # 跳过表头行本身（含 2pt 容差）
-                    if scan_pg == pg_i and ly0 < hdr_y1 + 2:
-                        continue
-                    # 跳过下一段的表头
-                    if seg_end_y and scan_pg == seg_end_pg and ly0 >= seg_end_y - 2:
-                        continue
-                    seg_lines.append((scan_pg, ly0, ly1, lx0, lx1, ltxt))
+            m = Q_NUM_PAT.match(txt.strip())
+            if m:
+                qn = int(m.group(1))
+                if 1 <= qn <= 30:
+                    if qn not in q_col_pxs:
+                        q_col_pxs[qn] = []
+                    q_col_pxs[qn].append(px0)
 
-        # 在本段中按左列题号分组
-        # Cambridge 9702 MS：题号列通常在左侧（x0 < 120pt），放宽至 150pt 兼容不同排版
-        q_y_start = {}   # q_num → (pg_i, y_top)
+        if not q_col_pxs:
+            continue
 
-        for (spg, ly0, ly1, lx0, lx1, ltxt) in seg_lines:
-            if lx0 < 150:  # 放宽至 150pt（原为 100pt）
-                m = Q_NUM_PAT.match(ltxt.strip())
-                if m:
-                    qn = int(m.group(1))
-                    if 1 <= qn <= 30:
-                        if qn not in q_y_start:
-                            q_y_start[qn] = (spg, ly0)
+        q_nums = sorted(q_col_pxs.keys())
+        print(f'[9702_ms_table] Page {pg_i}: found q_nums={q_nums}')
 
-        print(f'[9702_ms_table] seg {seg_idx} (pg{pg_i}): found q_nums={sorted(q_y_start.keys())}')
+        # ── 对每道大题，确定物理 x 范围，然后转换到逻辑坐标 ──
+        # 物理 y 范围：从 Marks 顶部（约 54）到 Question 标题上方（约 730）
+        # 物理 x 范围：从该题最小列 x - 5，到下一题最小列 x（或最大列 x + 30）
+        phys_y_top = 54.0    # Marks 行顶部
+        phys_y_bot = 726.0   # Question 列头上方
 
-        # 确定每题的 y_end（下一题 y_start - 2，或段末）
-        for qn in sorted(q_y_start.keys()):
-            pg_s, y_s = q_y_start[qn]
-            # 找下一道题的 y_start（同页优先）
-            next_qs = [(k, v) for k, v in q_y_start.items() if k > qn]
-            if next_qs:
-                # 先取同页的下一题，再取跨页的
-                same_pg_next = [(k, v) for k, v in next_qs if v[0] == pg_s]
-                if same_pg_next:
-                    next_q = min(same_pg_next, key=lambda x: x[0])
-                else:
-                    next_q = min(next_qs, key=lambda x: x[0])
-                pg_e, y_e = next_q[1]
-                # 跨页时取当前页末，不截到下一页
-                if pg_e != pg_s:
-                    y_bot = doc[pg_s].rect.height - 20
-                    pg_e  = pg_s
-                else:
-                    y_bot = y_e - 2
+        for qi, qn in enumerate(q_nums):
+            col_pxs = sorted(q_col_pxs[qn])
+            phys_x_left  = max(68.0, min(col_pxs) - 5.0)
+
+            if qi + 1 < len(q_nums):
+                next_qn    = q_nums[qi + 1]
+                next_pxs   = sorted(q_col_pxs[next_qn])
+                phys_x_right = min(next_pxs) - 2.0
             else:
-                # 最后一题：取段内最后一行底部
-                last_lines = [(sl[0], sl[2]) for sl in seg_lines if sl[0] == pg_s and sl[1] >= y_s - 2]
-                if last_lines:
-                    pg_e, y_bot = max(last_lines, key=lambda x: x[1])
-                    y_bot += 4
-                else:
-                    pg_e  = pg_s
-                    y_bot = doc[pg_s].rect.height - 20
+                phys_x_right = min(phys_w - 10.0, max(col_pxs) + 28.0)
 
-            page = doc[pg_s]
-            pw   = page.rect.width
-            x_left  = 30
-            x_right = min(pw - 10, 560)
+            if phys_x_right - phys_x_left < 10:
+                continue
+
+            # 物理坐标 → 逻辑坐标（rotation=90）：
+            #   lx = phys_y,  ly = phys_w - phys_x
+            lx0 = phys_y_top
+            lx1 = phys_y_bot
+            ly0 = max(0.0, phys_w - phys_x_right)
+            ly1 = min(page.rect.height, phys_w - phys_x_left)
+
+            # 确保逻辑坐标合法
+            if lx1 - lx0 < 10 or ly1 - ly0 < 5:
+                print(f'[9702_ms] skip tiny logical clip q{qn}: lx={lx0:.1f}-{lx1:.1f}, ly={ly0:.1f}-{ly1:.1f}')
+                continue
 
             if qn not in result:
                 result[qn] = []
-            # 确保 y_bot 不超过页面高度
-            y_bot_clamped = min(y_bot, doc[pg_e if pg_e == pg_s else pg_s].rect.height - 15)
-            result[qn].append((pg_s, max(0, y_s - 3), y_bot_clamped, x_left, x_right))
+            result[qn].append((pg_i, lx0, ly0, lx1, ly1))
 
     print(f'[9702_ms_table] final result: {sorted(result.keys())} questions')
     return result
@@ -3166,6 +3124,7 @@ def _render_9702_ms_answers(ms_doc, dpi=150):
     """
     用 _detect_9702_ms_table() 定位 9702 MS 答案区，渲染为 JPEG base64。
     返回 {q_num: {'b64': str, 'w': int, 'h': int}}。
+    结果坐标已转换为逻辑坐标，可直接传给 get_pixmap(clip=...)。
     """
     import base64 as _b64
     from PIL import Image as _PILImg
@@ -3182,16 +3141,16 @@ def _render_9702_ms_answers(ms_doc, dpi=150):
         parts = []
         total_w, total_h = 0, 0
         try:
-            for (pg_i, y_top, y_bot, x_left, x_right) in slices:
-                page = ms_doc[pg_i]
-                ph_pg = page.rect.height
-                pw_pg = page.rect.width
-                # 确保 clip 坐标合法，避免 "Invalid bandwriter header" 错误
-                x0_c = max(0.0, float(x_left))
-                y0_c = max(0.0, float(y_top))
-                x1_c = min(float(pw_pg), float(x_right))
-                y1_c = min(float(ph_pg), float(y_bot))
-                if y1_c - y0_c < 4 or x1_c - x0_c < 10:
+            for (pg_i, lx0, ly0, lx1, ly1) in slices:
+                page    = ms_doc[pg_i]
+                log_w   = page.rect.width
+                log_h   = page.rect.height
+                # 确保逻辑 clip 坐标合法，避免 "Invalid bandwriter header" 错误
+                x0_c = max(0.0, min(float(lx0), float(lx1)))
+                x1_c = min(log_w, max(float(lx0), float(lx1)))
+                y0_c = max(0.0, min(float(ly0), float(ly1)))
+                y1_c = min(log_h, max(float(ly0), float(ly1)))
+                if x1_c - x0_c < 10 or y1_c - y0_c < 5:
                     print(f'[9702_ms] skip tiny clip q{q_num}: ({x0_c:.1f},{y0_c:.1f},{x1_c:.1f},{y1_c:.1f})')
                     continue
                 clip = fitz.Rect(x0_c, y0_c, x1_c, y1_c)
@@ -3211,14 +3170,14 @@ def _render_9702_ms_answers(ms_doc, dpi=150):
             else:
                 canvas = _PILImg.new('RGB', (total_w, total_h), (255, 255, 255))
                 y_off  = 0
-                for (jpeg_part, pw, ph) in parts:
+                for (jpeg_part, pw_p, ph_p) in parts:
                     img_part = _PILImg.open(io.BytesIO(jpeg_part))
-                    if pw != total_w:
+                    if pw_p != total_w:
                         img_part = img_part.resize(
-                            (total_w, int(ph * total_w / pw)), _PILImg.LANCZOS)
-                        ph = img_part.size[1]
+                            (total_w, int(ph_p * total_w / pw_p)), _PILImg.LANCZOS)
+                        ph_p = img_part.size[1]
                     canvas.paste(img_part, (0, y_off))
-                    y_off += ph
+                    y_off += ph_p
                 buf = io.BytesIO()
                 canvas.save(buf, format='JPEG', quality=88)
                 jpeg_out = buf.getvalue()
@@ -4965,9 +4924,9 @@ def _detect_exported_pdf_header(page):
     2. 用 get_text('text', clip=header_rect) 提取头栏区域的 ASCII 文本
        （新版导出用 insert_text 写入ASCII文字，可正常提取）
     3. 解析格式："Q05  |  Medium  |  *P3-4  Differentiation"
-       - Q(\d+) → 题号
+       - Q(\\d+) → 题号
        - Starter/Basic/Medium/Hard/Expert → 难度
-       - P\d+-\d+ → 知识点章节 ID
+       - P\\d+-\\d+ → 知识点章节 ID
 
     返回 (q_num, difficulty, topic_id, topic_title_hint) 或 None。
     topic_title_hint 是从头栏文本中解析出的章节标题，作为辅助信息。
@@ -5166,7 +5125,7 @@ def import_exported_pdf():
     - 通过图片 y0 坐标判断是否有头栏：img.y0 > 60 → 有头栏
     - 用 get_text('text') 提取头栏 ASCII 文本（新版导出文字完全可提取）
     - 解析 "Q05  |  Medium  |  *P3-4  Differentiation" 格式
-    - 用 P\d+-\d+ 格式自动识别为 edexcel_maths 大纲，在 syllabus 中精确定位
+    - 用 P\\d+-\\d+ 格式自动识别为 edexcel_maths 大纲，在 syllabus 中精确定位
     - 同一题号的多页图片垂直拼接为完整题目图
     """
     if 'file' not in request.files:
@@ -5287,7 +5246,7 @@ def import_exported_pdf():
             # ── 知识点解析：在 syllabus 中精确定位 ──
             topics = []
             if topic_id:
-                # 自动确认大纲类型（P\d+-\d+ → edexcel_maths）
+                # 自动确认大纲类型（P\\d+-\\d+ → edexcel_maths）
                 topic_info = _lookup_topic_in_syllabus(syllabus, topic_id, topic_title_hint)
                 if topic_info:
                     topics = [{
