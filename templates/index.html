@@ -1778,10 +1778,11 @@ function renderGrid() {
 
       // 答案区域（仅当题目有 answer_b64 时显示）
       const hasAnswer = !!(q.answer_b64);
+      const _ansMime = q.answer_b64 && q.answer_b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
       const answerHtml = hasAnswer ? `
         <div class="qc-answer-wrap" id="ans-${uid}" style="display:none">
           <div class="qc-answer-bar">📋 Mark Scheme 答案</div>
-          <img class="qc-answer-img" src="data:image/jpeg;base64,${q.answer_b64}"
+          <img class="qc-answer-img" id="ans-img-${uid}" src="data:${_ansMime};base64,${q.answer_b64}"
                alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">
         </div>` : '';
       card.innerHTML = `
@@ -1909,10 +1910,14 @@ function procThumbQ() {
     const ld  = document.getElementById(`tld-${uid}`);
     if (!img) { thumbIng--; procThumbQ(); continue; }
 
-    // ── 图书馆题目：直接用缓存的 base64 图片 ──
-    const qObj = allQuestions.find(q => q.gIdx === gIdx && q.q_num === q_num);
+    // ── 精确用 uid 定位题目（防止 gIdx+q_num 相同的题互相干扰）──
+    const qObj = _uidToQ(uid);
     if (qObj && qObj._img_b64) {
-      const dataUrl = `data:image/jpeg;base64,${qObj._img_b64}`;
+      // 检测 MIME 类型：PNG header = 89 50 4E 47，否则默认 jpeg
+      const b64 = qObj._img_b64;
+      const mime = (b64.charAt(0) === 'i' || b64.startsWith('/9j')) ? 'image/jpeg'
+                 : b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+      const dataUrl = `data:${mime};base64,${b64}`;
       img.src = dataUrl; img.style.display='';
       if (ld) ld.style.display='none';
       thumbIng--; procThumbQ();
@@ -2354,10 +2359,12 @@ function openPrev(qNum, gIdx, e) {
   const bm = {'mcq':'🔢 Cambridge MCQ','structured':'📝 Cambridge 大题','edexcel':'📋 Edexcel','edexcel_mcq':'🔤 Edexcel MCQ'};
   b.innerHTML = bm[g.paper_type] || '📋';
 
-  // 图书馆题目直接使用缓存 base64
+  // 图书馆题目直接使用缓存 base64（用 gIdx+qNum 找，openPrev 没有 uid）
   const qObj = allQuestions.find(q => q.gIdx === gIdx && q.q_num === qNum);
   if (qObj && qObj._img_b64) {
-    document.getElementById('prevImg').src = `data:image/jpeg;base64,${qObj._img_b64}`;
+    const b64 = qObj._img_b64;
+    const mime = b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+    document.getElementById('prevImg').src = `data:${mime};base64,${b64}`;
   } else {
     document.getElementById('prevImg').src = `/api/preview/${qNum}?dpi=150&session_id=${sessionId}&file_idx=${gIdx}&_t=${uploadToken}`;
   }
@@ -2382,7 +2389,9 @@ function navMo(dir) {
   // 图书馆题目使用缓存 base64
   const qObj = allQuestions.find(q => q.gIdx === curMoGIdx && q.q_num === curMoQ);
   if (qObj && qObj._img_b64) {
-    document.getElementById('prevImg').src = `data:image/jpeg;base64,${qObj._img_b64}`;
+    const b64 = qObj._img_b64;
+    const mime = b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+    document.getElementById('prevImg').src = `data:${mime};base64,${b64}`;
   } else {
     document.getElementById('prevImg').src = `/api/preview/${curMoQ}?dpi=150&session_id=${sessionId}&file_idx=${curMoGIdx}&_t=${uploadToken}`;
   }
@@ -2883,7 +2892,9 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
   prevLoad.style.display = '';
   prevLoad.textContent = '⏳ 加载中...';
   if (q._img_b64) {
-    prevImg.src = `data:image/jpeg;base64,${q._img_b64}`;
+    const b64 = q._img_b64;
+    const mime = b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+    prevImg.src = `data:${mime};base64,${b64}`;
     prevImg.style.display = '';
     prevLoad.style.display = 'none';
   } else {
@@ -2997,6 +3008,15 @@ function replaceAnswerImage(file) {
     }
     if (ansWrap)      ansWrap.style.display = '';
     if (ansToggleBtn) ansToggleBtn.style.display = '';
+    // 同步刷新主页卡片上的答案图（若已渲染）
+    const cardAnsImg  = document.getElementById(`ans-img-${uid}`);
+    const cardAnsWrap = document.getElementById(`ans-${uid}`);
+    if (cardAnsImg) {
+      cardAnsImg.src = dataUrl;
+    } else if (cardAnsWrap) {
+      // 首次添加答案（卡片原来没有答案区），需要整体重绘该卡片
+      renderGrid();
+    }
     toast('✅ 答案已替换，保存题册后永久生效', 'ok');
   };
   reader.readAsDataURL(file);
@@ -3758,6 +3778,7 @@ function _applyLoadedWorkbook(d) {
   renderGrid();
   renderSyllabusCard();
   _loadAllSyllabi();         // 加载知识点筛选树（cloud/workbook 也需要）
+  _updateDiffFilterVisibility();   // 题册可能有难度字段，需要显示筛选栏
   document.getElementById('statsCard').style.display = '';
   document.getElementById('actCard').style.display   = '';
   document.getElementById('toolbar').style.display   = '';
@@ -5132,6 +5153,7 @@ async function doCloudImport() {
     renderGrid();
     renderStats();
     _loadAllSyllabi();
+    _updateDiffFilterVisibility();   // 云端题目可能有难度字段，需显示筛选栏
 
     // 100% — 完成
     setLdProgress(100, '导入完成！');
