@@ -316,7 +316,7 @@
     border-radius:16px;border:1.5px solid var(--g200);background:#fff;
     font-size:12px;cursor:pointer;transition:all .15s;color:var(--g600);font-weight:600;white-space:nowrap}
   .diff-star-btn:hover{border-color:#f59e0b;background:#fffbeb;color:#92400e}
-  .diff-star-btn.active{border-color:#f59e0b;background:#fef3c7;color:#92400e}
+  .diff-star-btn.active{border-color:#f59e0b;background:#fef3c7;color:#92400e;font-weight:700}
   .diff-star-btn .ds{color:#f59e0b;font-size:11px}
   .diff-star-btn.clear-btn{color:var(--g400);border-style:dashed}
   .diff-star-btn.clear-btn.active{border-color:var(--blue);background:var(--blue-lt);color:var(--blue)}
@@ -536,15 +536,15 @@
       </div>
       <span class="sel-cnt" id="selCnt">0 已选</span>
       <div class="tb-sep"></div>
-      <!-- 难度筛选 -->
+      <!-- 难度筛选（多选，支持二级筛选） -->
       <div class="diff-filter" id="diffFilterWrap" style="display:none">
         <span class="diff-filter-label">⭐ 难度</span>
-        <button class="diff-star-btn clear-btn active" data-diff="0" onclick="setDiffFilter(0,this)" title="全部难度">全部</button>
-        <button class="diff-star-btn" data-diff="1" onclick="setDiffFilter(1,this)" title="入门"><span class="ds">★</span>入门</button>
-        <button class="diff-star-btn" data-diff="2" onclick="setDiffFilter(2,this)" title="基础"><span class="ds">★★</span>基础</button>
-        <button class="diff-star-btn" data-diff="3" onclick="setDiffFilter(3,this)" title="中等"><span class="ds">★★★</span>中等</button>
-        <button class="diff-star-btn" data-diff="4" onclick="setDiffFilter(4,this)" title="较难"><span class="ds">★★★★</span>较难</button>
-        <button class="diff-star-btn" data-diff="5" onclick="setDiffFilter(5,this)" title="挑战"><span class="ds">★★★★★</span>挑战</button>
+        <button class="diff-star-btn clear-btn active" data-diff="0" onclick="setDiffFilter(0,this)" title="显示全部难度">全部</button>
+        <button class="diff-star-btn" data-diff="1" onclick="toggleDiffFilter(1,this)" title="点击多选：入门"><span class="ds">★</span>入门</button>
+        <button class="diff-star-btn" data-diff="2" onclick="toggleDiffFilter(2,this)" title="点击多选：基础"><span class="ds">★★</span>基础</button>
+        <button class="diff-star-btn" data-diff="3" onclick="toggleDiffFilter(3,this)" title="点击多选：中等"><span class="ds">★★★</span>中等</button>
+        <button class="diff-star-btn" data-diff="4" onclick="toggleDiffFilter(4,this)" title="点击多选：较难"><span class="ds">★★★★</span>较难</button>
+        <button class="diff-star-btn" data-diff="5" onclick="toggleDiffFilter(5,this)" title="点击多选：挑战"><span class="ds">★★★★★</span>挑战</button>
         <div class="tb-sep"></div>
       </div>
       <span id="tbHint" style="font-size:12px;color:var(--g400)">点击卡片选中</span>
@@ -928,13 +928,19 @@
             style="display:none;padding:3px 10px;font-size:11px;border-radius:5px;border:1px solid #bbf7d0;background:#f0fdf4;color:#15803d;cursor:pointer;font-weight:600">
             👁 显示答案
           </button>
-          <!-- 替换图片按钮 -->
+          <!-- 替换题目 & 替换答案按钮 -->
           <button id="replaceImgBtn" onclick="document.getElementById('replaceImgInput').click()"
-            style="padding:3px 10px;font-size:11px;border-radius:5px;border:1px solid #d1d5db;background:#f9fafb;color:#374151;cursor:pointer;font-weight:600">
-            🖼️ 替换图片
+            style="padding:3px 10px;font-size:11px;border-radius:5px;border:1px solid #dbeafe;background:#eff6ff;color:#1d4ed8;cursor:pointer;font-weight:600">
+            🖼️ 替换题目
           </button>
           <input type="file" id="replaceImgInput" accept="image/*" style="display:none"
             onchange="replaceQuestionImage(this.files[0])">
+          <button id="replaceAnsBtn" onclick="document.getElementById('replaceAnsInput').click()"
+            style="padding:3px 10px;font-size:11px;border-radius:5px;border:1px solid #bbf7d0;background:#f0fdf4;color:#15803d;cursor:pointer;font-weight:600">
+            ✅ 替换答案
+          </button>
+          <input type="file" id="replaceAnsInput" accept="image/*" style="display:none"
+            onchange="replaceAnswerImage(this.files[0])">
         </div>
         <div id="editPreviewWrap" style="text-align:center;flex:1;overflow:auto">
           <div id="editPreviewLoad" style="padding:40px;color:#94a3b8">⏳ 加载中...</div>
@@ -1077,8 +1083,9 @@ let allQuestions = [];   // [{q_num, page_idx, source, paper_type, gIdx, ...}]
 // ── filtered subset ──
 let filteredNums = null;  // null = no filter active
 
-// ── difficulty filter ──
-let activeDiffFilter = 0;  // 0 = all, 1-5 = specific star level
+// ── difficulty filter（多选）──
+let activeDiffFilter = 0;  // 0 = all（旧字段，保留兼容）
+let activeDiffSet = new Set();  // 空 = 不限制，否则含所选星级
 
 // ── sort order ──
 let sortOrder = 'default';  // 'default' | 'chapter' | 'diff_asc' | 'diff_desc'
@@ -1410,7 +1417,7 @@ async function doUpload(files) {
     activeGIdx = 0;
     selNums.clear();
     filteredNums = null;
-    activeDiffFilter = 0;
+    activeDiffFilter = 0; activeDiffSet = new Set();
     window._activeSyllabusType = null;
 
     allQuestions = [];
@@ -1621,9 +1628,9 @@ function getVisibleQuestions() {
   if (filteredNums !== null) {
     qs = qs.filter(q => filteredNums.has(q.gIdx + '_' + q.q_num));
   }
-  // 难度过滤
-  if (activeDiffFilter > 0) {
-    qs = qs.filter(q => q.difficulty === activeDiffFilter);
+  // 难度过滤（多选：activeDiffSet 非空时按集合过滤）
+  if (activeDiffSet.size > 0) {
+    qs = qs.filter(q => activeDiffSet.has(q.difficulty));
   }
   // 排序
   if (sortOrder === 'chapter') {
@@ -2194,19 +2201,43 @@ function sfClearAll() {
 //  难度筛选
 // ══════════════════════════════════════════════════════════
 function setDiffFilter(level, btn) {
-  activeDiffFilter = level;
-  // 更新按钮状态
+  // "全部"按钮：清空所有多选
+  activeDiffFilter = 0;
+  activeDiffSet.clear();
   document.querySelectorAll('.diff-star-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  // 重绘题目卡片
   selNums.clear();
   renderGrid();
-  if (level === 0) {
+  toast('已显示全部难度题目', 'info');
+}
+
+function toggleDiffFilter(level, btn) {
+  // 多选切换单个星级
+  if (activeDiffSet.has(level)) {
+    activeDiffSet.delete(level);
+    btn.classList.remove('active');
+  } else {
+    activeDiffSet.add(level);
+    btn.classList.add('active');
+    // 取消"全部"按钮的高亮
+    const clearBtn = document.querySelector('.diff-star-btn.clear-btn');
+    if (clearBtn) clearBtn.classList.remove('active');
+  }
+  // 若取消后集合为空，自动激活"全部"按钮
+  if (activeDiffSet.size === 0) {
+    const clearBtn = document.querySelector('.diff-star-btn.clear-btn');
+    if (clearBtn) clearBtn.classList.add('active');
+  }
+  activeDiffFilter = activeDiffSet.size > 0 ? -1 : 0;
+  selNums.clear();
+  renderGrid();
+  if (activeDiffSet.size === 0) {
     toast('已显示全部难度题目', 'info');
   } else {
-    const labels = {1:'入门★',2:'基础★★',3:'中等★★★',4:'较难★★★★',5:'挑战★★★★★'};
+    const labels = {1:'★',2:'★★',3:'★★★',4:'★★★★',5:'★★★★★'};
+    const selected = [...activeDiffSet].sort().map(l => labels[l]).join('  ');
     const vis = getVisibleQuestions().length;
-    toast(`难度筛选：${labels[level]}，共 ${vis} 道题`, 'info');
+    toast('难度筛选：' + selected + '，共 ' + vis + ' 道题', 'info');
   }
 }
 
@@ -2666,7 +2697,7 @@ function reset() {
   sessionStorage.removeItem('tiku_session');
   window._activeSyllabusType = null;  // 重置考纲类型，下次由文件内容决定
   sessionId=null; groups=[]; allQuestions=[]; selNums.clear();
-  filteredNums=null; activeDiffFilter=0; thumbQ=[]; thumbIng=0; activeGIdx=0;
+  filteredNums=null; activeDiffFilter=0; activeDiffSet=new Set(); thumbQ=[]; thumbIng=0; activeGIdx=0;
   document.getElementById('diffFilterWrap').style.display='none';
   // 重置难度筛选按钮状态
   document.querySelectorAll('.diff-star-btn').forEach(b => b.classList.remove('active'));
@@ -2932,6 +2963,45 @@ function replaceQuestionImage(file) {
   reader.readAsDataURL(file);
   // 清空 input，允许重复选同一文件
   document.getElementById('replaceImgInput').value = '';
+}
+
+// ── 替换答案图片 ──
+function replaceAnswerImage(file) {
+  if (!file) return;
+  const uid = _editMeta._uid;
+  if (!uid) return;
+  let q;
+  if (uid.startsWith('s')) {
+    const seq = +uid.slice(1);
+    q = allQuestions.find(x => x._seq === seq);
+  } else {
+    const [gi, qn] = uid.split('_').map(Number);
+    q = allQuestions.find(x => x.gIdx === gi && x.q_num === qn);
+  }
+  if (!q) { toast('找不到题目数据', 'err'); return; }
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const dataUrl = ev.target.result;
+    const b64 = dataUrl.split(',')[1] || '';
+    // 更新内存中的答案图片（兼容两种字段名）
+    q.answer_b64 = b64;
+    q._answer_b64 = b64;
+    // 刷新弹框答案预览区
+    const ansImg       = document.getElementById('editAnsImg');
+    const ansWrap      = document.getElementById('editAnsWrap');
+    const ansToggleBtn = document.getElementById('editAnsToggleBtn');
+    if (ansImg) {
+      ansImg.src = dataUrl;
+      ansImg.style.display = '';
+    }
+    if (ansWrap)      ansWrap.style.display = '';
+    if (ansToggleBtn) ansToggleBtn.style.display = '';
+    toast('✅ 答案已替换，保存题册后永久生效', 'ok');
+  };
+  reader.readAsDataURL(file);
+  // 清空 input，允许重复选同一文件
+  document.getElementById('replaceAnsInput').value = '';
 }
 
 function _renderEditTopicTree(treeWrap) {
