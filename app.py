@@ -6425,7 +6425,7 @@ def library_save():
                 try:
                     img_bytes, w, h = crop_question_image(
                         doc, questions_meta, q_idx,
-                        dpi=150, paper_type=paper_type
+                        dpi=300, paper_type=paper_type
                     )
                     img_file = f'q_{i+1:03d}.jpg'
                     # PNG -> JPEG
