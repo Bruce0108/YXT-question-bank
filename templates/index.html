@@ -558,6 +558,11 @@
         <option value="diff_asc">难度 低→高</option>
         <option value="diff_desc">难度 高→低</option>
       </select>
+      <!-- 二级排序（动态显隐） -->
+      <span id="subSortArrow" style="display:none;font-size:11px;color:var(--g400);margin:0 2px">›</span>
+      <select id="subSortSel" onchange="setSubSortOrder(this.value)"
+              style="display:none;font-size:11px;border:1px solid #a5b4fc;border-radius:6px;padding:3px 6px;background:#eef2ff;color:#4338ca;cursor:pointer;font-weight:500">
+      </select>
       <!-- 全局答案切换 -->
       <div id="toggleAllAnsWrap" style="display:none">
         <button id="btnToggleAllAns" onclick="toggleAllAnswers()">👁 显示所有答案</button>
@@ -1088,7 +1093,12 @@ let activeDiffFilter = 0;  // 0 = all（旧字段，保留兼容）
 let activeDiffSet = new Set();  // 空 = 不限制，否则含所选星级
 
 // ── sort order ──
-let sortOrder = 'default';  // 'default' | 'chapter' | 'diff_asc' | 'diff_desc'
+let sortOrder    = 'default';  // 'default' | 'chapter' | 'diff_asc' | 'diff_desc'
+let subSortOrder = 'none';     // 'none' | 'diff_asc' | 'diff_desc' | 'chapter'
+// subSortOrder 含义：
+//   一级=chapter   → sub 可选 diff_asc / diff_desc（章节内按难度排）
+//   一级=diff_*    → sub 可选 chapter（相同难度内按章节排）
+//   一级=default   → sub 无意义，始终 none
 
 // 章节排序用的 ID 序列（从考纲加载）
 const _CHAPTER_ORDER = [];
@@ -1632,14 +1642,74 @@ function getVisibleQuestions() {
   if (activeDiffSet.size > 0) {
     qs = qs.filter(q => activeDiffSet.has(q.difficulty));
   }
-  // 排序
-  if (sortOrder === 'chapter') {
-    qs = _sortByChapter(qs);
-  } else if (sortOrder === 'diff_asc') {
-    qs = qs.sort((a, b) => (a.difficulty || 99) - (b.difficulty || 99));
-  } else if (sortOrder === 'diff_desc') {
-    qs = qs.sort((a, b) => (b.difficulty || 0) - (a.difficulty || 0));
+  // ── 排序（一级 + 二级）──
+  // 辅助：获取章节排序键（供比较器复用）
+  function _getChapterId(q) {
+    const topics = Array.isArray(q.topics) ? q.topics : [];
+    if (!topics.length) return 'ZZZ';
+    const core = topics.find(t => t.is_core);
+    const best = core || topics[0];
+    return String(best.id || '').replace(/\.\d+$/, '');
   }
+  function _chapterKey(chId) {
+    const m = chId.match(/^([A-Za-z]+\d+)-(\d+)/);
+    if (!m) return [chId, 0];
+    return [m[1], parseInt(m[2])];
+  }
+  function _cmpChapter(a, b) {
+    const ca = _getChapterId(a), cb = _getChapterId(b);
+    if (ca === cb) return (a.q_num || 0) - (b.q_num || 0);
+    const [ua, na] = _chapterKey(ca);
+    const [ub, nb] = _chapterKey(cb);
+    if (ua !== ub) return ua < ub ? -1 : 1;
+    return na - nb;
+  }
+  function _cmpDiffAsc(a, b)  { return (a.difficulty || 99) - (b.difficulty || 99); }
+  function _cmpDiffDesc(a, b) { return (b.difficulty || 0)  - (a.difficulty || 0);  }
+
+  if (sortOrder === 'chapter') {
+    if (subSortOrder === 'diff_asc') {
+      // 一级章节 → 二级难度升序：先按章节，同章节内按难度升序
+      qs = qs.sort((a, b) => {
+        const c = _cmpChapter(a, b);
+        if (c !== 0) return c;
+        return _cmpDiffAsc(a, b);
+      });
+    } else if (subSortOrder === 'diff_desc') {
+      // 一级章节 → 二级难度降序
+      qs = qs.sort((a, b) => {
+        const c = _cmpChapter(a, b);
+        if (c !== 0) return c;
+        return _cmpDiffDesc(a, b);
+      });
+    } else {
+      // 纯章节排序（原逻辑）
+      qs = _sortByChapter(qs);
+    }
+  } else if (sortOrder === 'diff_asc') {
+    if (subSortOrder === 'chapter') {
+      // 一级难度升序 → 二级章节：相同难度内按章节
+      qs = qs.sort((a, b) => {
+        const d = _cmpDiffAsc(a, b);
+        if (d !== 0) return d;
+        return _cmpChapter(a, b);
+      });
+    } else {
+      qs = qs.sort(_cmpDiffAsc);
+    }
+  } else if (sortOrder === 'diff_desc') {
+    if (subSortOrder === 'chapter') {
+      // 一级难度降序 → 二级章节
+      qs = qs.sort((a, b) => {
+        const d = _cmpDiffDesc(a, b);
+        if (d !== 0) return d;
+        return _cmpChapter(a, b);
+      });
+    } else {
+      qs = qs.sort(_cmpDiffDesc);
+    }
+  }
+  // sortOrder === 'default'：保持原顺序，无二级排序
   return qs;
 }
 
@@ -1674,10 +1744,58 @@ function _sortByChapter(qs) {
 
 function setSortOrder(val) {
   sortOrder = val;
+  // 切换一级时重置二级
+  subSortOrder = 'none';
+  _updateSubSortUI();
   renderGrid();
-  toast(val === 'default' ? '默认顺序' :
-        val === 'chapter' ? '已按章节顺序排列' :
-        val === 'diff_asc' ? '已按难度从低到高排列' : '已按难度从高到低排列', 'info');
+  const msg = val === 'default'    ? '默认顺序' :
+              val === 'chapter'    ? '已按章节顺序排列' :
+              val === 'diff_asc'   ? '已按难度从低到高排列' :
+                                     '已按难度从高到低排列';
+  toast(msg, 'info');
+}
+
+function setSubSortOrder(val) {
+  subSortOrder = val;
+  renderGrid();
+  const labels = {
+    none:      '无二级排序',
+    diff_asc:  '章节内 难度低→高',
+    diff_desc: '章节内 难度高→低',
+    chapter:   '相同难度内 按章节',
+  };
+  if (val !== 'none') toast('二级排序：' + (labels[val] || val), 'info');
+}
+
+// 根据当前一级排序更新二级排序 select 的可见性和选项
+function _updateSubSortUI() {
+  const arrow  = document.getElementById('subSortArrow');
+  const sel    = document.getElementById('subSortSel');
+  if (!arrow || !sel) return;
+
+  if (sortOrder === 'chapter') {
+    // 章节内可以按难度二次排序
+    sel.innerHTML =
+      '<option value="none">章节内排列…</option>' +
+      '<option value="diff_asc">↑ 难度 低→高</option>' +
+      '<option value="diff_desc">↓ 难度 高→低</option>';
+    sel.value = subSortOrder !== 'none' ? subSortOrder : 'none';
+    arrow.style.display = '';
+    sel.style.display   = '';
+  } else if (sortOrder === 'diff_asc' || sortOrder === 'diff_desc') {
+    // 相同难度内可以按章节二次排序
+    sel.innerHTML =
+      '<option value="none">同难度内排列…</option>' +
+      '<option value="chapter">按章节顺序</option>';
+    sel.value = subSortOrder === 'chapter' ? 'chapter' : 'none';
+    arrow.style.display = '';
+    sel.style.display   = '';
+  } else {
+    // default：无二级排序
+    arrow.style.display = 'none';
+    sel.style.display   = 'none';
+    subSortOrder = 'none';
+  }
 }
 
 function renderGrid() {
@@ -2707,6 +2825,11 @@ function reset() {
   window._activeSyllabusType = null;  // 重置考纲类型，下次由文件内容决定
   sessionId=null; groups=[]; allQuestions=[]; selNums.clear();
   filteredNums=null; activeDiffFilter=0; activeDiffSet=new Set(); thumbQ=[]; thumbIng=0; activeGIdx=0;
+  // 重置排序
+  sortOrder = 'default'; subSortOrder = 'none';
+  const _sortSel = document.getElementById('sortOrderSel');
+  if (_sortSel) _sortSel.value = 'default';
+  _updateSubSortUI();
   document.getElementById('diffFilterWrap').style.display='none';
   // 重置难度筛选按钮状态
   document.querySelectorAll('.diff-star-btn').forEach(b => b.classList.remove('active'));
@@ -3767,13 +3890,12 @@ function _applyLoadedWorkbook(d) {
 
   // 恢复排序
   const savedSort = d.sort_order || 'default';
-  if (savedSort !== 'default') {
-    sortOrder = savedSort;
-    // 更新排序按钮 UI
-    document.querySelectorAll('.sort-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.sort === savedSort);
-    });
-  }
+  sortOrder    = savedSort;
+  subSortOrder = 'none';
+  // 同步一级排序 select DOM
+  const _sSel = document.getElementById('sortOrderSel');
+  if (_sSel) _sSel.value = savedSort;
+  _updateSubSortUI();
 
   renderGrid();
   renderSyllabusCard();
