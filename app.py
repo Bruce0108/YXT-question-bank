@@ -653,7 +653,7 @@ def _find_content_bottom(page, ph, margin_bottom=30):
     return min(best_bottom + 10, ph - 5)
 
 
-def _find_question_stem_bottom(page, ph, paper_type='structured'):
+def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
     """
     通用题干结束位置检测：找到题目内容（题干 + 图表 + 子题）的真正底部，
     截止到答题区（密集横线/空白写答区）开始之前。
@@ -661,11 +661,15 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
     适用于 Cambridge structured / Edexcel 大题（paper_type != 'edexcel_maths'）。
     Edexcel Maths 有专用函数 _find_edexcel_maths_question_bottom，不使用此函数。
 
+    参数：
+      y_min：若指定，只考虑 y >= y_min 的答题区文字标志（用于排除 Section header 中的全局指令）
+
     核心策略（按优先级）：
     1. 横线检测（最可靠，分两档）：
        - 单条超宽横线（>70% 页宽）：这本身就是答题区起始，立即截止
        - 连续2条普通宽横线（>30% 页宽，间距<32pt）：密集区起始，截止
     2. 答题区文字标志：Answer space / Write your answer / Do not write here 等
+       （仅当 y >= y_min 时生效，避免 Section header 全局指令误触发）
     3. marks 标记辅助：若 marks 紧贴 cut_y 之前，以 marks y1+8 为下界（防截断）
     4. fallback：取所有非横线、非答题提示的最后一个内容块 y1
     """
@@ -754,9 +758,11 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
                             normal_hlines.append(mid_y)
 
         # 档位1：超宽单条横线 → 直接截止（答题区起始最可靠信号）
-        if wide_hlines:
-            wide_hlines.sort()
-            hline_start = max(0, wide_hlines[0] - 6)
+        # 过滤：排除 y > ph - 60 的底部页脚装饰线（Edexcel 每页底部都有一条跨页分割线）
+        wide_hlines_content = [y for y in wide_hlines if y < ph - 60]
+        if wide_hlines_content:
+            wide_hlines_content.sort()
+            hline_start = max(0, wide_hlines_content[0] - 6)
 
         # 档位2：普通宽线，只要有连续2条（间距<32pt）即触发
         # ── 修复：排除数学/物理函数图网格线 ──
@@ -819,6 +825,11 @@ def _find_question_stem_bottom(page, ph, paper_type='structured'):
         if btype != 0:
             continue
         if y0 < 40 or y0 > ph - 20:
+            continue
+        # y_min 过滤：忽略 y < y_min 的答题区标志
+        # 作用：排除 Section header 中的全局性指令（如 "Write your answer in the space provided."）
+        # 这类指令出现在页面顶部（y≈115），属于整页通用说明，不是具体题目的答题区起点
+        if y_min is not None and y0 < y_min:
             continue
         ts = txt.strip()
         if ts and ANSWERZONE_RE.match(ts):
@@ -5584,6 +5595,74 @@ def _draw_header(page, x0, y0, x1, label, header_h, font_sz):
     pass  # Request 1: 删除每题蓝色标题栏
 
 
+def _is_econ_dotted_answer_page(page, ph):
+    """
+    检测 Edexcel Economics 结构题的答题页（学生写答区）。
+    这类页面的特征：含大量 dotted lines "....................."（点线），
+    这是学生手写答题区，不是题目内容。
+
+    用于跳过 Section B/C 中介于首页（题干 overview）和末页之间的纯答题页。
+    判断条件：页面正文区域内 dotted line 块数量 >= 4
+    （Q7等单页题虽然也有 dotted lines，但它们是 pg_start==pg_end，不会触发此判断）
+    """
+    try:
+        blocks = page.get_text('blocks')
+        dotted_count = 0
+        for b in blocks:
+            x0, y0, x1, y1, txt, bno, btype = b
+            if btype != 0:
+                continue
+            if y0 < 40 or y0 > ph - 40:
+                continue
+            ts = txt.strip()
+            # 点线判定：长度 >= 15 且点号占比 > 80%
+            if len(ts) >= 15 and ts.count('.') / len(ts) > 0.80:
+                dotted_count += 1
+        return dotted_count >= 4
+    except Exception:
+        return False
+
+
+def _has_question_content_in_range(page, y_min, y_max):
+    """
+    检测页面在 [y_min, y_max] 范围内是否有属于具体题目的文字内容。
+    排除 Section header 类全局指令（SECTION X / Answer ONE question / Write your answer...）。
+    用于判断末页（pg_end）上是否有当前题的实质内容，避免把纯 Section header 页误纳入切片。
+
+    返回 True 表示有有效的题目内容；False 表示该区域只有 Section header 或空白。
+    """
+    SECTION_HEADER_RE = re.compile(
+        r'^(SECTION\s+[A-Z]|Answer\s+(ALL|ONE|TWO|THREE)\s+question|'
+        r'Write\s+your\s+answer|Study\s+(Figure|Extract)|'
+        r'EITHER|OR)\b',
+        re.IGNORECASE
+    )
+    SKIP_RE = re.compile(
+        r'^(DO NOT WRITE|Turn over|©|\d{1,4}$|\s*$)',
+        re.IGNORECASE
+    )
+    try:
+        blocks = page.get_text('blocks')
+        for b in blocks:
+            x0, y0, x1, y1, txt, bno, btype = b
+            if btype != 0:
+                continue
+            if y0 < y_min or y0 >= y_max:
+                continue
+            ts = txt.strip()
+            if not ts:
+                continue
+            if SKIP_RE.match(ts):
+                continue
+            if SECTION_HEADER_RE.match(ts):
+                continue
+            # 有非 header、非 skip 的内容 → 有效题目内容
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _collect_question_slices(src_doc, questions, q_idx, paper_type):
     """
     返回题目所跨的"源页片段"列表，每项：
@@ -5700,6 +5779,18 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
         if pg_i != pg_start and pg_i != pg_end:
             if _is_answer_writing_page(page):
                 continue
+            # edexcel_economics 专项：跳过含大量点线答题区的中间页
+            # Section B/C 结构题的 answer pages 含密集 dotted lines "...............",
+            # 这些是学生答题区，不是题目内容，应跳过（首页和末页除外）
+            if paper_type == 'edexcel_economics':
+                if _is_econ_dotted_answer_page(page, ph):
+                    continue
+
+        # edexcel_economics 专项：pg_end（非首页）如果是纯答题虚线页，也跳过
+        # Section D essay题：Q13/Q14 只截取 page 22 的题干，后续 answer pages 均跳过
+        if pg_i == pg_end and pg_i != pg_start and paper_type == 'edexcel_economics':
+            if _is_econ_dotted_answer_page(page, ph):
+                continue
 
         if is_edexcel:
             left, right = 36, min(pw - 36, 550)   # 避开 Edexcel 两侧装饰条
@@ -5708,18 +5799,37 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
 
         if pg_i == pg_start and pg_i == pg_end:
             # 同一页：先用题干底部检测，再和 y_end 取 min（确保不含下一题）
+            # 传入 y_min=y_top，让 _find_question_stem_bottom 忽略 y_top 以上的 answer-zone 标志
+            # （Section header 全局指令如 "Write your answer..." 在 y≈116，位于题目起始之上）
             top = y_top
-            stem_bottom = _find_question_stem_bottom(page, ph, paper_type)
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type, y_min=y_top)
             if y_end is not None:
-                bottom = min(stem_bottom, min(ph, y_end))
+                if stem_bottom <= y_top:
+                    # stem_bottom 仍低于题目起始（极端情况：页面无任何 answer-zone 信号且 fallback 失效）
+                    # → 直接用 y_end 作为本题底部
+                    bottom = min(ph, y_end)
+                else:
+                    bottom = min(stem_bottom, min(ph, y_end))
             else:
-                bottom = stem_bottom
+                if stem_bottom <= y_top:
+                    # 无下一题且 stem_bottom 异常 → fallback 到页面内容底部
+                    bottom = ph - 25
+                else:
+                    bottom = stem_bottom
         elif pg_i == pg_start:
             # 首页：从题号到题干底部（不含本页的答题区）
             # 同时：如果下一题也在本页（pg_end==pg_start 已处理），此处 pg_end>pg_start，
             # 首页的 stem_bottom 不受 y_end 约束（y_end 在其他页）
+            # 传入 y_min=y_top，排除题目起始以上的 Section header 全局指令
             top    = y_top
-            bottom = _find_question_stem_bottom(page, ph, paper_type)
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type, y_min=y_top)
+            if stem_bottom <= y_top:
+                # stem_bottom 异常（排除了 header 指令后 fallback 扫描内容块）
+                # 直接用内容块扫描的 fallback 值（_find_question_stem_bottom 已尝试过）
+                # 此时 stem_bottom 应该是 ph-25（_find_question_stem_bottom fallback），保留
+                bottom = stem_bottom if stem_bottom > y_top + 10 else ph - 25
+            else:
+                bottom = stem_bottom
         elif pg_i == pg_end:
             # 末页：从页顶到 min(题干底部, 下一题题号)
             top = 50 if is_edexcel else 55
@@ -5727,9 +5837,14 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
             if y_end is not None:
                 # 末页有 y_end（下一题在此页）：取两者中更小的，防止截入下一题
                 bottom = min(stem_bottom, min(ph, y_end))
-                # ★ 修复：若下一题紧接页面顶部（y_end 极小），该页几乎没有当前题内容，跳过
+                # ★ 修复1：若下一题紧接页面顶部（y_end 极小），该页几乎没有当前题内容，跳过
                 if pg_i != pg_start and bottom <= top + 45:
                     continue
+                # ★ 修复2：对 edexcel_economics，若当前题在此末页上无实质内容（只有 Section header），跳过
+                # 判断标准：top 到 y_end 之间不存在属于当前题的文字块（排除 Section header 类）
+                if pg_i != pg_start and paper_type == 'edexcel_economics':
+                    if not _has_question_content_in_range(page, top, y_end):
+                        continue
             else:
                 bottom = stem_bottom
         else:
