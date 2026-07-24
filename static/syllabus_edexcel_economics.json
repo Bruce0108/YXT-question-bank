@@ -1,0 +1,287 @@
+{
+  "exam_board": "Pearson Edexcel",
+  "subject": "Economics",
+  "code": "WEC11/WEC12/WEC13/WEC14",
+  "units": ["U1", "U2", "U3", "U4"],
+  "topics": [
+    {
+      "id": "U1-1",
+      "unit": "U1",
+      "title": "Introductory concepts",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U1-1.1", "title": "The nature of economics and models"},
+        {"id": "U1-1.2", "title": "Positive and normative economics"},
+        {"id": "U1-1.3", "title": "Scarcity, opportunity cost and resources"},
+        {"id": "U1-1.4", "title": "Production possibility frontiers (PPF)"},
+        {"id": "U1-1.5", "title": "Specialisation, division of labour and money"},
+        {"id": "U1-1.6", "title": "Free market, mixed and command economies"}
+      ]
+    },
+    {
+      "id": "U1-2",
+      "unit": "U1",
+      "title": "Consumer behaviour and demand",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U1-2.1", "title": "Rational decision making and utility maximisation"},
+        {"id": "U1-2.2", "title": "The demand curve and shifts in demand"},
+        {"id": "U1-2.3", "title": "Price elasticity of demand (PED)"},
+        {"id": "U1-2.4", "title": "Income elasticity of demand (YED)"},
+        {"id": "U1-2.5", "title": "Cross elasticity of demand (XED)"}
+      ]
+    },
+    {
+      "id": "U1-3",
+      "unit": "U1",
+      "title": "Supply",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U1-3.1", "title": "The supply curve and shifts in supply"},
+        {"id": "U1-3.2", "title": "Price elasticity of supply (PES)"}
+      ]
+    },
+    {
+      "id": "U1-4",
+      "unit": "U1",
+      "title": "Price determination",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U1-4.1", "title": "Market equilibrium and market forces"},
+        {"id": "U1-4.2", "title": "Consumer and producer surplus"},
+        {"id": "U1-4.3", "title": "Functions of the price mechanism"},
+        {"id": "U1-4.4", "title": "Indirect taxes and subsidies"}
+      ]
+    },
+    {
+      "id": "U1-5",
+      "unit": "U1",
+      "title": "Market failure",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U1-5.1", "title": "Sources and causes of market failure"},
+        {"id": "U1-5.2", "title": "Positive and negative externalities"},
+        {"id": "U1-5.3", "title": "Public goods and the free-rider problem"},
+        {"id": "U1-5.4", "title": "Imperfect market information and asymmetric information"},
+        {"id": "U1-5.5", "title": "Moral hazard"},
+        {"id": "U1-5.6", "title": "Speculation and market bubbles"}
+      ]
+    },
+    {
+      "id": "U1-6",
+      "unit": "U1",
+      "title": "Government intervention in markets",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U1-6.1", "title": "Purpose and methods of government intervention"},
+        {"id": "U1-6.2", "title": "Government failure"}
+      ]
+    },
+    {
+      "id": "U2-1",
+      "unit": "U2",
+      "title": "Measures of economic performance",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U2-1.1", "title": "Economic growth: GDP and GNI"},
+        {"id": "U2-1.2", "title": "Inflation, deflation and disinflation (CPI)"},
+        {"id": "U2-1.3", "title": "Employment and unemployment"},
+        {"id": "U2-1.4", "title": "Balance of payments (current account)"}
+      ]
+    },
+    {
+      "id": "U2-2",
+      "unit": "U2",
+      "title": "Aggregate demand (AD)",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U2-2.1", "title": "Characteristics and components of AD"},
+        {"id": "U2-2.2", "title": "Consumption (C) and savings ratio"},
+        {"id": "U2-2.3", "title": "Investment (I)"},
+        {"id": "U2-2.4", "title": "Government expenditure (G)"},
+        {"id": "U2-2.5", "title": "Net trade balance (X-M)"}
+      ]
+    },
+    {
+      "id": "U2-3",
+      "unit": "U2",
+      "title": "Aggregate supply (AS)",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U2-3.1", "title": "Characteristics of AS curve"},
+        {"id": "U2-3.2", "title": "Short-run aggregate supply (SRAS)"},
+        {"id": "U2-3.3", "title": "Long-run aggregate supply (LRAS): Keynesian vs Classical"}
+      ]
+    },
+    {
+      "id": "U2-4",
+      "unit": "U2",
+      "title": "National income",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U2-4.1", "title": "Circular flow of income"},
+        {"id": "U2-4.2", "title": "Injections and withdrawals"},
+        {"id": "U2-4.3", "title": "Equilibrium level of real output"},
+        {"id": "U2-4.4", "title": "The multiplier and marginal propensities"}
+      ]
+    },
+    {
+      "id": "U2-5",
+      "unit": "U2",
+      "title": "Economic growth",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U2-5.1", "title": "Causes of actual and potential economic growth"},
+        {"id": "U2-5.2", "title": "Benefits of economic growth"},
+        {"id": "U2-5.3", "title": "Costs of economic growth"},
+        {"id": "U2-5.4", "title": "Output gaps (positive and negative)"}
+      ]
+    },
+    {
+      "id": "U2-6",
+      "unit": "U2",
+      "title": "Macroeconomic objectives and policies",
+      "level": "IAS",
+      "subtopics": [
+        {"id": "U2-6.1", "title": "Macroeconomic objectives and conflicts"},
+        {"id": "U2-6.2", "title": "Phillips curve and inflation-unemployment trade-off"},
+        {"id": "U2-6.3", "title": "Supply-side policies"},
+        {"id": "U2-6.4", "title": "Fiscal policy"},
+        {"id": "U2-6.5", "title": "Monetary policy and central banks"}
+      ]
+    },
+    {
+      "id": "U3-1",
+      "unit": "U3",
+      "title": "Types and sizes of businesses",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U3-1.1", "title": "Types of businesses (private, public, co-operatives)"},
+        {"id": "U3-1.2", "title": "Size of businesses, growth and mergers"},
+        {"id": "U3-1.3", "title": "Business objectives and principal-agent problem"}
+      ]
+    },
+    {
+      "id": "U3-2",
+      "unit": "U3",
+      "title": "Revenue, costs and profits",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U3-2.1", "title": "Revenue: total, average and marginal revenue"},
+        {"id": "U3-2.2", "title": "Costs: short-run and long-run cost curves"},
+        {"id": "U3-2.3", "title": "Economies and diseconomies of scale"},
+        {"id": "U3-2.4", "title": "Normal profit, supernormal profit and losses"}
+      ]
+    },
+    {
+      "id": "U3-3",
+      "unit": "U3",
+      "title": "Market structures and contestability",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U3-3.1", "title": "Efficiency (allocative, productive, dynamic, X-inefficiency)"},
+        {"id": "U3-3.2", "title": "Concentration ratios"},
+        {"id": "U3-3.3", "title": "Perfect competition"},
+        {"id": "U3-3.4", "title": "Monopolistic competition"},
+        {"id": "U3-3.5", "title": "Oligopoly, game theory and collusion"},
+        {"id": "U3-3.6", "title": "Monopoly and price discrimination"},
+        {"id": "U3-3.7", "title": "Monopsony"},
+        {"id": "U3-3.8", "title": "Contestable markets and sunk costs"}
+      ]
+    },
+    {
+      "id": "U3-4",
+      "unit": "U3",
+      "title": "Labour markets",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U3-4.1", "title": "Demand for labour (derived demand)"},
+        {"id": "U3-4.2", "title": "Supply of labour and elasticities"},
+        {"id": "U3-4.3", "title": "Wage rate determination (competitive and non-competitive)"},
+        {"id": "U3-4.4", "title": "Market failure in the labour market (immobility)"}
+      ]
+    },
+    {
+      "id": "U3-5",
+      "unit": "U3",
+      "title": "Government intervention in business",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U3-5.1", "title": "Measures to control monopolies and mergers"},
+        {"id": "U3-5.2", "title": "Measures to promote competition and contestability"},
+        {"id": "U3-5.3", "title": "Government intervention in labour markets"}
+      ]
+    },
+    {
+      "id": "U4-1",
+      "unit": "U4",
+      "title": "Causes and effects of globalisation",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U4-1.1", "title": "Characteristics of globalisation"},
+        {"id": "U4-1.2", "title": "Causes of globalisation and role of TNCs/FDI"},
+        {"id": "U4-1.3", "title": "Benefits and costs of globalisation"}
+      ]
+    },
+    {
+      "id": "U4-2",
+      "unit": "U4",
+      "title": "Trade and the global economy",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U4-2.1", "title": "Specialisation and comparative advantage"},
+        {"id": "U4-2.2", "title": "Patterns and volume of world trade"},
+        {"id": "U4-2.3", "title": "Terms of trade"},
+        {"id": "U4-2.4", "title": "Trade liberalisation and trading blocs (WTO)"},
+        {"id": "U4-2.5", "title": "Restrictions on free trade (tariffs, quotas, subsidies)"}
+      ]
+    },
+    {
+      "id": "U4-3",
+      "unit": "U4",
+      "title": "Balance of payments, exchange rates and competitiveness",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U4-3.1", "title": "Balance of payments (current, capital and financial accounts)"},
+        {"id": "U4-3.2", "title": "Exchange rates (fixed, managed, floating)"},
+        {"id": "U4-3.3", "title": "Marshall-Lerner condition and J-curve effect"},
+        {"id": "U4-3.4", "title": "International competitiveness"}
+      ]
+    },
+    {
+      "id": "U4-4",
+      "unit": "U4",
+      "title": "Poverty and inequality",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U4-4.1", "title": "Absolute and relative poverty"},
+        {"id": "U4-4.2", "title": "Inequality: Lorenz curve and Gini coefficient"},
+        {"id": "U4-4.3", "title": "Causes and impacts of inequality"}
+      ]
+    },
+    {
+      "id": "U4-5",
+      "unit": "U4",
+      "title": "The role of the state in the macroeconomy",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U4-5.1", "title": "Public expenditure (capital, current, transfer payments)"},
+        {"id": "U4-5.2", "title": "Taxation (direct, indirect, progressive, regressive, Laffer curve)"},
+        {"id": "U4-5.3", "title": "Public sector borrowing and national debt"},
+        {"id": "U4-5.4", "title": "Macroeconomic policies (fiscal, monetary, supply-side)"}
+      ]
+    },
+    {
+      "id": "U4-6",
+      "unit": "U4",
+      "title": "Growth and development",
+      "level": "IAL",
+      "subtopics": [
+        {"id": "U4-6.1", "title": "Measures of economic development (HDI and others)"},
+        {"id": "U4-6.2", "title": "Constraints on growth and development"},
+        {"id": "U4-6.3", "title": "Market-orientated and interventionist strategies"},
+        {"id": "U4-6.4", "title": "Role of international institutions (World Bank, IMF, NGOs)"}
+      ]
+    }
+  ]
+}

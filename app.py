@@ -396,13 +396,16 @@ def detect_edexcel_maths_unit(doc) -> str:
 
 def detect_paper_source(doc) -> str:
     """
-    返回 'cambridge'、'edexcel' 或 'edexcel_maths'。
+    返回 'cambridge'、'edexcel'、'edexcel_maths' 或 'edexcel_economics'。
     通过封面/前几页文字关键词判断。
-    Edexcel Maths (IAL Pure/Further Math) 优先在 edexcel 之前检测。
+    优先级：edexcel_economics > edexcel_maths > edexcel > cambridge
     """
     for pg_i in range(min(3, doc.page_count)):
         text = doc[pg_i].get_text()
-        # 优先检测 Edexcel Maths：WMA/WFM/WST/WME/WDM 系列试卷
+        # 最高优先：Edexcel Economics IAL 试卷代码 WEC11/WEC12/WEC13/WEC14
+        if re.search(r'WEC1[1-4]', text):
+            return 'edexcel_economics'
+        # 次优：Edexcel Maths：WMA/WFM/WST/WME/WDM 系列试卷
         if re.search(r'WMA\d{2}/\d{2}|WFM\d{2}/\d{2}|WPM\d{2}/\d{2}|WST\d{2}/\d{2}|WME\d{2}/\d{2}|WDM\d{2}/\d{2}', text):
             return 'edexcel_maths'
         if ('Pure Mathematics' in text or 'Further Mathematics' in text or
@@ -410,6 +413,10 @@ def detect_paper_source(doc) -> str:
            ('Pearson' in text or 'Edexcel' in text):
             if re.search(r'P[1-4]|FP[12]|S[12]|M[12]|D1|Unit [1-4]|Pure Math', text):
                 return 'edexcel_maths'
+        # Edexcel Economics 补充检测（文字描述）
+        if ('Economics' in text) and ('Pearson' in text or 'Edexcel' in text):
+            if re.search(r'Markets in action|Macroeconomic performance|Business behaviour|Developments in the global economy|UNIT 1|UNIT 2|UNIT 3|UNIT 4', text):
+                return 'edexcel_economics'
 
     keywords_edexcel = ['Pearson', 'Edexcel', 'GCSE', 'IAL', 'International Advanced',
                         'WPH', 'WBI', 'WCH', 'WMA', 'Total for Question']
@@ -533,11 +540,12 @@ def detect_edexcel_maths_questions(doc):
 def detect_paper_type(doc):
     """
     自动判断试卷类型，返回：
-    - 'mcq'           : Cambridge 纯选择题
-    - 'structured'    : Cambridge 大题
-    - 'edexcel_mcq'   : Edexcel 纯选择题（仅含Section A选择题）
-    - 'edexcel'       : Edexcel 大题 / 混合题型
-    - 'edexcel_maths' : Edexcel IAL Pure/Further Math (P1–P4)
+    - 'mcq'                 : Cambridge 纯选择题
+    - 'structured'          : Cambridge 大题
+    - 'edexcel_mcq'         : Edexcel 纯选择题（仅含Section A选择题）
+    - 'edexcel'             : Edexcel 大题 / 混合题型
+    - 'edexcel_maths'       : Edexcel IAL Pure/Further Math (P1–P4)
+    - 'edexcel_economics'   : Edexcel IAL Economics (WEC11/12/13/14)
 
     Edexcel 判断逻辑（改进版）：
       1. 如果发现 SECTION B 或 Section B → edexcel（混合卷）
@@ -547,6 +555,10 @@ def detect_paper_type(doc):
       5. 默认 → edexcel（保守，避免漏识别大题）
     """
     source = detect_paper_source(doc)
+
+    # Edexcel Economics (IAL) — 直接返回专用类型
+    if source == 'edexcel_economics':
+        return 'edexcel_economics'
 
     # Edexcel Maths (IAL Pure/Further) — 直接返回专用类型
     if source == 'edexcel_maths':
@@ -950,7 +962,7 @@ def crop_question_image(doc, questions, q_idx, dpi=150, paper_type='mcq'):
         right = pw - 15
 
         # Edexcel 大题：检测两侧装饰条
-        if paper_type in ('edexcel', 'edexcel_mcq'):
+        if paper_type in ('edexcel', 'edexcel_mcq', 'edexcel_economics'):
             left, right = 36, min(pw - 36, 550)
 
         if pg_i == pg_start and pg_i == pg_end:
@@ -1978,6 +1990,14 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
 
     if syllabus_type == 'cambridge':
         rules = _TOPIC_RULES
+    elif syllabus_type == 'edexcel_economics':
+        # Edexcel Economics：使用经济学章节规则
+        if unit_filter:
+            prefix = unit_filter + '-'   # 'U1-'
+            rules = [(sid, req, bon) for sid, req, bon in _ECONOMICS_CHAPTER_RULES
+                     if sid.startswith(prefix)]
+        else:
+            rules = _ECONOMICS_CHAPTER_RULES
     else:
         # Edexcel Maths：使用章节级别规则
         if unit_filter:
@@ -2011,9 +2031,12 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
             scores[sid] = score * weight
 
     # 加载考纲标题映射
-    if syllabus_type == 'edexcel_maths':
-        syllabus = _load_edexcel_maths_syllabus()
-        # Edexcel Maths：构建章节 title_map 和 subtopic 结构
+    if syllabus_type in ('edexcel_maths', 'edexcel_economics'):
+        if syllabus_type == 'edexcel_maths':
+            syllabus = _load_edexcel_maths_syllabus()
+        else:
+            syllabus = _load_edexcel_economics_syllabus()
+        # 构建章节 title_map 和 subtopic 结构
         title_map: dict[str, str] = {}     # chapter_id → title
         chapter_subtopics: dict[str, list] = {}  # chapter_id → [{id, title}]
         if syllabus:
@@ -2401,7 +2424,193 @@ def _load_edexcel_maths_syllabus():
         return None
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────
+# Edexcel Economics 考纲加载（缓存）
+# ─────────────────────────────────────────
+_edexcel_economics_syllabus_cache = None
+
+def _load_edexcel_economics_syllabus():
+    global _edexcel_economics_syllabus_cache
+    if _edexcel_economics_syllabus_cache is not None:
+        return _edexcel_economics_syllabus_cache
+    path = os.path.join(os.path.dirname(__file__), 'static', 'syllabus_edexcel_economics.json')
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            _edexcel_economics_syllabus_cache = json.load(f)
+        return _edexcel_economics_syllabus_cache
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Edexcel Economics 知识点关键词匹配规则
+# 格式：(topic_id, [必须关键词], [加分关键词])
+# 每命中1个必须关键词+2分，加分关键词+1分
+# ─────────────────────────────────────────────────────────────────────
+_ECONOMICS_CHAPTER_RULES = [
+    # ── Unit 1 ──────────────────────────────────────────────────────
+    ('U1-1', ['ceteris paribus','economic model','positive statement','normative statement',
+              'scarcity','opportunity cost','production possibility','PPF',
+              'specialisation','division of labour','free market','command economy',
+              'mixed economy','renewable resource','non-renewable'],
+             ['economic problem','finite resources','unlimited wants','economic good','free good']),
+    ('U1-2', ['demand','demand curve','shift in demand','consumer surplus',
+              'price elasticity of demand','PED','income elasticity','YED',
+              'cross elasticity','XED','marginal utility','diminishing marginal utility',
+              'rational','utility maximisation','substitute','complement',
+              'normal good','inferior good','income elastic','price inelastic','price elastic'],
+             ['consumer behaviour','habitual','inertia','framing','herding','bias']),
+    ('U1-3', ['supply','supply curve','shift in supply','price elasticity of supply','PES',
+              'indirect tax','specific tax','ad valorem','subsidy','elastic supply',
+              'inelastic supply','short run','long run'],
+             ['technology','natural disaster','producer','cost of production']),
+    ('U1-4', ['equilibrium','market equilibrium','excess demand','excess supply',
+              'price mechanism','consumer surplus','producer surplus',
+              'indirect tax','subsidy','incidence','rationing','signalling','incentive'],
+             ['equilibrium price','equilibrium quantity','market forces','surplus','shortage']),
+    ('U1-5', ['market failure','externality','external cost','external benefit',
+              'social cost','social benefit','private cost','private benefit',
+              'negative externality','positive externality','public good','free rider',
+              'non-rival','non-excludable','asymmetric information','moral hazard',
+              'market bubble','speculation','welfare loss','merit good','demerit good'],
+             ['imperfect information','information gap','insurance','banking','housing']),
+    ('U1-6', ['government intervention','government failure','tradeable pollution permit',
+              'property rights','regulation','maximum price','minimum price',
+              'state provision','regulatory capture','information gap','unintended consequence'],
+             ['greenhouse gas','carbon tax','pollution','health','education','transport']),
+
+    # ── Unit 2 ──────────────────────────────────────────────────────
+    ('U2-1', ['GDP','GNI','gross domestic product','gross national income','economic growth',
+              'inflation','deflation','disinflation','CPI','consumer price index',
+              'unemployment','employment','balance of payments','current account',
+              'real GDP','nominal GDP','per capita','purchasing power parity','PPP',
+              'recession','output gap'],
+             ['living standards','ILO','frictional unemployment','structural unemployment',
+              'demand deficient','real wage','measuring inflation']),
+    ('U2-2', ['aggregate demand','AD curve','consumption','investment','government expenditure',
+              'net exports','X minus M','savings ratio','marginal propensity',
+              'disposable income','interest rate','consumer confidence','wealth effect'],
+             ['C+I+G','component of AD','shift in AD','movement along AD']),
+    ('U2-3', ['aggregate supply','AS curve','SRAS','LRAS','short-run aggregate supply',
+              'long-run aggregate supply','Keynesian','classical','potential output'],
+             ['shift in AS','movement along AS','cost of production','productivity']),
+    ('U2-4', ['circular flow','national income','injection','withdrawal','multiplier',
+              'marginal propensity to consume','MPC','MPS','MPT','MPM',
+              'multiplier formula','equilibrium national output'],
+             ['savings','taxation','imports','exports','investment injection']),
+    ('U2-5', ['actual growth','potential growth','economic growth','output gap',
+              'positive output gap','negative output gap','export-led growth','FDI',
+              'benefits of growth','costs of growth','living standards'],
+             ['innovation','labour force','productivity','environment','inequality']),
+    ('U2-6', ['fiscal policy','monetary policy','supply-side policy','macroeconomic objective',
+              'inflation target','interest rate','quantitative easing','central bank',
+              'government spending','taxation','reflationary','deflationary',
+              'Phillips curve','unemployment inflation trade-off'],
+             ['demand-side policy','lender of last resort','balanced budget',
+              'income equality','balance of payments equilibrium']),
+
+    # ── Unit 3 ──────────────────────────────────────────────────────
+    ('U3-1', ['types of business','private sector','public sector','co-operative',
+              'joint venture','SME','merger','takeover','organic growth',
+              'vertical integration','horizontal integration','conglomerate',
+              'business objective','profit maximisation','revenue maximisation',
+              'sales maximisation','principal-agent','satisficing','divorce of ownership'],
+             ['demerger','constraints on growth','economies of scale business']),
+    ('U3-2', ['total revenue','average revenue','marginal revenue','total cost',
+              'average cost','marginal cost','fixed cost','variable cost',
+              'diminishing returns','law of diminishing returns','economies of scale',
+              'diseconomies of scale','minimum efficient scale','internal economies',
+              'external economies','normal profit','supernormal profit','loss',
+              'short-run cost','long-run cost','shutdown point'],
+             ['X-inefficiency','communication problem','coordination problem']),
+    ('U3-3', ['perfect competition','monopolistic competition','oligopoly','monopoly',
+              'monopsony','contestability','sunk cost','barrier to entry',
+              'price discrimination','game theory','collusion','cartel',
+              'price leadership','predatory pricing','limit pricing','concentration ratio',
+              'allocative efficiency','productive efficiency','dynamic efficiency',
+              'natural monopoly','price war','non-price competition'],
+             ['market structure','profit maximising','MR=MC','interdependence',
+              'Nash equilibrium','price maker','price taker']),
+    ('U3-4', ['labour market','demand for labour','supply of labour','wage rate',
+              'derived demand','elasticity of demand for labour','elasticity of supply of labour',
+              'geographical immobility','occupational immobility','equilibrium wage',
+              'public sector wage','trade union'],
+             ['labour mobility','minimum wage','migration','age distribution']),
+    ('U3-5', ['competition policy','merger control','price regulation','profit regulation',
+              'privatisation','deregulation','regulatory authority','regulatory capture',
+              'minimum wage','maximum wage','government intervention business',
+              'discrimination','exploitation','monopsony power'],
+             ['competition commission','anti-trust','quality standard','performance target']),
+
+    # ── Unit 4 ──────────────────────────────────────────────────────
+    ('U4-1', ['globalisation','transnational company','TNC','foreign direct investment','FDI',
+              'trade liberalisation','migration','globalisation cost','globalisation benefit',
+              'transfer pricing','income inequality globalisation'],
+             ['trading bloc','Soviet','opening up China','transport cost','communication']),
+    ('U4-2', ['comparative advantage','absolute advantage','specialisation trade',
+              'terms of trade','trade pattern','free trade','trading bloc',
+              'WTO','world trade organisation','tariff','quota','subsidy domestic',
+              'non-tariff barrier','trade creation','trade diversion',
+              'customs union','common market','free trade area','economic union',
+              'protectionism','infant industry','dumping'],
+             ['gains from trade','restrictions on trade','Prebisch-Singer']),
+    ('U4-3', ['balance of payments','current account','capital account','financial account',
+              'exchange rate','floating exchange rate','fixed exchange rate','managed float',
+              'appreciation','depreciation','devaluation','revaluation',
+              'Marshall-Lerner condition','J-curve','purchasing power parity',
+              'international competitiveness','relative unit labour cost','current account deficit',
+              'current account surplus','speculation currency','capital flight'],
+             ['relative productivity','export price','non-price factor','FDI flow']),
+    ('U4-4', ['absolute poverty','relative poverty','inequality','Lorenz curve',
+              'Gini coefficient','income distribution','wealth inequality','income inequality',
+              'poverty line','aid','debt relief','welfare benefit'],
+             ['education training','structural change','civil war','life expectancy']),
+    ('U4-5', ['public expenditure','government spending','transfer payment','national debt',
+              'fiscal deficit','fiscal surplus','automatic stabiliser','discretionary fiscal',
+              'structural deficit','cyclical deficit','taxation','direct tax','indirect tax',
+              'progressive tax','regressive tax','proportional tax','Laffer curve',
+              'corporation tax','crowding out','debt servicing'],
+             ['capital expenditure','current expenditure','intergenerational equity']),
+    ('U4-6', ['HDI','human development index','developing country','emerging economy',
+              'Harrod-Domar','savings gap','foreign currency gap','primary product dependency',
+              'microfinance','infrastructure development','market-orientated',
+              'interventionist','World Bank','IMF','international monetary fund',
+              'NGO','Lewis model','Lewis dual sector','debt relief','aid'],
+             ['corruption','governance','commodity price','demographic','access to credit']),
+]
+
+
+# 经济学试卷代码 → 单元映射
+_ECONOMICS_CODE_MAP = {
+    'WEC11': 'U1',
+    'WEC12': 'U2',
+    'WEC13': 'U3',
+    'WEC14': 'U4',
+}
+
+
+def detect_edexcel_economics_unit(doc) -> str:
+    """
+    从封面识别 Edexcel IAL 经济学试卷的具体单元。
+    返回：'U1'|'U2'|'U3'|'U4'|'unknown'
+    """
+    for pg_i in range(min(2, doc.page_count)):
+        text = doc[pg_i].get_text()
+        m = re.search(r'WEC1([1-4])', text)
+        if m:
+            return f'U{m.group(1)}'
+        # 通过标题文字识别
+        if 'Markets in action' in text:
+            return 'U1'
+        if 'Macroeconomic performance' in text:
+            return 'U2'
+        if 'Business behaviour' in text:
+            return 'U3'
+        if 'Developments in the global economy' in text:
+            return 'U4'
+    return 'unknown'
 #  Edexcel IAL Maths 题目难度数据库（来源：Examiner Report 关键词分析）
 #  结构：_MATHS_DIFFICULTY_DB[unit_code][(year, q_num)] = 1–5
 #
@@ -2895,7 +3104,29 @@ def get_edexcel_maths_syllabus():
     return jsonify(data)
 
 
-def _is_markscheme_filename(filename: str) -> bool:
+@app.route('/api/syllabus/edexcel_economics', methods=['GET'])
+def get_edexcel_economics_syllabus():
+    """
+    返回 Edexcel IAL Economics 知识库目录。
+    可选 ?unit=U1 过滤，只返回该 unit 的 topics。
+    """
+    data = _load_edexcel_economics_syllabus()
+    if data is None:
+        return jsonify({'error': 'Edexcel Economics 知识库未加载'}), 404
+
+    unit = request.args.get('unit')
+    if unit:
+        import copy
+        filtered = copy.deepcopy(data)
+        filtered['topics'] = [t for t in filtered['topics']
+                               if t.get('unit') == unit]
+        filtered['active_unit'] = unit
+        return jsonify(filtered)
+
+    return jsonify(data)
+
+
+
     """判断文件名是否为 Mark Scheme（支持多种命名格式）"""
     fn = filename.lower()
     return ('markscheme' in fn or 'mark_scheme' in fn or
@@ -3602,10 +3833,13 @@ def upload_multi():
 
             source     = detect_paper_source(doc)
             maths_unit = None
+            econ_unit  = None
             if source == 'edexcel_maths':
                 # 先从文件名取 unit（更可靠），fallback 到内容检测
                 maths_unit = (_extract_unit_from_filename(file.filename) or
                               detect_edexcel_maths_unit(doc))
+            elif source == 'edexcel_economics':
+                econ_unit = detect_edexcel_economics_unit(doc)
 
             # ── Task 2/1: Examiner Report 处理 ──
             if is_report:
@@ -3691,6 +3925,15 @@ def upload_multi():
                     except Exception:
                         q['topics'] = []
                     q['difficulty'] = None
+            elif source == 'edexcel_economics':
+                for q_idx, q in enumerate(questions):
+                    try:
+                        txt = _extract_question_text(doc, questions, q_idx, pt)
+                        q['topics'] = tag_question_topics(txt, 'edexcel_economics',
+                                                          unit_filter=econ_unit)
+                    except Exception:
+                        q['topics'] = []
+                    q['difficulty'] = None
             elif source == 'edexcel_maths':
                 unit_code = _MATHS_UNIT_TO_CODE.get(maths_unit or '', None)
                 for q_idx, q in enumerate(questions):
@@ -3725,6 +3968,7 @@ def upload_multi():
                 'source':          source,
                 'paper_type':      pt,
                 'maths_unit':      maths_unit,
+                'econ_unit':       econ_unit,
                 'exam_date':       exam_date_label,
                 'session':         _extract_exam_session(file.filename),
                 'questions':       questions,
@@ -3989,7 +4233,7 @@ def _detect_questions(doc, paper_type):
     """统一题号检测入口，兼容所有格式"""
     if paper_type == 'mcq':
         return detect_mcq_questions(doc)
-    elif paper_type in ('edexcel', 'edexcel_mcq'):
+    elif paper_type in ('edexcel', 'edexcel_mcq', 'edexcel_economics'):
         return detect_edexcel_questions(doc)
     elif paper_type == 'edexcel_maths':
         return detect_edexcel_maths_questions(doc)
@@ -5078,8 +5322,13 @@ def _lookup_topic_in_syllabus(syllabus, topic_id, title_hint=None):
 
 def _auto_detect_syllabus_type(topic_id):
     """根据 topic_id 格式自动推断大纲类型。"""
-    if topic_id and re.match(r'^[A-Z]\d+-\d+', topic_id):
-        return 'edexcel_maths'
+    if topic_id:
+        # Edexcel Economics: U1-1, U2-3, U3-5, U4-2 等格式
+        if re.match(r'^U[1-4]-\d+', topic_id):
+            return 'edexcel_economics'
+        # Edexcel Maths: P1-1, S1-2, M2-3 等格式
+        if re.match(r'^[A-Z]\d+-\d+', topic_id):
+            return 'edexcel_maths'
     return 'unknown'
 
 
@@ -5437,7 +5686,7 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
         y_end  = None
 
     # Edexcel 有左右两侧的 "DO NOT WRITE" 装饰条，裁掉边缘
-    is_edexcel = paper_type in ('edexcel', 'edexcel_mcq')
+    is_edexcel = paper_type in ('edexcel', 'edexcel_mcq', 'edexcel_economics')
 
     slices = []
     for pg_i in range(pg_start, pg_end + 1):

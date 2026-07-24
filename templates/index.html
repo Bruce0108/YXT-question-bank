@@ -1077,6 +1077,7 @@ let chosenPT    = 'auto';
 let uploadToken = 0;
 let syllabus    = null;    // CIE 9702 知识库
 let mathsSyllabus = null;  // Edexcel Maths 知识库
+let econSyllabus  = null;  // Edexcel Economics 知识库
 let sfLevel     = 'all';   // syllabus filter level
 let thumbQ = [], thumbIng = 0;
 const MAX_CO = 3;
@@ -1155,14 +1156,42 @@ function _restoreSession() {
 function _isMathsGroup(g) {
   if (g.source === 'edexcel_maths') return true;
   if (g.paper_type === 'edexcel_maths') return true;
-  // cloud/workbook: 有 maths_unit 或 题目带有 topics 数据
+  // cloud/workbook: 有 maths_unit 或 题目带有 topics 数据（且不是经济学）
   if (g.source === 'cloud' || g.source === 'workbook') {
     if (g.maths_unit) return true;
-    // 检查是否有任何题目携带了 topics（edexcel_maths 类型特征）
-    if (Array.isArray(g.questions) && g.questions.some(q => q.topics && q.topics.length > 0)) return true;
-    // 检查 allQuestions 中同 gIdx 的题目
+    if (Array.isArray(g.questions) && g.questions.some(q => {
+      if (!q.topics || !q.topics.length) return false;
+      const id = String(q.topics[0].id || q.topics[0].parent_id || '');
+      return id.match(/^[A-Z]\d+-/) && !id.match(/^U[1-4]-/);
+    })) return true;
     const gIdx = groups.indexOf(g);
-    if (gIdx >= 0 && allQuestions.some(q => q.gIdx === gIdx && Array.isArray(q.topics) && q.topics.length > 0)) return true;
+    if (gIdx >= 0 && allQuestions.some(q => {
+      if (q.gIdx !== gIdx || !Array.isArray(q.topics) || !q.topics.length) return false;
+      const id = String(q.topics[0].id || q.topics[0].parent_id || '');
+      return id.match(/^[A-Z]\d+-/) && !id.match(/^U[1-4]-/);
+    })) return true;
+  }
+  return false;
+}
+
+// ── 判断某个 group 是否属于 Edexcel Economics ──
+function _isEconGroup(g) {
+  if (g.source === 'edexcel_economics') return true;
+  if (g.paper_type === 'edexcel_economics') return true;
+  if (g.econ_unit) return true;
+  // cloud/workbook: topics id 以 U1- / U2- / U3- / U4- 开头
+  if (g.source === 'cloud' || g.source === 'workbook') {
+    if (Array.isArray(g.questions) && g.questions.some(q => {
+      if (!q.topics || !q.topics.length) return false;
+      const id = String(q.topics[0].id || q.topics[0].parent_id || '');
+      return /^U[1-4]-/.test(id);
+    })) return true;
+    const gIdx = groups.indexOf(g);
+    if (gIdx >= 0 && allQuestions.some(q => {
+      if (q.gIdx !== gIdx || !Array.isArray(q.topics) || !q.topics.length) return false;
+      const id = String(q.topics[0].id || q.topics[0].parent_id || '');
+      return /^U[1-4]-/.test(id);
+    })) return true;
   }
   return false;
 }
@@ -1205,20 +1234,40 @@ function _loadAllSyllabi() {
   // Edexcel Maths 考纲：根据题目实际涉及的 unit 决定加载哪个 unit
   const mathsGroups = groups.filter(g => _isMathsGroup(g));
   if (mathsGroups.length > 0) {
-    // 优先从 groups.maths_unit 收集，再从 topics 推导补充
     const unitSet = _getActiveUnits();
     const units = [...unitSet].filter(Boolean);
-
     if (units.length === 1) {
-      // 单一 unit：加载该 unit 的过滤考纲
       const url = `/api/syllabus/edexcel_maths?unit=${encodeURIComponent(units[0])}`;
       fetch(url).then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
     } else if (units.length > 1) {
-      // 多个不同 unit：加载全部考纲（后续由 renderTopicTree 按 activeUnits 过滤显示）
       fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
     } else {
-      // unit 未知：加载全部考纲
       fetch('/api/syllabus/edexcel_maths').then(r=>r.json()).then(d=>{mathsSyllabus=d; renderSyllabusCard();}).catch(()=>{});
+    }
+  }
+
+  // Edexcel Economics 考纲
+  const econGroups = groups.filter(g => _isEconGroup(g));
+  if (econGroups.length > 0 && !econSyllabus) {
+    // 收集涉及的 unit（U1/U2/U3/U4）
+    const econUnits = new Set();
+    econGroups.forEach(g => {
+      if (g.econ_unit) econUnits.add(g.econ_unit);
+      (g.questions || []).forEach(q => {
+        (q.topics || []).forEach(t => {
+          const id = String(t.id || t.parent_id || '');
+          const m = id.match(/^(U[1-4])-/);
+          if (m) econUnits.add(m[1]);
+        });
+      });
+    });
+    const eu = [...econUnits];
+    if (eu.length === 1) {
+      fetch(`/api/syllabus/edexcel_economics?unit=${encodeURIComponent(eu[0])}`)
+        .then(r=>r.json()).then(d=>{econSyllabus=d; renderSyllabusCard();}).catch(()=>{});
+    } else {
+      fetch('/api/syllabus/edexcel_economics')
+        .then(r=>r.json()).then(d=>{econSyllabus=d; renderSyllabusCard();}).catch(()=>{});
     }
   }
 }
