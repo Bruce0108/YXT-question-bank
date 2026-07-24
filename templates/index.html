@@ -1608,19 +1608,25 @@ function renderSyllabusCard() {
   const hasCambridge   = groups.some(g => g.source === 'cambridge');
   // cloud/workbook groups with maths_unit OR topics count as edexcel_maths for syllabus display
   const hasMaths       = groups.some(g => _isMathsGroup(g));
+  const hasEcon        = groups.some(g => _isEconGroup(g));
   const card = document.getElementById('syllabusCard');
 
-  // 显示条件：有 Cambridge 试卷 或 有 Edexcel Maths 试卷
-  const shouldShow = hasCambridge || hasMaths;
+  // 显示条件：有 Cambridge 试卷 或 有 Edexcel Maths 试卷 或 有 Edexcel Economics 试卷
+  const shouldShow = hasCambridge || hasMaths || hasEcon;
   card.style.display = shouldShow ? '' : 'none';
   if (!shouldShow) return;
 
   // ── 自动决定当前应该显示哪个考纲 ──
-  const hasBoth = hasCambridge && hasMaths;
-  if (!hasBoth) {
-    window._activeSyllabusType = hasMaths ? 'edexcel_maths' : 'cambridge';
-  } else if (!window._activeSyllabusType) {
-    window._activeSyllabusType = 'cambridge';
+  const types = [];
+  if (hasCambridge) types.push('cambridge');
+  if (hasMaths) types.push('edexcel_maths');
+  if (hasEcon) types.push('edexcel_economics');
+
+  if (types.length === 1) {
+    window._activeSyllabusType = types[0];
+  } else if (!window._activeSyllabusType || !types.includes(window._activeSyllabusType)) {
+    // 优先经济学，然后数学，最后Cambridge
+    window._activeSyllabusType = types[0];
   }
 
   const stype = window._activeSyllabusType;
@@ -1637,6 +1643,29 @@ function renderSyllabusCard() {
     } else {
       subtitle.textContent = '(Edexcel IAL Pure Maths)';
     }
+  } else if (stype === 'edexcel_economics') {
+    // 显示经济学单元
+    const econQs = allQuestions.filter(q => {
+      const g = groups[q.gIdx];
+      return g && _isEconGroup(g);
+    });
+    const econUnits = new Set();
+    econQs.forEach(q => {
+      (q.topics || []).forEach(t => {
+        const id = String(t.id || t.parent_id || '');
+        const m = id.match(/^(U[1-4])-/);
+        if (m) econUnits.add(m[1]);
+      });
+    });
+    groups.forEach(g => { if (g.econ_unit) econUnits.add(g.econ_unit); });
+    const eu = [...econUnits].sort();
+    if (eu.length === 1) {
+      subtitle.textContent = `(Edexcel IAL Economics ${eu[0]})`;
+    } else if (eu.length > 1) {
+      subtitle.textContent = `(Edexcel IAL Economics ${eu.join('+')} )`;
+    } else {
+      subtitle.textContent = '(Edexcel IAL Economics)';
+    }
   } else {
     subtitle.textContent = '(9702 CIE 2025-27)';
   }
@@ -1645,23 +1674,32 @@ function renderSyllabusCard() {
   const levelBar = document.getElementById('sfLevelBar');
   if (levelBar) levelBar.style.display = stype === 'cambridge' ? '' : 'none';
 
-  // ── 切换器（只有两种都有时显示）──
+  // ── 切换器（有两种及以上时显示）──
   const treeWrap = document.getElementById('topicTree');
   let switcher = document.getElementById('syllabusSwitcher');
-  if (hasBoth) {
+  if (types.length > 1) {
     if (!switcher) {
       switcher = document.createElement('div');
       switcher.id = 'syllabusSwitcher';
-      switcher.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
-      switcher.innerHTML = `
-        <button class="btn btn-sm" id="swBtn_cambridge" onclick="switchSyllabus('cambridge')">📐 CIE 9702 物理</button>
-        <button class="btn btn-sm" id="swBtn_edexcel_maths" onclick="switchSyllabus('edexcel_maths')">📊 Edexcel 纯数</button>`;
+      switcher.style.cssText = 'display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap';
       treeWrap.parentElement.insertBefore(switcher, treeWrap);
     }
     switcher.style.display = 'flex';
-    ['cambridge','edexcel_maths'].forEach(t => {
-      const b = document.getElementById(`swBtn_${t}`);
-      if (b) b.className = 'btn btn-sm' + (stype===t ? ' btn-primary' : ' btn-outline');
+    // 重新构建按钮（根据当前存在的类型）
+    switcher.innerHTML = '';
+    const btnDefs = [
+      {type:'cambridge', label:'📐 CIE 9702 物理', show: hasCambridge},
+      {type:'edexcel_maths', label:'📊 Edexcel 纯数', show: hasMaths},
+      {type:'edexcel_economics', label:'📈 Edexcel 经济', show: hasEcon},
+    ];
+    btnDefs.forEach(({type, label, show}) => {
+      if (!show) return;
+      const btn = document.createElement('button');
+      btn.id = `swBtn_${type}`;
+      btn.className = 'btn btn-sm' + (stype === type ? ' btn-primary' : ' btn-outline');
+      btn.textContent = label;
+      btn.onclick = () => switchSyllabus(type);
+      switcher.appendChild(btn);
     });
   } else if (switcher) {
     switcher.style.display = 'none';
@@ -1671,6 +1709,8 @@ function renderSyllabusCard() {
   if (stype === 'edexcel_maths' && !mathsSyllabus) {
     _loadAllSyllabi();
   } else if (stype === 'cambridge' && !syllabus) {
+    _loadAllSyllabi();
+  } else if (stype === 'edexcel_economics' && !econSyllabus) {
     _loadAllSyllabi();
   }
 
@@ -1896,8 +1936,9 @@ function renderGrid() {
       hdr.className = 'src-group-hdr';
       const srcLabel = sg.source === 'cambridge' ? 'Cambridge'
                      : sg.source === 'edexcel_maths' ? 'Edexcel Maths'
+                     : sg.source === 'edexcel_economics' ? 'Edexcel Economics'
                      : sg.source === 'edexcel' ? 'Edexcel' : sg.source;
-      const ptLabel  = {'mcq':'MCQ','structured':'大题','edexcel':'Edexcel混合','edexcel_mcq':'Edexcel MCQ','edexcel_maths':'纯数大题'}[sg.paper_type] || sg.paper_type;
+      const ptLabel  = {'mcq':'MCQ','structured':'大题','edexcel':'Edexcel混合','edexcel_mcq':'Edexcel MCQ','edexcel_maths':'纯数大题','edexcel_economics':'经济学大题'}[sg.paper_type] || sg.paper_type;
       const examDate = groups[sg.gIdx]?.exam_date || '';
       hdr.innerHTML = `<span class="src-tag ${sg.source}">${srcLabel}</span><h3>${sg.filename || ('文件 '+(sg.gIdx+1))}</h3>${examDate ? `<span class="paper-date-badge">${examDate}</span>` : ''}<span style="font-size:11px;color:var(--g400)">${sg.qs.length} 道 · ${ptLabel}</span>`;
       section.appendChild(hdr);
@@ -2179,7 +2220,10 @@ function filterTopics() { renderTopicTree(); }
 function renderTopicTree() {
   // 决定用哪个考纲
   const stype = window._activeSyllabusType || 'cambridge';
-  const curSyllabus = stype === 'edexcel_maths' ? mathsSyllabus : syllabus;
+  let curSyllabus;
+  if (stype === 'edexcel_maths') curSyllabus = mathsSyllabus;
+  else if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else curSyllabus = syllabus;
   const tree = document.getElementById('topicTree');
 
   if (!curSyllabus) {
@@ -2190,16 +2234,38 @@ function renderTopicTree() {
   const q = document.getElementById('sfSearch').value.toLowerCase();
   tree.innerHTML = '';
 
-  // ── Edexcel Maths：两级树（章节 + 子知识点），带题目数量统计 ──
-  if (stype === 'edexcel_maths') {
+  // ── Edexcel Maths / Economics：两级树（章节 + 子知识点），带题目数量统计 ──
+  if (stype === 'edexcel_maths' || stype === 'edexcel_economics') {
     // 计算当前题目实际涉及的 unit 集合（用于过滤显示章节）
-    const activeUnits = _getActiveUnits();
+    // maths 用 _getActiveUnits()，economics 用 econ_unit 字段
+    let activeUnits;
+    if (stype === 'edexcel_maths') {
+      activeUnits = _getActiveUnits();
+    } else {
+      // economics：从 groups 的 econ_unit 和 topics 推断
+      activeUnits = new Set();
+      groups.forEach(g => {
+        if (!_isEconGroup(g)) return;
+        if (g.econ_unit) activeUnits.add(g.econ_unit);
+        (g.questions || []).forEach(q2 => {
+          (q2.topics || []).forEach(t => {
+            const id = String(t.id || t.parent_id || '');
+            const m = id.match(/^(U[1-4])-/);
+            if (m) activeUnits.add(m[1]);
+          });
+        });
+      });
+    }
 
     // 统计每个 topic/subtopic 对应的题目数
     // 兼容新格式（id=P3-1.1, parent_id=P3-1）和旧格式（id=P3-1）
     const topicCount = {};   // id → count（含章节级和subtopic级）
-    allQuestions.forEach(q => {
-      (q.topics || []).forEach(t => {
+    allQuestions.forEach(q2 => {
+      // economics 只统计来自 econ group 的题目，maths 只统计来自 maths group 的题目
+      const g = groups[q2.gIdx];
+      if (stype === 'edexcel_economics' && (!g || !_isEconGroup(g))) return;
+      if (stype === 'edexcel_maths' && (!g || !_isMathsGroup(g))) return;
+      (q2.topics || []).forEach(t => {
         const tid = String(t.id);
         topicCount[tid] = (topicCount[tid] || 0) + 1;
         // 若有 parent_id（新格式），也给父章节加计数
@@ -2218,8 +2284,6 @@ function renderTopicTree() {
 
     curSyllabus.topics.forEach(topic => {
       // ── 只显示当前题目实际涉及的 unit 章节 ──
-      // topic.unit 为该章节所属 unit（如 'P3'），activeUnits 为当前题目涉及的 unit 集合
-      // 若 activeUnits 非空，则只显示属于这些 unit 的章节；若 activeUnits 为空（考纲无 unit 字段）则全显示
       if (activeUnits.size > 0 && topic.unit && !activeUnits.has(topic.unit)) return;
 
       if (q && !topic.title.toLowerCase().includes(q) &&
@@ -2325,10 +2389,11 @@ function toggleSub(id) {
   if (chev) chev.classList.toggle('open', open);
 }
 
-// ── Edexcel Maths：章节级勾选（联动子知识点） ──
+// ── Edexcel Maths / Economics：章节级勾选（联动子知识点） ──
 function onMathsChapterCheck(chapterId, tidSafe, checked) {
   // 同步勾选/取消所有子知识点
-  const curSyllabus = mathsSyllabus;
+  const stype = window._activeSyllabusType || 'edexcel_maths';
+  const curSyllabus = stype === 'edexcel_economics' ? econSyllabus : mathsSyllabus;
   if (!curSyllabus) return;
   const topic = curSyllabus.topics.find(t => String(t.id) === chapterId);
   if (!topic) return;
@@ -2344,7 +2409,10 @@ function onChapterCheck(chapterId, checked) {}
 
 function onTopicCheck(topicId, checked) {
   const stype = window._activeSyllabusType || 'cambridge';
-  const curSyllabus = stype === 'edexcel_maths' ? mathsSyllabus : syllabus;
+  let curSyllabus;
+  if (stype === 'edexcel_maths') curSyllabus = mathsSyllabus;
+  else if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else curSyllabus = syllabus;
   if (!curSyllabus) return;
   const topic = curSyllabus.topics.find(t => String(t.id) === String(topicId).replace(/_/g,'-'));
   if (!topic) return;
@@ -2357,7 +2425,10 @@ function onTopicCheck(topicId, checked) {
 
 function onSubCheck(subId, topicId, checked) {
   const stype = window._activeSyllabusType || 'cambridge';
-  const curSyllabus = stype === 'edexcel_maths' ? mathsSyllabus : syllabus;
+  let curSyllabus;
+  if (stype === 'edexcel_maths') curSyllabus = mathsSyllabus;
+  else if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else curSyllabus = syllabus;
   if (!curSyllabus) return;
   const topic = curSyllabus.topics.find(t => String(t.id) === String(topicId).replace(/_/g,'-'));
   if (!topic) return;
@@ -3704,6 +3775,7 @@ async function confirmSaveLib() {
       title, board, subject,
       sort_order:    sortOrder,
       maths_unit:    activeG.maths_unit  || '',
+      econ_unit:     activeG.econ_unit   || '',
       syllabus_type: activeG.paper_type  || 'edexcel_maths',
       questions:     questionsPayload,
     });
@@ -3956,6 +4028,7 @@ function _applyLoadedWorkbook(d) {
     source:          'workbook',
     paper_type:      d.syllabus_type || 'edexcel_maths',
     maths_unit:      d.maths_unit || null,
+    econ_unit:       d.econ_unit  || null,
     exam_date:       '',
     questions:       [],
     total_questions: d.count,
@@ -4831,7 +4904,10 @@ function selectCloudBoard(btn) {
 // 存入 window._filterTopicInfo 供 doCloudSave() 使用。
 function _syncFilterTopicsToCloudSave() {
   const stype = window._activeSyllabusType || 'cambridge';
-  const curSyllabus = stype === 'edexcel_maths' ? mathsSyllabus : syllabus;
+  let curSyllabus;
+  if (stype === 'edexcel_maths') curSyllabus = mathsSyllabus;
+  else if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else curSyllabus = syllabus;
 
   // 构建 id→title 映射（chapter级 + subtopic级）
   const idToTitle = {};

@@ -4134,6 +4134,7 @@ def upload_multi():
             'source':          g['source'],
             'paper_type':      g['paper_type'],
             'maths_unit':      g.get('maths_unit'),
+            'econ_unit':       g.get('econ_unit'),
             'exam_date':       g.get('exam_date', ''),
             'session':         g.get('session', ''),
             'has_ms':          g.get('has_ms', False),
