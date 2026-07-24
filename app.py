@@ -3127,6 +3127,7 @@ def get_edexcel_economics_syllabus():
 
 
 
+def _is_markscheme_filename(filename: str) -> bool:
     """判断文件名是否为 Mark Scheme（支持多种命名格式）"""
     fn = filename.lower()
     return ('markscheme' in fn or 'mark_scheme' in fn or
