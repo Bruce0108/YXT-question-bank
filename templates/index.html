@@ -1999,36 +1999,16 @@ function renderGrid() {
       const examDateHtml = q.exam_date ? `<span class="exam-date-tag">${q.exam_date}</span>` : '';
 
       // 答案区域（仅当题目有 answer_b64 时显示）
+      // 采用「按需加载」策略：卡片初始化只写占位容器，
+      // 点击「👁 答案」时通过 /api/get_answer 拉取完整多页数据后一次性渲染。
       const hasAnswer = !!(q.answer_b64);
-      const _ansMime = q.answer_b64 && q.answer_b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
-
-      // 多页答案：渲染时先用 answer_b64 显示第一页，展开后按需加载所有页
-      // answer_pages 可能因 sessionStorage 超限丢失，所以通过 /api/get_answer 按需加载
-      let answerImgHtml = '';
-      if (hasAnswer) {
-        const pages = q.answer_pages;  // 可能是 null/undefined（单页）或数组（多页）
-        if (pages && Array.isArray(pages) && pages.length > 1) {
-          // 多页：内存里已有数据，直接逐页显示
-          answerImgHtml = pages.map((pg, idx) => {
-            const mime = pg.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
-            return `<div class="qc-answer-page">
-              <div class="qc-answer-page-label">— 第 ${idx+1} 页 / 共 ${pages.length} 页 —</div>
-              <img class="qc-answer-img" src="data:${mime};base64,${pg.b64}"
-                   alt="Answer p${idx+1}" style="width:100%;display:block;">
-            </div>`;
-          }).join('');
-        } else {
-          // 单页或 answer_pages 丢失：显示第一页，并标记需要按需加载
-          answerImgHtml = `<img class="qc-answer-img" id="ans-img-${uid}" src="data:${_ansMime};base64,${q.answer_b64}"
-               alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">
-            <div id="ans-extra-${uid}"></div>`;
-        }
-      }
+      // 提前算出多页数量（用于 loading 提示）
+      const _ansPageCount = (q.answer_pages && Array.isArray(q.answer_pages)) ? q.answer_pages.length : 1;
       const answerHtml = hasAnswer ? `
         <div class="qc-answer-wrap" id="ans-${uid}" style="display:none"
-             data-gidx="${q.gIdx}" data-qnum="${q.q_num}" data-loaded="${(q.answer_pages && q.answer_pages.length > 1) ? '1' : '0'}">
+             data-gidx="${q.gIdx}" data-qnum="${q.q_num}"
+             data-loaded="0" data-totalpages="${_ansPageCount}">
           <div class="qc-answer-bar">📋 Mark Scheme 答案</div>
-          ${answerImgHtml}
         </div>` : '';
       card.innerHTML = `
         <div class="qc-hdr">
@@ -2080,7 +2060,7 @@ function toggleAnswer(uid, e) {
     ansBtn.style.color       = visible ? '#15803d' : '#854d0e';
     ansBtn.style.border      = visible ? '1px solid #bbf7d0' : '1px solid #fef08a';
   }
-  // 按需加载多页答案（answer_pages 可能因 sessionStorage 超限丢失）
+  // 展开时：若多页数据尚未加载，先显示 loading，再异步请求全部页
   if (!visible && ansWrap.dataset.loaded === '0') {
     _loadAnswerPages(uid, ansWrap);
   }
@@ -2092,41 +2072,52 @@ async function _loadAnswerPages(uid, ansWrap) {
   const gIdx  = parseInt(ansWrap.dataset.gidx);
   const qNum  = parseInt(ansWrap.dataset.qnum);
   if (!sessionId) return;
+
+  // 把当前答案区内容替换为 loading 提示
+  const barEl = ansWrap.querySelector('.qc-answer-bar');
+  const contentArea = document.createElement('div');
+  contentArea.id = `ans-content-${uid}`;
+  contentArea.innerHTML = `<div style="text-align:center;padding:16px 8px;color:#15803d;font-size:13px">
+    <span class="spin">⏳</span> 正在加载答案（共 ${ansWrap.dataset.totalpages || '?'} 页）…
+  </div>`;
+  // 清除旧内容（保留 bar），插入 loading
+  Array.from(ansWrap.children).forEach(el => { if (el !== barEl) el.remove(); });
+  ansWrap.appendChild(contentArea);
+
   try {
     const resp = await fetch(`/api/get_answer?session_id=${sessionId}&file_idx=${gIdx}&q_num=${qNum}`);
-    if (!resp.ok) return;
+    if (!resp.ok) { contentArea.innerHTML = '<div style="color:red;padding:8px">加载失败</div>'; return; }
     const data = await resp.json();
-    if (!data.pages || !Array.isArray(data.pages) || data.pages.length <= 1) return;
-    // 有多页：重建答案内容
-    const extraDiv = document.getElementById(`ans-extra-${uid}`);
-    const firstImg = document.getElementById(`ans-img-${uid}`);
-    if (!extraDiv) return;
-    // 替换第一张图为带页码标签的版本
-    if (firstImg) {
-      const mime0 = data.pages[0].b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
-      const wrapper0 = document.createElement('div');
-      wrapper0.className = 'qc-answer-page';
-      wrapper0.innerHTML = `<div class="qc-answer-page-label">— 第 1 页 / 共 ${data.pages.length} 页 —</div>
-        <img class="qc-answer-img" src="data:${mime0};base64,${data.pages[0].b64}" alt="Answer p1" style="width:100%;display:block;">`;
-      firstImg.replaceWith(wrapper0);
+
+    const pages = data.pages;
+    if (!pages || !Array.isArray(pages) || pages.length === 0) {
+      // 无多页数据：退回显示 answer_b64
+      const mime = data.b64 && data.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+      contentArea.innerHTML = `<img class="qc-answer-img" src="data:${mime};base64,${data.b64}"
+        alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">`;
+      ansWrap.dataset.loaded = '1';
+      return;
     }
-    // 插入剩余页
+
+    // 全部页一次性渲染
     let html = '';
-    for (let i = 1; i < data.pages.length; i++) {
-      const pg   = data.pages[i];
+    for (let i = 0; i < pages.length; i++) {
+      const pg   = pages[i];
       const mime = pg.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
       html += `<div class="qc-answer-page">
-        <div class="qc-answer-page-label">— 第 ${i+1} 页 / 共 ${data.pages.length} 页 —</div>
-        <img class="qc-answer-img" src="data:${mime};base64,${pg.b64}" alt="Answer p${i+1}" style="width:100%;display:block;">
+        <div class="qc-answer-page-label">— 第 ${i+1} 页 / 共 ${pages.length} 页 —</div>
+        <img class="qc-answer-img" src="data:${mime};base64,${pg.b64}"
+             alt="Answer p${i+1}" style="width:100%;display:block;">
       </div>`;
     }
-    extraDiv.innerHTML = html;
+    contentArea.innerHTML = html;
     ansWrap.dataset.loaded = '1';
-    // 同步更新 allQuestions 里的 answer_pages（后续展开无需再请求）
+    // 同步更新 allQuestions（后续展开无需再请求）
     const qObj = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
-    if (qObj) qObj.answer_pages = data.pages;
+    if (qObj) qObj.answer_pages = pages;
   } catch(err) {
     console.warn('[_loadAnswerPages] failed:', err);
+    contentArea.innerHTML = '<div style="color:red;padding:8px">加载出错</div>';
   }
 }
 
@@ -2167,6 +2158,10 @@ function toggleAllAnswers() {
     const uid = wrap.id.replace('ans-', '');
     const ansBtn = document.getElementById(`ansbtn-${uid}`);
     wrap.style.display = shouldShow ? '' : 'none';
+    // 显示时触发多页答案懒加载（data-loaded='0' 表示尚未加载）
+    if (shouldShow && wrap.dataset.loaded === '0') {
+      _loadAnswerPages(uid, wrap);
+    }
     if (ansBtn) {
       ansBtn.textContent = shouldShow ? '🙈 答案' : '👁 答案';
       ansBtn.style.background = shouldShow ? '#fef9c3' : '#f0fdf4';

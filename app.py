@@ -5410,19 +5410,9 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                                     fitz.Rect(M, M, PW-M, PH-M),
                                     label, HH, GAP, FS, q_meta=q_meta)
 
-                # 答案页
-                ans_b64 = q_obj.get('answer_b64', '')
-                if ans_b64:
-                    ans_jpeg = _b64_to_jpeg_bytes(ans_b64)
-                    if ans_jpeg:
-                        try:
-                            from PIL import Image as _PILImg3
-                            _aim = _PILImg3.open(io.BytesIO(ans_jpeg))
-                            ans_w, ans_h = _aim.size
-                            _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
-                                                  PW, PH, M, GAP, label)
-                        except Exception as _ae:
-                            print(f'[cloud_export] answer page error: {_ae}')
+                # 答案页（支持多页）
+                if q_obj.get('answer_b64') or q_obj.get('answer_pages'):
+                    _insert_answer_pages(out_doc, q_obj, PW, PH, M, GAP, label)
 
         if ordered_items:
             # ── 有序模式：按 ordered_items 全局顺序逐题输出 ──
@@ -6927,9 +6917,10 @@ def _b64_to_jpeg_bytes(b64_str: str) -> bytes | None:
 
 
 def _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
-                           PW, PH, M, GAP, label):
+                           PW, PH, M, GAP, label, page_no=None, total_pages=None):
     """
     在 out_doc 中新建一页放置答案图片，带"答案 Answer"标签头栏。
+    page_no / total_pages: 若多页答案，在头栏显示页码，如 "答案 Answer — Q14 (第2页/共3页)"
     """
     ANS_BAND_H = 22   # 答案头栏高度（pt）
     ANS_GAP    = 4    # 头栏与图片间距
@@ -6943,9 +6934,13 @@ def _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
     C_ANS_BG  = (0.88, 0.96, 0.90)   # 浅绿
     C_ANS_TXT = (0.10, 0.50, 0.25)   # 深绿
     page.draw_rect(band_rect, color=C_ANS_BG, fill=C_ANS_BG)
+    if page_no is not None and total_pages is not None and total_pages > 1:
+        hdr_text = f'答案 Answer — {label}  (第{page_no}页/共{total_pages}页)'
+    else:
+        hdr_text = f'答案 Answer — {label}'
     page.insert_text(
         (M + 8, M + ANS_BAND_H - 7),
-        f'答案 Answer — {label}',
+        hdr_text,
         fontsize=11, color=C_ANS_TXT, fontname='helv'
     )
 
@@ -6957,6 +6952,50 @@ def _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
     img_rect = fitz.Rect(M, img_y0, M + draw_w, img_y0 + draw_h)
     page.insert_image(img_rect, stream=io.BytesIO(ans_jpeg))
     return page
+
+
+def _insert_answer_pages(out_doc, q_obj, PW, PH, M, GAP, label):
+    """
+    将 q_obj 的答案插入 out_doc（多页时逐页各占一页，单页同原逻辑）。
+    优先使用 q_obj['answer_pages']（多页数组）；若无则退回 answer_b64（第1页）。
+    """
+    import base64 as _b64x
+    from PIL import Image as _PILAns
+
+    ans_pages = q_obj.get('answer_pages')  # None 或 [{b64,w,h},...]
+
+    if ans_pages and isinstance(ans_pages, list) and len(ans_pages) > 1:
+        # ── 多页：逐页各占一 PDF 页 ──
+        total = len(ans_pages)
+        for pg_idx, pg in enumerate(ans_pages):
+            try:
+                raw  = _b64x.b64decode(pg['b64'])
+                img  = _PILAns.open(io.BytesIO(raw))
+                w, h = img.size
+                # 确保输出 JPEG 字节
+                buf = io.BytesIO()
+                img.convert('RGB').save(buf, format='JPEG', quality=88)
+                jpeg = buf.getvalue()
+                _place_answer_on_page(out_doc, jpeg, w, h,
+                                      PW, PH, M, GAP, label,
+                                      page_no=pg_idx + 1, total_pages=total)
+            except Exception as _pe:
+                print(f'[pdf_export] answer page {pg_idx+1} error: {_pe}')
+    else:
+        # ── 单页：原有逻辑 ──
+        ans_b64 = q_obj.get('answer_b64', '')
+        if not ans_b64:
+            return
+        ans_jpeg = _b64_to_jpeg_bytes(ans_b64)
+        if not ans_jpeg:
+            return
+        try:
+            img     = _PILAns.open(io.BytesIO(ans_jpeg))
+            ans_w, ans_h = img.size
+            _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
+                                  PW, PH, M, GAP, label)
+        except Exception as _ae:
+            print(f'[pdf_export] answer page error: {_ae}')
 
 
 
@@ -7036,19 +7075,9 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                                     q_meta=(q_meta if si == 0 else None))
                 del jpeg  # 立即释放本片内存
 
-        # ── Task 2: 若题目有答案图，在题目页后附加答案页 ──
-        ans_b64 = q_obj.get('answer_b64', '')
-        if ans_b64:
-            ans_jpeg = _b64_to_jpeg_bytes(ans_b64)
-            if ans_jpeg:
-                try:
-                    from PIL import Image as _PILImg
-                    _aim = _PILImg.open(io.BytesIO(ans_jpeg))
-                    ans_w, ans_h = _aim.size
-                    _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
-                                         PW, PH, M, GAP, label)
-                except Exception as _ae:
-                    print(f'[pdf_export] answer page error: {_ae}')
+        # ── Task 2: 若题目有答案图，在题目页后附加答案页（支持多页）──
+        if q_obj.get('answer_b64') or q_obj.get('answer_pages'):
+            _insert_answer_pages(out_doc, q_obj, PW, PH, M, GAP, label)
 
         if progress_cb: progress_cb(done + 1)
 def _export_mcq_packed(out_doc, src_doc, questions, q_nums, dpi,
