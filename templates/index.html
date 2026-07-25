@@ -3189,16 +3189,23 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
   treeWrap.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px">⏳ 加载中...</div>';
 
   const grp = groups[gIdx] || {};
-  // 判断来源：cambridge题目用9702知识点，edexcel_maths用对应unit的知识点
+  // 判断来源：cambridge用9702，edexcel_economics用经济学考纲，edexcel_maths用数学考纲
   const grpSource = grp.source || q.source || '';
-  const isCambridge = (grpSource === 'cambridge');
+  const isCambridge  = (grpSource === 'cambridge');
+  const isEconomy    = (grpSource === 'edexcel_economics');
 
   let apiUrl;
   if (isCambridge) {
     // Cambridge 9702 物理：使用 /api/syllabus（9702知识点，与筛选侧栏一致）
     apiUrl = '/api/syllabus';
+  } else if (isEconomy) {
+    // Edexcel Economics：根据 econ_unit 过滤（与筛选侧栏 econSyllabus 一致）
+    const econUnit = grp.econ_unit || q.econ_unit || null;
+    apiUrl = econUnit
+      ? `/api/syllabus/edexcel_economics?unit=${encodeURIComponent(econUnit)}`
+      : '/api/syllabus/edexcel_economics';
   } else {
-    // Edexcel Maths：根据unit过滤
+    // Edexcel Maths：根据 maths_unit 过滤
     let unit = grp.maths_unit || null;
     if (!unit && q.topics && q.topics.length > 0) {
       const unitSet = _inferUnitsFromQuestions([q]);
