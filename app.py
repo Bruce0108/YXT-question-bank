@@ -5633,7 +5633,7 @@ def _has_question_content_in_range(page, y_min, y_max):
     """
     SECTION_HEADER_RE = re.compile(
         r'^(SECTION\s+[A-Z]|Answer\s+(ALL|ONE|TWO|THREE)\s+question|'
-        r'Write\s+your\s+answer|Study\s+(Figure|Extract)|'
+        r'Write\s+your\s+answers?|Study\s+(Figure|Extract)|'
         r'EITHER|OR)\b',
         re.IGNORECASE
     )
