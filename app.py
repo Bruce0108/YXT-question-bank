@@ -653,7 +653,7 @@ def _find_content_bottom(page, ph, margin_bottom=30):
     return min(best_bottom + 10, ph - 5)
 
 
-def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
+def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None, y_max=None):
     """
     通用题干结束位置检测：找到题目内容（题干 + 图表 + 子题）的真正底部，
     截止到答题区（密集横线/空白写答区）开始之前。
@@ -663,6 +663,7 @@ def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
 
     参数：
       y_min：若指定，只考虑 y >= y_min 的答题区文字标志（用于排除 Section header 中的全局指令）
+      y_max：若指定，Phase 3 marks 扫描只考虑 y < y_max 的块（防止同页下一题的 Total 行覆盖）
 
     核心策略（按优先级）：
     1. 横线检测（最可靠，分两档）：
@@ -671,6 +672,7 @@ def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
     2. 答题区文字标志：Answer space / Write your answer / Do not write here 等
        （仅当 y >= y_min 时生效，避免 Section header 全局指令误触发）
     3. marks 标记辅助：若 marks 紧贴 cut_y 之前，以 marks y1+8 为下界（防截断）
+       （同时应用 y_min/y_max 双向过滤，只考虑本题范围内的 marks 行）
     4. fallback：取所有非横线、非答题提示的最后一个内容块 y1
     """
     pw = page.rect.width
@@ -859,10 +861,22 @@ def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
         # ── 阶段3（辅助）：marks 标记微调 ──
         # 若 marks 在 cut_y 之前（marks y1 < cut_y + 24pt 内），
         # 说明 marks 就在答题区入口处，需确保 marks 完整显示
+        #
+        # 修复：扫描时必须同时应用 y_min 过滤，只关注本题范围内的 marks 行。
+        # 否则同页面的下一道题的 Total 行也会被扫到，把 marks_y1 推高，
+        # 导致条件 marks_y1 < cut_y+24 变为 False，微调无法触发。
+        # 例：Q1/Q2 同页，Q2的 "(Total for Q2)" y1=530 覆盖 Q1的 y1=308，
+        #      530 > 302+24=326 → 不触发 → Q1的 Total 行被截断。
         marks_y1 = None
         for b in blocks:
             x0, y0, x1, y1, txt, bno, btype = b
             if btype != 0 or y0 > ph - 55:
+                continue
+            # y_min 过滤：只考虑本题起始以下的 marks 标记
+            if y_min is not None and y0 < y_min:
+                continue
+            # y_max 过滤：只考虑本题范围以内的 marks 标记（防止下一题的 Total 行覆盖）
+            if y_max is not None and y0 >= y_max:
                 continue
             ts = txt.strip()
             if MARKS_PAT.search(ts) and x0 > pw * 0.35:
@@ -979,6 +993,11 @@ def crop_question_image(doc, questions, q_idx, dpi=150, paper_type='mcq'):
         pw = page.rect.width
         ph = page.rect.height
 
+        # edexcel_economics 专项：非起始页如果是纯答题虚线页（dotted lines），跳过
+        if pg_i != pg_start and paper_type == 'edexcel_economics':
+            if _is_econ_dotted_answer_page(page, ph):
+                continue
+
         # 计算裁剪区域
         left = 30
         right = pw - 15
@@ -991,8 +1010,9 @@ def crop_question_image(doc, questions, q_idx, dpi=150, paper_type='mcq'):
             # 同页：先用题干底部检测，再和 y_end 取 min（确保不含下一题）
             # 传入 y_min=y_top：让 _find_question_stem_bottom 忽略题目起始以上的
             # answer-zone 信号（如 Section header 全局指令、上一题的分隔横线）
+            # 传入 y_max=y_end：Phase 3 marks 扫描只看本题范围，不扫下一题的 Total 行
             top = max(0, y_top)
-            stem_bottom = _find_question_stem_bottom(page, ph, paper_type, y_min=y_top)
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type, y_min=y_top, y_max=y_end)
             if y_end is not None:
                 if stem_bottom <= y_top:
                     bottom = min(ph, y_end)
@@ -1012,6 +1032,11 @@ def crop_question_image(doc, questions, q_idx, dpi=150, paper_type='mcq'):
             stem_bottom = _find_question_stem_bottom(page, ph, paper_type)
             if y_end is not None:
                 bottom = min(stem_bottom, min(ph, y_end))
+                # ★ 修复：对 edexcel_economics，若末页上无实质内容（只有 Section header），跳过
+                # 例：Q6 pg_end=page7，top~y_end 区域只有 "SECTION B / Answer ALL questions..."
+                if pg_i != pg_start and paper_type == 'edexcel_economics':
+                    if not _has_question_content_in_range(page, top, y_end):
+                        continue
             else:
                 bottom = stem_bottom
         else:
@@ -5650,7 +5675,7 @@ def _has_question_content_in_range(page, y_min, y_max):
     返回 True 表示有有效的题目内容；False 表示该区域只有 Section header 或空白。
     """
     SECTION_HEADER_RE = re.compile(
-        r'^(SECTION\s+[A-Z]|Answer\s+(ALL|ONE|TWO|THREE)\s+question|'
+        r'^(SECTION\s+[A-Z]|Answer\s+(ALL|ONE|TWO|THREE)\s+questions?|'
         r'Write\s+your\s+answers?|Study\s+(Figure|Extract)|'
         r'EITHER|OR)\b',
         re.IGNORECASE
@@ -5819,8 +5844,9 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
             # 同一页：先用题干底部检测，再和 y_end 取 min（确保不含下一题）
             # 传入 y_min=y_top，让 _find_question_stem_bottom 忽略 y_top 以上的 answer-zone 标志
             # （Section header 全局指令如 "Write your answer..." 在 y≈116，位于题目起始之上）
+            # 传入 y_max=y_end，Phase 3 marks 扫描只看本题范围，不扫下一题的 Total 行
             top = y_top
-            stem_bottom = _find_question_stem_bottom(page, ph, paper_type, y_min=y_top)
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type, y_min=y_top, y_max=y_end)
             if y_end is not None:
                 if stem_bottom <= y_top:
                     # stem_bottom 仍低于题目起始（极端情况：页面无任何 answer-zone 信号且 fallback 失效）
