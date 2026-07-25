@@ -3763,11 +3763,16 @@ def _render_ms_questions_b64(ms_doc, ms_questions, paper_type, dpi=150):
     返回 {q_num: {'b64': str, 'w': int, 'h': int}} 字典。
 
     策略（优先级）：
-      1. 对 edexcel_maths：先尝试表格式检测（Question/Scheme/Marks 表头）
+      1. 对 edexcel_economics：使用专用函数 _render_edexcel_economics_ms_answers()
+      2. 对 edexcel_maths：先尝试表格式检测（Question/Scheme/Marks 表头）
          → _render_ms_answers_from_table()
-      2. 若表格检测失败，退回到旧逻辑：_collect_question_slices + 垂直拼接
+      3. 若表格检测失败，退回到旧逻辑：_collect_question_slices + 垂直拼接
     """
     import base64 as _b64
+
+    # ── 优先：Edexcel Economics 专用渲染 ──
+    if paper_type == 'edexcel_economics':
+        return _render_edexcel_economics_ms_answers(ms_doc, dpi=dpi)
 
     # ── 优先：Edexcel Maths 表格式 MS ──
     if paper_type == 'edexcel_maths':
@@ -3925,11 +3930,18 @@ def upload_multi():
                 continue  # Report 不加入 qp_groups
 
             if is_ms:
-                # Mark Scheme：若文件名含 Edexcel Maths 单元代码，强制使用 edexcel_maths 类型
-                # （MS 文件可能不含 WMA\d{2}/ 格式，导致 detect_paper_type 返回 edexcel）
+                # Mark Scheme 类型判断：
+                # - edexcel_economics MS：保持 edexcel_economics 类型，使用 econ_unit 匹配
+                # - edexcel_maths MS：若文件名含 Edexcel Maths 单元代码，强制使用 edexcel_maths 类型
                 ms_pt = pt
                 ms_fn_unit = _extract_unit_from_filename(file.filename)
-                if ms_fn_unit or source == 'edexcel_maths':
+
+                if source == 'edexcel_economics':
+                    # Economics MS：不覆盖为 edexcel_maths
+                    ms_pt = 'edexcel_economics'
+                    if not econ_unit:
+                        econ_unit = detect_edexcel_economics_unit(doc)
+                elif ms_fn_unit or source == 'edexcel_maths':
                     ms_pt = 'edexcel_maths'
                     if not maths_unit:
                         maths_unit = ms_fn_unit
@@ -3937,7 +3949,7 @@ def upload_multi():
                 # ── 功能3: Cambridge 9702 物理 MS —— 解析 Question/Answer/Marks 表格 ──
                 is_9702_ms = (paper9702.get('type') == 'ms' or
                               (source == 'cambridge' and _is_markscheme_by_content(doc)))
-                if is_9702_ms and ms_pt != 'edexcel_maths':
+                if is_9702_ms and ms_pt not in ('edexcel_maths', 'edexcel_economics'):
                     ms_answers = _render_9702_ms_answers(doc, dpi=150)
                     if ms_answers:
                         print(f'[upload] 9702 MS parsed: {file.filename} → {sorted(ms_answers.keys())} questions')
@@ -3952,14 +3964,17 @@ def upload_multi():
                         doc.close()
                         continue  # MS 不加入 qp_groups
 
-                # 检测题目边界，渲染答案图片（Edexcel Maths / 通用格式）
+                # 检测题目边界，渲染答案图片（Edexcel Maths / Economics / 通用格式）
                 ms_questions = _detect_questions_ms(doc, ms_pt)
                 ms_answers   = _render_ms_questions_b64(doc, ms_questions, ms_pt, dpi=150)
+                print(f'[upload] MS parsed: {file.filename} type={ms_pt} '
+                      f'answers={sorted(ms_answers.keys()) if ms_answers else []}')
                 ms_registry.append({
                     'filename':   file.filename,
                     'unit':       maths_unit,
+                    'econ_unit':  econ_unit,   # ← 新增：供 econ 匹配使用
                     'source':     source,
-                    'answers':    ms_answers,  # {q_num: {b64, w, h}}
+                    'answers':    ms_answers,  # {q_num or '12a': {b64, w, h}}
                     'session':    _extract_exam_session(file.filename),
                     'paper9702':  paper9702,
                 })
@@ -4058,16 +4073,95 @@ def upload_multi():
     unmatched_ms = []  # 记录未匹配的 MS 供前端提示
 
     def _inject_answers(grp, ms_answers, ms_filename):
-        """将 ms_answers 注入到 grp 的题目中，返回注入数量"""
+        """
+        将 ms_answers 注入到 grp 的题目中，返回注入数量。
+
+        处理两种匹配：
+        1. 直接 key 匹配：ms_answers 的 key 为整数 q_num，直接注入
+        2. 子题聚合匹配：ms_answers 含 '12a'/'12b'... 字符串 key，
+           合并后注入到 QP 中 q_num=12 的题目
+        """
+        import base64 as _b64
+        from PIL import Image as _PILImg
+
         count = 0
+
+        # 预处理：检测 ms_answers 中是否有子题 key（如 '12a', '12b'...）
+        # 将子题分组：{q_num: [sub_key_sorted...]}
+        sub_keys_by_q = {}  # {12: ['12a','12b','12c','12d','12e']}
+        for k in ms_answers:
+            if isinstance(k, str):
+                m = re.match(r'^(\d+)([a-e])$', k)
+                if m:
+                    qn = int(m.group(1))
+                    sub_keys_by_q.setdefault(qn, []).append(k)
+        # 对子题按字母排序
+        for qn in sub_keys_by_q:
+            sub_keys_by_q[qn].sort()
+
+        # 如果有子题分组，先合并子题图像作为聚合答案
+        # 聚合后的 key = 整数 q_num，覆盖到 ms_answers（临时）
+        merged_answers = dict(ms_answers)
+        scale_hint = 150 / 72.0  # 默认 DPI/72 比例（仅用于 width 估算）
+        for qn, sub_keys in sub_keys_by_q.items():
+            parts = []
+            total_w, total_h = 0, 0
+            for sk in sub_keys:
+                ans = ms_answers.get(sk)
+                if not ans:
+                    continue
+                raw = _b64.b64decode(ans['b64'])
+                parts.append((raw, ans['w'], ans['h']))
+                total_w = max(total_w, ans['w'])
+                total_h += ans['h']
+            if not parts:
+                continue
+            if len(parts) == 1:
+                raw_out, cw, ch = parts[0]
+            else:
+                canvas = _PILImg.new('RGB', (total_w, total_h), (255, 255, 255))
+                y_off = 0
+                for (raw_part, pw2, ph2) in parts:
+                    img_part = _PILImg.open(io.BytesIO(raw_part))
+                    if pw2 != total_w:
+                        img_part = img_part.resize(
+                            (total_w, int(ph2 * total_w / pw2)), _PILImg.LANCZOS)
+                        ph2 = img_part.size[1]
+                    canvas.paste(img_part, (0, y_off))
+                    y_off += ph2
+                buf = io.BytesIO()
+                canvas.save(buf, format='JPEG', quality=88)
+                raw_out = buf.getvalue()
+                cw, ch = total_w, y_off
+            # 将聚合图像写入 merged_answers（key = 整数）
+            merged_answers[qn] = {
+                'b64': _b64.b64encode(raw_out).decode('utf-8'),
+                'w':   cw,
+                'h':   ch,
+            }
+
+        # 注入
         for q in grp['questions']:
             q_num = q.get('q_num')
-            if q_num in ms_answers:
-                ans = ms_answers[q_num]
+            sub   = q.get('sub_label', '')
+            # 优先：子题 key（如 '12a'）
+            if sub:
+                sub_key = f"{q_num}{sub[1]}"  # '(a)' → '12a'
+                if sub_key in merged_answers:
+                    ans = merged_answers[sub_key]
+                    q['answer_b64'] = ans['b64']
+                    q['answer_w']   = ans['w']
+                    q['answer_h']   = ans['h']
+                    count += 1
+                    continue
+            # 整数 key 直接匹配
+            if q_num in merged_answers:
+                ans = merged_answers[q_num]
                 q['answer_b64'] = ans['b64']
                 q['answer_w']   = ans['w']
                 q['answer_h']   = ans['h']
                 count += 1
+
         grp['has_ms']  = True
         grp['ms_file'] = ms_filename
         return count
@@ -4075,15 +4169,25 @@ def upload_multi():
     def _score_match(grp, ms_answers):
         """计算 MS 与 QP 的题号覆盖得分（交集题数）"""
         qp_nums = {q.get('q_num') for q in grp['questions']}
-        return len(qp_nums & set(ms_answers.keys()))
+        # ms_answers key 可能是整数或字符串（如 '12a'）
+        ms_nums = set()
+        for k in ms_answers:
+            if isinstance(k, int):
+                ms_nums.add(k)
+            elif isinstance(k, str):
+                m = re.match(r'^(\d+)', k)
+                if m:
+                    ms_nums.add(int(m.group(1)))
+        return len(qp_nums & ms_nums)
 
     for ms_info in ms_registry:
-        ms_unit    = ms_info['unit']
-        ms_answers = ms_info['answers']
-        ms_source  = ms_info['source']
-        ms_session = ms_info.get('session')   # 如 '2023_jun' 或 '2023'
-        ms_p9702   = ms_info.get('paper9702', {})
-        matched    = False
+        ms_unit      = ms_info['unit']
+        ms_econ_unit = ms_info.get('econ_unit')    # ← 新增：经济学 unit
+        ms_answers   = ms_info['answers']
+        ms_source    = ms_info['source']
+        ms_session   = ms_info.get('session')   # 如 '2023_jun' 或 '2023'
+        ms_p9702     = ms_info.get('paper9702', {})
+        matched      = False
 
         # ── 优先级⓪：9702 文件名精确匹配（session_key 完全一致）──
         # 例：9702_m20_ms_42 精确匹配 9702_m20_qp_42
@@ -4098,6 +4202,39 @@ def upload_multi():
                           f'(session_key={ms_sk}, answers={cnt})')
                     matched = True
                     break
+
+        # ── 优先级①E：Edexcel Economics econ_unit + session 完全匹配 ──
+        if not matched and ms_econ_unit and ms_session:
+            for grp in qp_groups:
+                if (grp.get('econ_unit') == ms_econ_unit and
+                        grp.get('session') == ms_session and
+                        grp.get('source') == 'edexcel_economics'):
+                    cnt = _inject_answers(grp, ms_answers, ms_info['filename'])
+                    print(f'[MS match①E] {ms_info["filename"]} → {grp["filename"]} '
+                          f'(econ_unit={ms_econ_unit}, session={ms_session}, answers={cnt})')
+                    matched = True
+                    break
+
+        # ── 优先级②E：Edexcel Economics econ_unit 匹配，选得分最高 ──
+        if not matched and ms_econ_unit:
+            candidates = [g for g in qp_groups
+                          if g.get('econ_unit') == ms_econ_unit
+                          and g.get('source') == 'edexcel_economics'
+                          and not g.get('has_ms')]
+            if len(candidates) == 1:
+                grp = candidates[0]
+                cnt = _inject_answers(grp, ms_answers, ms_info['filename'])
+                print(f'[MS match②E-single] {ms_info["filename"]} → {grp["filename"]} '
+                      f'(econ_unit={ms_econ_unit}, answers={cnt})')
+                matched = True
+            elif len(candidates) > 1:
+                best = max(candidates, key=lambda g: _score_match(g, ms_answers))
+                best_score = _score_match(best, ms_answers)
+                if best_score >= 0:   # econ MS 子题 key 可能是字符串，score 可能为 0
+                    cnt = _inject_answers(best, ms_answers, ms_info['filename'])
+                    print(f'[MS match②E-best] {ms_info["filename"]} → {best["filename"]} '
+                          f'(econ_unit={ms_econ_unit}, score={best_score}, answers={cnt})')
+                    matched = True
 
         # ── 优先级①：unit + session 完全匹配 ──
         if not matched and ms_unit and ms_session:
@@ -4130,7 +4267,7 @@ def upload_multi():
                     matched = True
 
         # ── 优先级③：Cambridge 等非数学：source 相同且只有一份 QP ──
-        if not matched and not ms_unit:
+        if not matched and not ms_unit and not ms_econ_unit:
             same_src = [g for g in qp_groups if g['source'] == ms_source]
             if len(same_src) == 1:
                 grp = same_src[0]
@@ -4216,11 +4353,423 @@ def _get_paper_type():
     return 'mcq'
 
 
+def detect_edexcel_economics_ms_questions(doc):
+    """
+    检测 Edexcel Economics Mark Scheme 中的题目边界。
+
+    MS 文件结构：
+      Section A (pg 3-4): 表格式，Q1-Q6，按 Answer 列块 y1 分隔
+      Section B (pg 5-9): Q7-Q11，每页独立，顶部有 Question 行
+      Section C (pg 10-16): Q12(a)-Q12(e)，子题格式
+      Section D (pg 17+): Q13-Q14，大作文格式
+
+    返回列表：[{q_num, sub_label, page_idx, y_start, y_end, pages, section}]
+      - q_num: 整数题号（1-14）
+      - sub_label: '' 或 '(a)'/'(b)'/'(c)'/'(d)'/'(e)'
+      - page_idx: 题目起始页（0-based）
+      - y_start: 起始 y 坐标
+      - y_end: 结束 y 坐标（None 表示到页末）
+      - pages: [(page_idx, y_start, y_end)] 多页列表（用于 Q12e 等）
+    """
+    questions = []
+
+    # ── Section A: 表格式，Q1-Q6 ──
+    # 识别策略：
+    #   - 左列（x0≈62）有题号块（纯数字或含 Q1 的大块）
+    #   - 中间答案列（x0≈296）的 y1 是该题行底
+    section_a_pages = []
+    for pg_i in range(doc.page_count):
+        text = doc[pg_i].get_text()
+        if 'Section A' in text and pg_i >= 2:
+            # Section A 第一页：包含 "Section A" 标题
+            section_a_pages.append(pg_i)
+            # Section A 第二页：紧接着的下一页（不含 Section B 标题）
+            next_pg = pg_i + 1
+            if next_pg < doc.page_count:
+                next_text = doc[next_pg].get_text()
+                if 'Section B' not in next_text and 'Section A' not in next_text:
+                    section_a_pages.append(next_pg)
+            break
+
+    _section_a_table = {}   # q_num -> (page_idx, y_row_start, y_row_end)
+
+    for pg_i in section_a_pages:
+        page = doc[pg_i]
+        ph = page.rect.height
+        pw = page.rect.width
+        blocks = page.get_text('blocks')
+
+        # 收集所有文本块，按 y0 排序
+        text_blocks = []
+        for b in blocks:
+            x0, y0, x1, y1, txt, bno, btype = b
+            if btype != 0:
+                continue
+            text_blocks.append((x0, y0, x1, y1, txt.strip()))
+        text_blocks.sort(key=lambda b: b[1])
+
+        q_blocks = []    # (q_num, y_start_of_q_block)
+        ans_blocks = []  # (y0, y1)  Answer 列块
+
+        for x0, y0, x1, y1, ts in text_blocks:
+            first_line = ts.split('\n')[0].strip()
+
+            # 题号块：x0 < 80
+            if x0 < 80:
+                m = re.match(r'^(\d+)\s*$', first_line)
+                if m:
+                    q_num = int(m.group(1))
+                    if 2 <= q_num <= 6:
+                        q_blocks.append((q_num, y0))
+                # Q1 大块（包含 'Question' 和 '1'）
+                elif 'Question' in first_line and re.search(r'\n1[\s\n]', ts):
+                    if not any(q[0] == 1 for q in q_blocks):
+                        q_blocks.insert(0, (1, y0))
+
+            # Answer 列块：x0≈280-310（中间列），含有答案文字
+            if 270 < x0 < 320 and y0 > 50:
+                ans_blocks.append((y0, y1))
+
+        # Q1 兜底：如果没找到，用第一个 x0<80 的块
+        if not any(q[0] == 1 for q in q_blocks):
+            for x0, y0, x1, y1, ts in text_blocks:
+                if x0 < 80 and y0 < 200:
+                    q_blocks.insert(0, (1, y0))
+                    break
+
+        # 为每个题号找对应的答案块（y0 >= q_y0 且最接近）
+        for q_num, q_y0 in q_blocks:
+            row_bottom = ph
+            for a_y0, a_y1 in sorted(ans_blocks):
+                if a_y0 >= q_y0 - 10:   # 允许 10pt 容差
+                    row_bottom = a_y1
+                    break
+            if q_num not in _section_a_table:
+                _section_a_table[q_num] = (pg_i, q_y0, row_bottom)
+
+    for q_num in sorted(_section_a_table.keys()):
+        pg_i, y_start, y_end = _section_a_table[q_num]
+        questions.append({
+            'q_num':     q_num,
+            'sub_label': '',
+            'page_idx':  pg_i,
+            'y_start':   y_start,
+            'y_end':     y_end,
+            'pages':     [(pg_i, y_start, y_end)],
+            'section':   'A',
+        })
+
+    # ── Section B/C/D ──
+    Q_NUM_PAT = re.compile(r'^(\d+)\s*$')
+    Q12_SUB   = re.compile(r'^12\s*\(([a-e])\)', re.IGNORECASE)
+
+    seen_q      = set(q['q_num'] for q in questions)
+    seen_12subs = set()
+    q12e_pages  = []
+    q12e_started = False
+
+    for pg_i in range(doc.page_count):
+        page = doc[pg_i]
+        ph = page.rect.height
+        pw = page.rect.width
+        page_text = page.get_text()
+
+        # 跳过 Section A 页
+        if 'Section A' in page_text and pg_i < 6:
+            continue
+
+        # Q12(e) 多页追加（在 Section D 出现前）
+        if q12e_started:
+            if 'Section D' in page_text or pg_i >= 17:
+                # Q12e 结束
+                q12e_started = False
+                questions.append({
+                    'q_num':     12,
+                    'sub_label': '(e)',
+                    'page_idx':  q12e_pages[0][0],
+                    'y_start':   q12e_pages[0][1],
+                    'y_end':     None,
+                    'pages':     list(q12e_pages),
+                    'section':   'C',
+                })
+            else:
+                if pg_i not in [p[0] for p in q12e_pages]:
+                    q12e_pages.append((pg_i, 0, None))
+
+        blocks = page.get_text('blocks')
+        for b in blocks:
+            x0, y0, x1, y1, txt, bno, btype = b
+            if btype != 0:
+                continue
+            ts = txt.strip()
+            first_line = ts.split('\n')[0].strip()
+
+            # Q7-Q11: 纯数字块 x0<80
+            m = Q_NUM_PAT.match(first_line)
+            if m and x0 < 80:
+                q_num = int(m.group(1))
+                if 7 <= q_num <= 11 and q_num not in seen_q:
+                    questions.append({
+                        'q_num':     q_num,
+                        'sub_label': '',
+                        'page_idx':  pg_i,
+                        'y_start':   y0,
+                        'y_end':     None,
+                        'pages':     [(pg_i, y0, None)],
+                        'section':   'B',
+                    })
+                    seen_q.add(q_num)
+                elif q_num in (13, 14) and q_num not in seen_q:
+                    questions.append({
+                        'q_num':     q_num,
+                        'sub_label': '',
+                        'page_idx':  pg_i,
+                        'y_start':   y0,
+                        'y_end':     None,
+                        'pages':     [(pg_i, y0, None)],
+                        'section':   'D',
+                    })
+                    seen_q.add(q_num)
+
+            # Q12 子题
+            m12 = Q12_SUB.match(first_line)
+            if m12:
+                sub = m12.group(1).lower()
+                key = f'12{sub}'
+                if key not in seen_12subs:
+                    seen_12subs.add(key)
+                    if sub == 'e':
+                        if not q12e_started:
+                            q12e_started = True
+                            q12e_pages = [(pg_i, y0, None)]
+                    else:
+                        questions.append({
+                            'q_num':     12,
+                            'sub_label': f'({sub})',
+                            'page_idx':  pg_i,
+                            'y_start':   y0,
+                            'y_end':     None,
+                            'pages':     [(pg_i, y0, None)],
+                            'section':   'C',
+                        })
+
+    # Q12e 若未关闭
+    if q12e_started and q12e_pages:
+        questions.append({
+            'q_num':     12,
+            'sub_label': '(e)',
+            'page_idx':  q12e_pages[0][0],
+            'y_start':   q12e_pages[0][1],
+            'y_end':     None,
+            'pages':     list(q12e_pages),
+            'section':   'C',
+        })
+
+    # Q12(e) 兜底：若 seen_12subs 仍无 '12e'，通过 Q12(d) 推断
+    if '12e' not in seen_12subs:
+        # Q12(d) 所在页 + 1 到 Section D 前
+        d_page = None
+        for q in questions:
+            if q['q_num'] == 12 and q.get('sub_label') == '(d)':
+                d_page = q['page_idx']
+                break
+        if d_page is not None:
+            e_start = d_page + 1
+            q12e_pages_fb = []
+            for ext_pg in range(e_start, 17):
+                if ext_pg >= doc.page_count:
+                    break
+                if 'Section D' not in doc[ext_pg].get_text():
+                    y_s = 63 if ext_pg == e_start else 0
+                    q12e_pages_fb.append((ext_pg, y_s, None))
+            if q12e_pages_fb:
+                questions.append({
+                    'q_num':     12,
+                    'sub_label': '(e)',
+                    'page_idx':  q12e_pages_fb[0][0],
+                    'y_start':   q12e_pages_fb[0][1],
+                    'y_end':     None,
+                    'pages':     q12e_pages_fb,
+                    'section':   'C',
+                })
+
+    # Q13 兜底：若仍未找到，扫含 Section D 的页
+    if 13 not in seen_q:
+        for pg_i in range(doc.page_count):
+            page = doc[pg_i]
+            page_text = page.get_text()
+            if 'Section D' in page_text:
+                blocks = page.get_text('blocks')
+                for b in blocks:
+                    x0, y0, x1, y1, txt, bno, btype = b
+                    if btype != 0:
+                        continue
+                    ts = txt.strip()
+                    if re.search(r'(?:^|\n)13\s*\n', ts) and x0 < 80:
+                        questions.append({
+                            'q_num':     13,
+                            'sub_label': '',
+                            'page_idx':  pg_i,
+                            'y_start':   y0,
+                            'y_end':     None,
+                            'pages':     [(pg_i, y0, None)],
+                            'section':   'D',
+                        })
+                        seen_q.add(13)
+                        break
+                if 13 in seen_q:
+                    break
+
+    def _sort_key(q):
+        sub_ord = {'': 0, '(a)': 1, '(b)': 2, '(c)': 3, '(d)': 4, '(e)': 5}
+        return (q['q_num'], sub_ord.get(q.get('sub_label', ''), 99))
+
+    questions.sort(key=_sort_key)
+    return questions
+
+
+def _render_edexcel_economics_ms_answers(ms_doc, dpi=150):
+    """
+    渲染 Edexcel Economics Mark Scheme 所有题目答案为 JPEG base64 字典。
+
+    返回：{key: {'b64': str, 'w': int, 'h': int}}
+      - Section A (Q1-Q6): key = 整数 1-6
+      - Section B (Q7-Q11): key = 整数 7-11
+      - Section C Q12子题: key = 字符串 '12a'/'12b'/'12c'/'12d'/'12e'
+      - Section D (Q13-Q14): key = 整数 13-14
+
+    切割策略：
+      Section A: 按表格横线行切，全宽渲染
+      Section B/C/D 单页题: 从 y_start 到页末
+      Q12(e) 多页: 垂直拼接
+      Q13/Q14 多页: 从起始页 y_start 到文档末，多页拼接
+    """
+    import base64 as _b64
+    from PIL import Image as _PILImg
+
+    questions = detect_edexcel_economics_ms_questions(ms_doc)
+    if not questions:
+        return {}
+
+    # 收集 Q13/Q14 的多页范围
+    # Q13: 从 page_idx 到 Q14 开始页前一页（或到文档最后正文页）
+    # Q14: 从 page_idx 到文档最后正文页
+    q13_info = next((q for q in questions if q['q_num'] == 13), None)
+    q14_info = next((q for q in questions if q['q_num'] == 14), None)
+    last_content_page = ms_doc.page_count - 2  # 最后一页通常是版权页
+
+    if q13_info:
+        q13_start_pg = q13_info['page_idx']
+        q14_start_pg = q14_info['page_idx'] if q14_info else last_content_page + 1
+        q13_pages = [(pg_i, (q13_info['y_start'] if pg_i == q13_start_pg else 0), None)
+                     for pg_i in range(q13_start_pg, q14_start_pg)]
+        q13_info = dict(q13_info)
+        q13_info['pages'] = q13_pages
+
+    if q14_info:
+        q14_start_pg = q14_info['page_idx']
+        q14_pages = [(pg_i, (q14_info['y_start'] if pg_i == q14_start_pg else 0), None)
+                     for pg_i in range(q14_start_pg, last_content_page + 1)]
+        q14_info = dict(q14_info)
+        q14_info['pages'] = q14_pages
+
+    result = {}
+    scale = dpi / 72.0
+    mat = fitz.Matrix(scale, scale)
+
+    for q in questions:
+        q_num = q['q_num']
+        sub   = q.get('sub_label', '')
+
+        # 确定 result key
+        if sub:
+            key = f"{q_num}{sub[1]}"   # '(a)' → '12a'
+        else:
+            key = q_num
+
+        # Q13/Q14 使用多页版本
+        if q_num == 13 and q13_info:
+            q = q13_info
+        elif q_num == 14 and q14_info:
+            q = q14_info
+
+        section = q.get('section', '')
+        pages_info = q.get('pages', [(q['page_idx'], q['y_start'], q.get('y_end'))])
+
+        try:
+            parts = []
+            total_w, total_h = 0, 0
+
+            for (pg_i, y_s, y_e) in pages_info:
+                if pg_i >= ms_doc.page_count:
+                    continue
+                page = ms_doc[pg_i]
+                ph = page.rect.height
+                pw = page.rect.width
+
+                if section == 'A':
+                    x_left  = 50.0
+                    x_right = pw - 20.0
+                    y_top   = max(0.0, float(y_s) - 2)
+                    y_bot   = min(ph, float(y_e) + 2) if y_e is not None else ph
+                else:
+                    x_left  = 40.0
+                    x_right = pw - 20.0
+                    y_top   = max(0.0, float(y_s) - 2) if y_s and float(y_s) > 0 else 0.0
+                    y_bot   = min(ph, float(y_e)) if y_e is not None else ph - 20.0
+
+                if y_bot <= y_top + 5:
+                    continue
+
+                clip = fitz.Rect(x_left, y_top, x_right, y_bot)
+                pix  = page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csRGB)
+                w, h = pix.width, pix.height
+                data = _pixmap_to_jpeg_bytes(pix)
+                del pix
+                if h > 5:
+                    parts.append((data, w, h))
+                    total_w = max(total_w, w)
+                    total_h += h
+
+            if not parts:
+                continue
+
+            if len(parts) == 1:
+                jpeg_out, cw, ch = parts[0]
+            else:
+                canvas = _PILImg.new('RGB', (total_w, total_h), (255, 255, 255))
+                y_off = 0
+                for (jpeg_part, pw2, ph2) in parts:
+                    img_part = _PILImg.open(io.BytesIO(jpeg_part))
+                    if pw2 != total_w:
+                        img_part = img_part.resize(
+                            (total_w, int(ph2 * total_w / pw2)), _PILImg.LANCZOS)
+                        ph2 = img_part.size[1]
+                    canvas.paste(img_part, (0, y_off))
+                    y_off += ph2
+                buf = io.BytesIO()
+                canvas.save(buf, format='JPEG', quality=88)
+                jpeg_out = buf.getvalue()
+                cw, ch = total_w, y_off
+
+            result[key] = {
+                'b64': _b64.b64encode(jpeg_out).decode('utf-8'),
+                'w':   cw,
+                'h':   ch,
+            }
+            print(f'[econ_ms] rendered Q{q_num}{sub} key={key} pages={len(pages_info)} h={ch}px')
+        except Exception as e:
+            print(f'[econ_ms] render error Q{q_num}{sub}: {e}')
+
+    return result
+
+
 def _detect_questions_ms(doc, paper_type):
     """
     Mark Scheme 专用题号检测入口。
     MS 文件题号格式多为 'Question 1'、'Question 2' 或 '1.' / '1'。
     对 edexcel_maths 类型额外尝试 'Question N' 行级标题格式。
+    edexcel_economics 使用专用函数 detect_edexcel_economics_ms_questions。
     """
     if paper_type == 'edexcel_maths':
         # 先用标准检测
@@ -4229,6 +4778,9 @@ def _detect_questions_ms(doc, paper_type):
             return questions
         # 退回：扫描 'Question N' 行（MS 常见格式）
         return _detect_ms_questions_by_header(doc)
+    # edexcel_economics 专用检测（返回结果仅用于占位；实际渲染由专用函数完成）
+    if paper_type == 'edexcel_economics':
+        return detect_edexcel_economics_ms_questions(doc)
     return _detect_questions(doc, paper_type)
 
 
