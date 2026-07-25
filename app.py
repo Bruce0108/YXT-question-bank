@@ -3968,7 +3968,7 @@ def upload_multi():
                 ms_questions = _detect_questions_ms(doc, ms_pt)
                 ms_answers   = _render_ms_questions_b64(doc, ms_questions, ms_pt, dpi=150)
                 print(f'[upload] MS parsed: {file.filename} type={ms_pt} '
-                      f'answers={sorted(ms_answers.keys()) if ms_answers else []}')
+                      f'answers={sorted(ms_answers.keys(), key=str) if ms_answers else []}')
                 ms_registry.append({
                     'filename':   file.filename,
                     'unit':       maths_unit,
