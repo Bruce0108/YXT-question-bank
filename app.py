@@ -699,7 +699,8 @@ def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
         re.IGNORECASE
     )
     MARKS_PAT = re.compile(
-        r'\(\d+\s*marks?\)$|\[\d+\]$|\(\d+\)$',
+        r'\(\d+\s*marks?\)$|\[\d+\]$|\(\d+\)$'
+        r'|total\s+for\s+question\s+\d+\s*=\s*\d+\s*marks?',
         re.IGNORECASE
     )
 
@@ -732,7 +733,7 @@ def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
     hline_start = None
     try:
         drawings = page.get_drawings()
-        wide_hlines  = []   # 超宽线 dx > 70% 页宽
+        wide_hlines  = []   # 超宽线 dx > 70% 页宽，存 (mid_y, x_left)
         normal_hlines = []  # 普通宽线 dx > 30% 页宽
         for d in drawings:
             for item in d.get('items', []):
@@ -741,9 +742,10 @@ def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
                     dy    = abs(p2.y - p1.y)
                     dx    = abs(p2.x - p1.x)
                     mid_y = (p1.y + p2.y) / 2
+                    x_left = min(p1.x, p2.x)
                     if dy < 3 and 40 < mid_y < ph - 40:
                         if dx > pw * 0.70:
-                            wide_hlines.append(mid_y)
+                            wide_hlines.append((mid_y, x_left))
                         elif dx > pw * 0.30:
                             normal_hlines.append(mid_y)
                 elif item[0] == 're':
@@ -751,15 +753,24 @@ def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None):
                     rh    = abs(r.y1 - r.y0)
                     rw    = abs(r.x1 - r.x0)
                     mid_y = (r.y0 + r.y1) / 2
+                    x_left = min(r.x0, r.x1)
                     if rh < 4 and 40 < mid_y < ph - 40:
                         if rw > pw * 0.70:
-                            wide_hlines.append(mid_y)
+                            wide_hlines.append((mid_y, x_left))
                         elif rw > pw * 0.30:
                             normal_hlines.append(mid_y)
 
         # 档位1：超宽单条横线 → 直接截止（答题区起始最可靠信号）
-        # 过滤：排除 y > ph - 60 的底部页脚装饰线（Edexcel 每页底部都有一条跨页分割线）
-        wide_hlines_content = [y for y in wide_hlines if y < ph - 60]
+        # 过滤1：排除 y > ph - 60 的底部页脚装饰线（Edexcel 每页底部都有一条跨页分割线）
+        # 过滤2：排除 y < y_min 的横线（属于上一道题的分隔线，不是本题的答题区边界）
+        #        例：Q2 y_min=319, 页面上方 y=308.6 是 Q1/Q2 间分隔线，不应截断 Q2
+        # 过滤3：排除 x_left > 65 的横线（图表内部网格线，如柱状图/折线图的坐标刻度）
+        #        真正的题目分隔线从页面内容区左边距起始（x_left ≤ 65pt ≈ 43-45pt）
+        #        图表内部线条有明显缩进（x_left ≈ 98pt 或更大），应排除
+        wide_hlines_content = [y for y, x_left in wide_hlines
+                               if y < ph - 60
+                               and (y_min is None or y >= y_min)
+                               and x_left <= 65]
         if wide_hlines_content:
             wide_hlines_content.sort()
             hline_start = max(0, wide_hlines_content[0] - 6)
@@ -978,16 +989,23 @@ def crop_question_image(doc, questions, q_idx, dpi=150, paper_type='mcq'):
 
         if pg_i == pg_start and pg_i == pg_end:
             # 同页：先用题干底部检测，再和 y_end 取 min（确保不含下一题）
+            # 传入 y_min=y_top：让 _find_question_stem_bottom 忽略题目起始以上的
+            # answer-zone 信号（如 Section header 全局指令、上一题的分隔横线）
             top = max(0, y_top)
-            stem_bottom = _find_question_stem_bottom(page, ph, paper_type)
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type, y_min=y_top)
             if y_end is not None:
-                bottom = min(stem_bottom, min(ph, y_end))
+                if stem_bottom <= y_top:
+                    bottom = min(ph, y_end)
+                else:
+                    bottom = min(stem_bottom, min(ph, y_end))
             else:
-                bottom = stem_bottom
+                bottom = stem_bottom if stem_bottom > y_top else ph - 25
         elif pg_i == pg_start:
             # 首页：从题号到题干底部（不含本页的答题区横线）
+            # 传入 y_min=y_top：排除题目起始以上的 answer-zone 误判
             top = max(0, y_top)
-            bottom = _find_question_stem_bottom(page, ph, paper_type)
+            stem_bottom = _find_question_stem_bottom(page, ph, paper_type, y_min=y_top)
+            bottom = stem_bottom if stem_bottom > y_top else ph - 25
         elif pg_i == pg_end:
             # 末页：从页顶到 min(题干底部, 下一题题号)
             top = 55  # 跳过页眉
