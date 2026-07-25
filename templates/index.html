@@ -237,6 +237,10 @@
   .qc-answer-wrap{border-top:1px solid #bbf7d0;margin-top:0;background:#f0fdf4}
   .qc-answer-bar{padding:5px 10px;font-size:11px;font-weight:600;color:#15803d;background:#dcfce7;border-bottom:1px solid #bbf7d0;display:flex;align-items:center;gap:5px}
   .qc-answer-img{width:100%;display:block;}
+  /* 多页答案：每页分隔 */
+  .qc-answer-page{border-bottom:2px dashed #bbf7d0;margin-bottom:0;}
+  .qc-answer-page:last-child{border-bottom:none;}
+  .qc-answer-page-label{font-size:10px;color:#15803d;background:#dcfce7;padding:2px 8px;text-align:right;font-weight:600;letter-spacing:.5px;}
 
   /* Modal */
   .mo{position:fixed;inset:0;background:rgba(15,23,42,.72);z-index:200;display:none;overflow:auto;padding:20px;backdrop-filter:blur(4px)}
@@ -1996,11 +2000,31 @@ function renderGrid() {
       // 答案区域（仅当题目有 answer_b64 时显示）
       const hasAnswer = !!(q.answer_b64);
       const _ansMime = q.answer_b64 && q.answer_b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+
+      // 多页答案：answer_pages 是数组时逐页显示；否则退回单张大图
+      let answerImgHtml = '';
+      if (hasAnswer) {
+        const pages = q.answer_pages;  // 可能是 null/undefined（单页）或数组（多页）
+        if (pages && Array.isArray(pages) && pages.length > 1) {
+          // 多页：逐页单独显示
+          answerImgHtml = pages.map((pg, idx) => {
+            const mime = pg.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+            return `<div class="qc-answer-page">
+              <div class="qc-answer-page-label">— 第 ${idx+1} 页 / 共 ${pages.length} 页 —</div>
+              <img class="qc-answer-img" src="data:${mime};base64,${pg.b64}"
+                   alt="Answer p${idx+1}" style="width:100%;display:block;">
+            </div>`;
+          }).join('');
+        } else {
+          // 单页：原有方式
+          answerImgHtml = `<img class="qc-answer-img" id="ans-img-${uid}" src="data:${_ansMime};base64,${q.answer_b64}"
+               alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">`;
+        }
+      }
       const answerHtml = hasAnswer ? `
         <div class="qc-answer-wrap" id="ans-${uid}" style="display:none">
           <div class="qc-answer-bar">📋 Mark Scheme 答案</div>
-          <img class="qc-answer-img" id="ans-img-${uid}" src="data:${_ansMime};base64,${q.answer_b64}"
-               alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">
+          ${answerImgHtml}
         </div>` : '';
       card.innerHTML = `
         <div class="qc-hdr">
@@ -3759,6 +3783,7 @@ async function confirmSaveLib() {
       }
 
       if (q.answer_b64) entry.answer_b64 = q.answer_b64;
+      if (q.answer_pages) entry.answer_pages = q.answer_pages;
       questionsPayload.push(entry);
 
       // 更新进度（5% → 20%）
@@ -4060,6 +4085,7 @@ function _applyLoadedWorkbook(d) {
       _img_h:        q.img_h || 0,
       // 答案图片（从 library_load 的 answer_b64 字段）
       answer_b64:    q.answer_b64 || '',
+      answer_pages:  q.answer_pages || null,
     };
     allQuestions.push(qObj);
     g.questions.push(qObj);

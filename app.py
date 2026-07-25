@@ -4133,11 +4133,12 @@ def upload_multi():
                 canvas.save(buf, format='JPEG', quality=88)
                 raw_out = buf.getvalue()
                 cw, ch = total_w, y_off
-            # 将聚合图像写入 merged_answers（key = 整数）
+            # 将聚合图像写入 merged_answers（key = 整数，pages=None 表示已合并为单图）
             merged_answers[qn] = {
-                'b64': _b64.b64encode(raw_out).decode('utf-8'),
-                'w':   cw,
-                'h':   ch,
+                'b64':   _b64.b64encode(raw_out).decode('utf-8'),
+                'w':     cw,
+                'h':     ch,
+                'pages': None,
             }
 
         # 注入
@@ -4149,17 +4150,19 @@ def upload_multi():
                 sub_key = f"{q_num}{sub[1]}"  # '(a)' → '12a'
                 if sub_key in merged_answers:
                     ans = merged_answers[sub_key]
-                    q['answer_b64'] = ans['b64']
-                    q['answer_w']   = ans['w']
-                    q['answer_h']   = ans['h']
+                    q['answer_b64']   = ans['b64']
+                    q['answer_w']     = ans['w']
+                    q['answer_h']     = ans['h']
+                    q['answer_pages'] = ans.get('pages')  # 多页数组（可为 None）
                     count += 1
                     continue
             # 整数 key 直接匹配
             if q_num in merged_answers:
                 ans = merged_answers[q_num]
-                q['answer_b64'] = ans['b64']
-                q['answer_w']   = ans['w']
-                q['answer_h']   = ans['h']
+                q['answer_b64']   = ans['b64']
+                q['answer_w']     = ans['w']
+                q['answer_h']     = ans['h']
+                q['answer_pages'] = ans.get('pages')  # 多页数组（可为 None）
                 count += 1
 
         grp['has_ms']  = True
@@ -4735,29 +4738,33 @@ def _render_edexcel_economics_ms_answers(ms_doc, dpi=150):
                 continue
 
             if len(parts) == 1:
+                # 单页：保持原有格式
                 jpeg_out, cw, ch = parts[0]
+                result[key] = {
+                    'b64':   _b64.b64encode(jpeg_out).decode('utf-8'),
+                    'w':     cw,
+                    'h':     ch,
+                    'pages': None,  # 单页不需要 pages 数组
+                }
             else:
-                canvas = _PILImg.new('RGB', (total_w, total_h), (255, 255, 255))
-                y_off = 0
+                # 多页：每页单独存储，不拼接
+                pages_list = []
                 for (jpeg_part, pw2, ph2) in parts:
-                    img_part = _PILImg.open(io.BytesIO(jpeg_part))
-                    if pw2 != total_w:
-                        img_part = img_part.resize(
-                            (total_w, int(ph2 * total_w / pw2)), _PILImg.LANCZOS)
-                        ph2 = img_part.size[1]
-                    canvas.paste(img_part, (0, y_off))
-                    y_off += ph2
-                buf = io.BytesIO()
-                canvas.save(buf, format='JPEG', quality=88)
-                jpeg_out = buf.getvalue()
-                cw, ch = total_w, y_off
+                    pages_list.append({
+                        'b64': _b64.b64encode(jpeg_part).decode('utf-8'),
+                        'w':   pw2,
+                        'h':   ph2,
+                    })
+                # b64 取第一页（向后兼容；前端优先用 pages 数组）
+                first = parts[0]
+                result[key] = {
+                    'b64':   _b64.b64encode(first[0]).decode('utf-8'),
+                    'w':     first[1],
+                    'h':     first[2],
+                    'pages': pages_list,  # 多页数组，前端逐页显示
+                }
 
-            result[key] = {
-                'b64': _b64.b64encode(jpeg_out).decode('utf-8'),
-                'w':   cw,
-                'h':   ch,
-            }
-            print(f'[econ_ms] rendered Q{q_num}{sub} key={key} pages={len(pages_info)} h={ch}px')
+            print(f'[econ_ms] rendered Q{q_num}{sub} key={key} pages={len(pages_info)} h_total={sum(p[2] for p in parts)}px')
         except Exception as e:
             print(f'[econ_ms] render error Q{q_num}{sub}: {e}')
 
