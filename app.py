@@ -4856,6 +4856,41 @@ def _detect_questions(doc, paper_type):
         return detect_structured_questions(doc)
 
 
+
+@app.route('/api/get_answer', methods=['GET'])
+def get_answer():
+    """
+    按需返回单题的完整答案数据（含多页图片）。
+    参数：session_id, file_idx, q_num
+    返回：{b64, w, h, pages: [{b64,w,h},...] or null}
+    """
+    sess_id  = request.args.get('session_id', '')
+    file_idx = int(request.args.get('file_idx', 0))
+    q_num    = int(request.args.get('q_num', 0))
+
+    sess = _get_session(sess_id) if sess_id else None
+    if not sess or file_idx >= len(sess):
+        return jsonify({'error': 'session不存在'}), 404
+
+    grp = sess[file_idx]
+    q_obj = next((q for q in grp.get('questions', []) if q.get('q_num') == q_num), None)
+    if not q_obj:
+        return jsonify({'error': '题目不存在'}), 404
+
+    ans_b64   = q_obj.get('answer_b64', '')
+    ans_pages = q_obj.get('answer_pages')  # None 或 [{b64,w,h},...]
+
+    if not ans_b64:
+        return jsonify({'error': '该题无答案'}), 404
+
+    return jsonify({
+        'b64':   ans_b64,
+        'w':     q_obj.get('answer_w', 0),
+        'h':     q_obj.get('answer_h', 0),
+        'pages': ans_pages,
+    })
+
+
 @app.route('/api/preview/<int:q_num>', methods=['GET'])
 def preview_question(q_num):
     """预览单题图片，支持 ?session_id=&file_idx= 参数"""

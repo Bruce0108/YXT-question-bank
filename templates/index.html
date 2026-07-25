@@ -1116,9 +1116,10 @@ const TIKU_KEY = 'tiku_session';
 function _saveSession() {
   try {
     // _img_b64 数据量巨大（每题 ~50KB base64），会撑爆 5MB 的 sessionStorage
-    // 存储时剔除 _img_b64/_img_w/_img_h，恢复后从 API 重新获取
+    // 存储时剔除 _img_b64/_img_w/_img_h 和 answer_pages（数据量太大会撑爆5MB sessionStorage）
+    // answer_pages 通过 /api/get_answer 按需加载，不需要持久化
     const stripImg = (q) => {
-      const {_img_b64, _img_w, _img_h, ...rest} = q;
+      const {_img_b64, _img_w, _img_h, answer_pages, ...rest} = q;
       return rest;
     };
     const payload = {
@@ -2001,12 +2002,13 @@ function renderGrid() {
       const hasAnswer = !!(q.answer_b64);
       const _ansMime = q.answer_b64 && q.answer_b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
 
-      // 多页答案：answer_pages 是数组时逐页显示；否则退回单张大图
+      // 多页答案：渲染时先用 answer_b64 显示第一页，展开后按需加载所有页
+      // answer_pages 可能因 sessionStorage 超限丢失，所以通过 /api/get_answer 按需加载
       let answerImgHtml = '';
       if (hasAnswer) {
         const pages = q.answer_pages;  // 可能是 null/undefined（单页）或数组（多页）
         if (pages && Array.isArray(pages) && pages.length > 1) {
-          // 多页：逐页单独显示
+          // 多页：内存里已有数据，直接逐页显示
           answerImgHtml = pages.map((pg, idx) => {
             const mime = pg.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
             return `<div class="qc-answer-page">
@@ -2016,13 +2018,15 @@ function renderGrid() {
             </div>`;
           }).join('');
         } else {
-          // 单页：原有方式
+          // 单页或 answer_pages 丢失：显示第一页，并标记需要按需加载
           answerImgHtml = `<img class="qc-answer-img" id="ans-img-${uid}" src="data:${_ansMime};base64,${q.answer_b64}"
-               alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">`;
+               alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">
+            <div id="ans-extra-${uid}"></div>`;
         }
       }
       const answerHtml = hasAnswer ? `
-        <div class="qc-answer-wrap" id="ans-${uid}" style="display:none">
+        <div class="qc-answer-wrap" id="ans-${uid}" style="display:none"
+             data-gidx="${q.gIdx}" data-qnum="${q.q_num}" data-loaded="${(q.answer_pages && q.answer_pages.length > 1) ? '1' : '0'}">
           <div class="qc-answer-bar">📋 Mark Scheme 答案</div>
           ${answerImgHtml}
         </div>` : '';
@@ -2076,8 +2080,54 @@ function toggleAnswer(uid, e) {
     ansBtn.style.color       = visible ? '#15803d' : '#854d0e';
     ansBtn.style.border      = visible ? '1px solid #bbf7d0' : '1px solid #fef08a';
   }
+  // 按需加载多页答案（answer_pages 可能因 sessionStorage 超限丢失）
+  if (!visible && ansWrap.dataset.loaded === '0') {
+    _loadAnswerPages(uid, ansWrap);
+  }
   // 同步全局按钮状态
   _syncToggleAllAnsBtn();
+}
+
+async function _loadAnswerPages(uid, ansWrap) {
+  const gIdx  = parseInt(ansWrap.dataset.gidx);
+  const qNum  = parseInt(ansWrap.dataset.qnum);
+  if (!sessionId) return;
+  try {
+    const resp = await fetch(`/api/get_answer?session_id=${sessionId}&file_idx=${gIdx}&q_num=${qNum}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data.pages || !Array.isArray(data.pages) || data.pages.length <= 1) return;
+    // 有多页：重建答案内容
+    const extraDiv = document.getElementById(`ans-extra-${uid}`);
+    const firstImg = document.getElementById(`ans-img-${uid}`);
+    if (!extraDiv) return;
+    // 替换第一张图为带页码标签的版本
+    if (firstImg) {
+      const mime0 = data.pages[0].b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+      const wrapper0 = document.createElement('div');
+      wrapper0.className = 'qc-answer-page';
+      wrapper0.innerHTML = `<div class="qc-answer-page-label">— 第 1 页 / 共 ${data.pages.length} 页 —</div>
+        <img class="qc-answer-img" src="data:${mime0};base64,${data.pages[0].b64}" alt="Answer p1" style="width:100%;display:block;">`;
+      firstImg.replaceWith(wrapper0);
+    }
+    // 插入剩余页
+    let html = '';
+    for (let i = 1; i < data.pages.length; i++) {
+      const pg   = data.pages[i];
+      const mime = pg.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+      html += `<div class="qc-answer-page">
+        <div class="qc-answer-page-label">— 第 ${i+1} 页 / 共 ${data.pages.length} 页 —</div>
+        <img class="qc-answer-img" src="data:${mime};base64,${pg.b64}" alt="Answer p${i+1}" style="width:100%;display:block;">
+      </div>`;
+    }
+    extraDiv.innerHTML = html;
+    ansWrap.dataset.loaded = '1';
+    // 同步更新 allQuestions 里的 answer_pages（后续展开无需再请求）
+    const qObj = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
+    if (qObj) qObj.answer_pages = data.pages;
+  } catch(err) {
+    console.warn('[_loadAnswerPages] failed:', err);
+  }
 }
 
 // 同步全局答案按钮文字（根据当前所有答案区的显示状态）
