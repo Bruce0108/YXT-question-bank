@@ -4742,8 +4742,28 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
                     continue  # 匹配到 7(x) 子题块 → 跳过下面整题检测
                 # m7 未匹配（即非 7(x) 格式）→ 继续走整题检测（Q8/Q9/Q10/Q11）
 
-            # Q7-Q11: 纯数字块 x0<80
-            # U3: Q7 整体块不检测（由 Q7_SUB 子题代替），但 Q8/Q9/Q10/Q11 仍正常检测
+                # ── U3 Section C: Q8/Q9/Q10 格式特殊 ──
+                # 题号不是独立纯数字块，而是嵌在 "Question\n...\nIndicative content\n8\n..." 大块里
+                # 检测条件：块含 'Question' 且含 'Indicative content'，块内有嵌入数字行
+                if 'Question' in ts and 'Indicative content' in ts:
+                    _emb = re.search(r'\nIndicative content\s*\n\s*(\d+)\s*\n', ts)
+                    if _emb:
+                        q_num_emb = int(_emb.group(1))
+                        if 8 <= q_num_emb <= 11 and q_num_emb not in seen_q:
+                            questions.append({
+                                'q_num':     q_num_emb,
+                                'sub_label': '',
+                                'page_idx':  pg_i,
+                                'y_start':   y0,
+                                'y_end':     None,
+                                'pages':     [(pg_i, y0, None)],
+                                'section':   'C',   # U3 Section C
+                            })
+                            seen_q.add(q_num_emb)
+                            continue
+
+            # Q7-Q11: 纯数字块 x0<80（U1/U2）
+            # U3: Q7 整体块不检测（由 Q7_SUB 子题代替），Q8-Q11由上方嵌入块逻辑检测
             m = Q_NUM_PAT.match(first_line)
             if m and x0 < 80:
                 q_num = int(m.group(1))
@@ -4969,6 +4989,31 @@ def _render_edexcel_economics_ms_answers(ms_doc, dpi=150):
                      for pg_i in range(q14_start_pg, last_content_page + 1)]
         q14_info = dict(q14_info)
         q14_info['pages'] = q14_pages
+
+    # ── U3 Section C 多页扩展：Q8/Q9/Q10 每题跨3页 ──
+    # 策略：按题号排序，Q8的范围=Q8起始页到Q9起始页-1，以此类推
+    # 最后一题(Q10)到 last_content_page
+    if ms_econ_unit == 'U3':
+        _sec_c_qs = sorted(
+            [q for q in questions if q.get('section') == 'C' and isinstance(q.get('q_num'), int)],
+            key=lambda x: x['q_num']
+        )
+        for _qi, _qc in enumerate(_sec_c_qs):
+            _qn = _qc['q_num']
+            _start_pg = _qc['page_idx']
+            # 下一题起始页（若有）或 last_content_page+1
+            if _qi + 1 < len(_sec_c_qs):
+                _end_pg = _sec_c_qs[_qi + 1]['page_idx']
+            else:
+                _end_pg = last_content_page + 1
+            _mp = [(pg_i, (_qc['y_start'] if pg_i == _start_pg else 0), None)
+                   for pg_i in range(_start_pg, _end_pg)]
+            if len(_mp) > 1:
+                # 更新 questions 列表里对应题目的 pages
+                for _q in questions:
+                    if _q.get('q_num') == _qn and _q.get('section') == 'C':
+                        _q['pages'] = _mp
+                        print(f'[econ_ms] U3 Q{_qn} Section C 多页扩展: {len(_mp)}页 (p{_start_pg+1}~p{_end_pg})')
 
     result = {}
     scale = dpi / 72.0
