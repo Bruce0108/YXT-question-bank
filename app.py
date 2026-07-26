@@ -4004,6 +4004,50 @@ def upload_multi():
                     except Exception:
                         q['topics'] = []
                     q['difficulty'] = None
+
+                # ── 检测 Section C 材料页（Sources for use with Section C）──
+                # 这些页面是 Q12 的阅读材料，需附加到 Q12 题目显示中
+                # 结构：通常在试卷后半部分，含 "Sources for use with Section C" 或
+                # 类似标题，后续页为图表/文字材料
+                try:
+                    import base64 as _b64sc
+                    from PIL import Image as _PILsc
+                    _sources_pages = []
+                    _in_sources = False
+                    _sc_mat = fitz.Matrix(150 / 72.0, 150 / 72.0)
+                    for _pg_i in range(doc.page_count):
+                        _pg_text = doc[_pg_i].get_text()
+                        # 检测材料页开始标志
+                        if ('Sources for use with Section' in _pg_text or
+                                'Source for use with Section' in _pg_text or
+                                'sources for use with section' in _pg_text.lower()):
+                            _in_sources = True
+                        # 检测材料页结束（Acknowledgements 或页面数超限）
+                        if _in_sources:
+                            if 'Acknowledgements' in _pg_text or 'BLANK PAGE' in _pg_text:
+                                break
+                            _pg = doc[_pg_i]
+                            _pw, _ph = _pg.rect.width, _pg.rect.height
+                            # 裁掉 Edexcel 两侧装饰条
+                            _clip = fitz.Rect(36, 40, min(_pw - 36, 550), _ph - 25)
+                            _pix = _pg.get_pixmap(matrix=_sc_mat, clip=_clip, colorspace=fitz.csRGB)
+                            _sc_buf = io.BytesIO()
+                            _PILsc.frombytes('RGB', [_pix.width, _pix.height], _pix.samples)\
+                                  .save(_sc_buf, format='JPEG', quality=88)
+                            _sources_pages.append({
+                                'b64': _b64sc.b64encode(_sc_buf.getvalue()).decode('utf-8'),
+                                'w': _pix.width,
+                                'h': _pix.height,
+                            })
+                            del _pix
+                    # 将材料页注入 Q12 题目对象
+                    if _sources_pages:
+                        _q12 = next((q for q in questions if q.get('q_num') == 12), None)
+                        if _q12 is not None:
+                            _q12['source_pages'] = _sources_pages
+                            print(f'[econ_qp] 检测到 Section C 材料页 {len(_sources_pages)} 页，已附加到 Q12')
+                except Exception as _sc_err:
+                    print(f'[econ_qp] Section C 材料页检测失败: {_sc_err}')
             elif source == 'edexcel_maths':
                 unit_code = _MATHS_UNIT_TO_CODE.get(maths_unit or '', None)
                 for q_idx, q in enumerate(questions):
@@ -4099,47 +4143,48 @@ def upload_multi():
         for qn in sub_keys_by_q:
             sub_keys_by_q[qn].sort()
 
-        # 如果有子题分组，先合并子题图像作为聚合答案
-        # 聚合后的 key = 整数 q_num，覆盖到 ms_answers（临时）
+        # 如果有子题分组，将子题图像转换为多页数组（每子题一页），不再垂直拼接
+        # 这样 Q12 的答案在 UI 显示时每子题独立一页，PDF 导出时每子题一页纸
+        # 与 Q13/Q14 多页逻辑一致（_insert_answer_pages 迭代 pages 数组）
         merged_answers = dict(ms_answers)
-        scale_hint = 150 / 72.0  # 默认 DPI/72 比例（仅用于 width 估算）
         for qn, sub_keys in sub_keys_by_q.items():
-            parts = []
-            total_w, total_h = 0, 0
+            pages_list = []
+            first_b64, first_w, first_h = None, 0, 0
             for sk in sub_keys:
                 ans = ms_answers.get(sk)
                 if not ans:
                     continue
-                raw = _b64.b64decode(ans['b64'])
-                parts.append((raw, ans['w'], ans['h']))
-                total_w = max(total_w, ans['w'])
-                total_h += ans['h']
-            if not parts:
+                # 检查该子题本身是否已有多页（如 12e 有3页）
+                sub_pages = ans.get('pages')
+                if sub_pages and isinstance(sub_pages, list) and len(sub_pages) > 1:
+                    # 子题本身多页：逐页加入
+                    for pg in sub_pages:
+                        pages_list.append({'b64': pg['b64'], 'w': pg['w'], 'h': pg['h']})
+                else:
+                    # 子题单页：直接加入
+                    pages_list.append({'b64': ans['b64'], 'w': ans['w'], 'h': ans['h']})
+                if first_b64 is None:
+                    first_b64, first_w, first_h = ans['b64'], ans['w'], ans['h']
+            if not pages_list:
                 continue
-            if len(parts) == 1:
-                raw_out, cw, ch = parts[0]
+            if len(pages_list) == 1:
+                # 只有一个子题且单页：保持单页格式（不用 pages 数组）
+                merged_answers[qn] = {
+                    'b64':   pages_list[0]['b64'],
+                    'w':     pages_list[0]['w'],
+                    'h':     pages_list[0]['h'],
+                    'pages': None,
+                }
             else:
-                canvas = _PILImg.new('RGB', (total_w, total_h), (255, 255, 255))
-                y_off = 0
-                for (raw_part, pw2, ph2) in parts:
-                    img_part = _PILImg.open(io.BytesIO(raw_part))
-                    if pw2 != total_w:
-                        img_part = img_part.resize(
-                            (total_w, int(ph2 * total_w / pw2)), _PILImg.LANCZOS)
-                        ph2 = img_part.size[1]
-                    canvas.paste(img_part, (0, y_off))
-                    y_off += ph2
-                buf = io.BytesIO()
-                canvas.save(buf, format='JPEG', quality=88)
-                raw_out = buf.getvalue()
-                cw, ch = total_w, y_off
-            # 将聚合图像写入 merged_answers（key = 整数，pages=None 表示已合并为单图）
-            merged_answers[qn] = {
-                'b64':   _b64.b64encode(raw_out).decode('utf-8'),
-                'w':     cw,
-                'h':     ch,
-                'pages': None,
-            }
+                # 多个子题或多页：保存为 pages 数组，每子题一页
+                merged_answers[qn] = {
+                    'b64':   first_b64,    # 向后兼容：b64 取第一页
+                    'w':     first_w,
+                    'h':     first_h,
+                    'pages': pages_list,   # 多页数组，前端/PDF 逐页显示
+                }
+            print(f'[inject_answers] Q{qn} sub_keys={sub_keys} → pages={len(pages_list)}')
+
 
         # 注入
         for q in grp['questions']:
@@ -4860,9 +4905,9 @@ def _detect_questions(doc, paper_type):
 @app.route('/api/get_answer', methods=['GET'])
 def get_answer():
     """
-    按需返回单题的完整答案数据（含多页图片）。
+    按需返回单题的完整答案数据（含多页图片）以及 Section C 材料页。
     参数：session_id, file_idx, q_num
-    返回：{b64, w, h, pages: [{b64,w,h},...] or null}
+    返回：{b64, w, h, pages: [{b64,w,h},...] or null, source_pages: [...] or null}
     """
     sess_id  = request.args.get('session_id', '')
     file_idx = int(request.args.get('file_idx', 0))
@@ -4877,18 +4922,44 @@ def get_answer():
     if not q_obj:
         return jsonify({'error': '题目不存在'}), 404
 
-    ans_b64   = q_obj.get('answer_b64', '')
-    ans_pages = q_obj.get('answer_pages')  # None 或 [{b64,w,h},...]
+    ans_b64     = q_obj.get('answer_b64', '')
+    ans_pages   = q_obj.get('answer_pages')   # None 或 [{b64,w,h},...]
+    source_pages = q_obj.get('source_pages')  # Section C 材料页（仅 Q12 有）
 
     if not ans_b64:
         return jsonify({'error': '该题无答案'}), 404
 
     return jsonify({
-        'b64':   ans_b64,
-        'w':     q_obj.get('answer_w', 0),
-        'h':     q_obj.get('answer_h', 0),
-        'pages': ans_pages,
+        'b64':          ans_b64,
+        'w':            q_obj.get('answer_w', 0),
+        'h':            q_obj.get('answer_h', 0),
+        'pages':        ans_pages,
+        'source_pages': source_pages,  # Section C 材料页，前端展示在答案前
     })
+
+
+@app.route('/api/get_source_pages', methods=['GET'])
+def get_source_pages():
+    """
+    按需返回题目的 Section C 材料页（无需已有答案）。
+    参数：session_id, file_idx, q_num
+    返回：{source_pages: [{b64,w,h},...] or null}
+    """
+    sess_id  = request.args.get('session_id', '')
+    file_idx = int(request.args.get('file_idx', 0))
+    q_num    = int(request.args.get('q_num', 0))
+
+    sess = _get_session(sess_id) if sess_id else None
+    if not sess or file_idx >= len(sess):
+        return jsonify({'error': 'session不存在'}), 404
+
+    grp = sess[file_idx]
+    q_obj = next((q for q in grp.get('questions', []) if q.get('q_num') == q_num), None)
+    if not q_obj:
+        return jsonify({'error': '题目不存在'}), 404
+
+    source_pages = q_obj.get('source_pages')
+    return jsonify({'source_pages': source_pages})
 
 
 @app.route('/api/preview/<int:q_num>', methods=['GET'])
@@ -6954,6 +7025,31 @@ def _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
     return page
 
 
+def _insert_source_pages(out_doc, source_pages, PW, PH, M, GAP, label):
+    """
+    将 source_pages（Section C 材料页）插入 out_doc，每页单独一 PDF 页。
+    用于 Q12 PDF 导出时在题目页与答案页之间插入材料。
+    """
+    import base64 as _b64src
+    from PIL import Image as _PILSrc
+
+    total = len(source_pages)
+    for pg_idx, pg in enumerate(source_pages):
+        try:
+            raw  = _b64src.b64decode(pg['b64'])
+            img  = _PILSrc.open(io.BytesIO(raw))
+            w, h = img.size
+            buf  = io.BytesIO()
+            img.convert('RGB').save(buf, format='JPEG', quality=88)
+            jpeg = buf.getvalue()
+            _place_answer_on_page(out_doc, jpeg, w, h,
+                                  PW, PH, M, GAP,
+                                  f'{label} 材料',
+                                  page_no=pg_idx + 1, total_pages=total)
+        except Exception as _se:
+            print(f'[pdf_export] source page {pg_idx+1} error: {_se}')
+
+
 def _insert_answer_pages(out_doc, q_obj, PW, PH, M, GAP, label):
     """
     将 q_obj 的答案插入 out_doc（多页时逐页各占一页，单页同原逻辑）。
@@ -7075,6 +7171,11 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                                     q_meta=(q_meta if si == 0 else None))
                 del jpeg  # 立即释放本片内存
 
+        # ── Task 2: 若题目有 source_pages（Section C 材料），先插入材料页 ──
+        source_pages = q_obj.get('source_pages')
+        if source_pages and isinstance(source_pages, list) and len(source_pages) > 0:
+            _insert_source_pages(out_doc, source_pages, PW, PH, M, GAP, label)
+
         # ── Task 2: 若题目有答案图，在题目页后附加答案页（支持多页）──
         if q_obj.get('answer_b64') or q_obj.get('answer_pages'):
             _insert_answer_pages(out_doc, q_obj, PW, PH, M, GAP, label)
@@ -7148,6 +7249,16 @@ def _export_mcq_packed(out_doc, src_doc, questions, q_nums, dpi,
         del jpeg
 
         cur_y += actual_draw_h + 2 * GAP + ITEM_GAP
+
+        # ── 答案页：若题目有答案，在当前MCQ打包页结束后立即插入独立答案页 ──
+        # 每道 MCQ 答案各占一页（不打包），与截图格式一致（每行一题独立展示）
+        q_ans_label = f'Q{export_seq:02d}'
+        if q_obj_mc.get('answer_b64') or q_obj_mc.get('answer_pages'):
+            # 答案页新起一页，本 MCQ 打包页状态重置（答案页后继续新页打包）
+            _insert_answer_pages(out_doc, q_obj_mc, PW, PH, M, GAP, q_ans_label)
+            # 答案页后需新起一页继续后续题目
+            cur_page = None
+            cur_y    = M
 
         done += 1
         if progress_cb: progress_cb(done)

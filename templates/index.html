@@ -241,6 +241,14 @@
   .qc-answer-page{border-bottom:2px dashed #bbf7d0;margin-bottom:0;}
   .qc-answer-page:last-child{border-bottom:none;}
   .qc-answer-page-label{font-size:10px;color:#15803d;background:#dcfce7;padding:2px 8px;text-align:right;font-weight:600;letter-spacing:.5px;}
+  /* Section C 材料页（Sources for use with Section C）*/
+  .qc-source-wrap{border-top:1px solid #bae6fd;margin-top:0;background:#f0f9ff}
+  .qc-source-bar{padding:5px 10px;font-size:11px;font-weight:600;color:#0369a1;background:#e0f2fe;border-bottom:1px solid #bae6fd;display:flex;align-items:center;gap:5px}
+  .qc-source-img{width:100%;display:block;}
+  /* 多页材料：每页分隔 */
+  .qc-source-page{border-bottom:2px dashed #bae6fd;margin-bottom:0;}
+  .qc-source-page:last-child{border-bottom:none;}
+  .qc-source-page-label{font-size:10px;color:#0369a1;background:#e0f2fe;padding:2px 8px;text-align:right;font-weight:600;letter-spacing:.5px;}
 
   /* Modal */
   .mo{position:fixed;inset:0;background:rgba(15,23,42,.72);z-index:200;display:none;overflow:auto;padding:20px;backdrop-filter:blur(4px)}
@@ -1119,7 +1127,7 @@ function _saveSession() {
     // 存储时剔除 _img_b64/_img_w/_img_h 和 answer_pages（数据量太大会撑爆5MB sessionStorage）
     // answer_pages 通过 /api/get_answer 按需加载，不需要持久化
     const stripImg = (q) => {
-      const {_img_b64, _img_w, _img_h, answer_pages, ...rest} = q;
+      const {_img_b64, _img_w, _img_h, answer_pages, source_pages, ...rest} = q;
       return rest;
     };
     const payload = {
@@ -2010,6 +2018,17 @@ function renderGrid() {
              data-loaded="0" data-totalpages="${_ansPageCount}">
           <div class="qc-answer-bar">📋 Mark Scheme 答案</div>
         </div>` : '';
+
+      // 材料页（仅 Q12 有 source_pages，显示在答案区上方）
+      // 同答案采用按需加载策略：点击「📄 材料」按钮时通过 /api/get_source_pages 拉取
+      const _hasSourceInMem = !!(q.source_pages && Array.isArray(q.source_pages) && q.source_pages.length > 0);
+      const _srcPageCount = _hasSourceInMem ? q.source_pages.length : 0;
+      const sourcePagesHtml = _hasSourceInMem ? `
+        <div class="qc-source-wrap" id="src-${uid}" style="display:none"
+             data-gidx="${q.gIdx}" data-qnum="${q.q_num}"
+             data-loaded="0" data-totalpages="${_srcPageCount}">
+          <div class="qc-source-bar">📋 Sources for use with Section C（题目材料）</div>
+        </div>` : '';
       card.innerHTML = `
         <div class="qc-hdr">
           <span class="q-badge${st?' st':''}">${st?'第':'Q'}${q.q_num}${st?'题':''}</span>
@@ -2023,9 +2042,16 @@ function renderGrid() {
         <div class="qt-ld${st?' st-h':''}" id="tld-${uid}"><span class="spin">⏳</span></div>
         <img class="qt${st?' st-h':''}" id="th-${uid}" src="" style="display:none"
              onerror="this.style.display='none';document.getElementById('tld-${uid}').innerHTML='⚠️'">
+        ${sourcePagesHtml}
         ${answerHtml}
         <div class="qc-act">
           <button class="btn btn-outline btn-sm" onclick="openPrev(${q.q_num},${q.gIdx},event)">🔍 预览</button>
+          ${_hasSourceInMem
+            ? `<button class="btn btn-sm" id="srcbtn-${uid}"
+                style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd"
+                onclick="toggleSourcePages('${uid}',event)">📄 材料</button>`
+            : ''
+          }
           ${hasAnswer
             ? `<button class="btn btn-sm btn-ans-toggle" id="ansbtn-${uid}"
                 style="background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0"
@@ -2117,6 +2143,73 @@ async function _loadAnswerPages(uid, ansWrap) {
     if (qObj) qObj.answer_pages = pages;
   } catch(err) {
     console.warn('[_loadAnswerPages] failed:', err);
+    contentArea.innerHTML = '<div style="color:red;padding:8px">加载出错</div>';
+  }
+}
+
+// ── 材料页显示/隐藏切换（Section C Sources）──
+function toggleSourcePages(uid, e) {
+  if (e) e.stopPropagation();
+  const srcWrap = document.getElementById(`src-${uid}`);
+  const srcBtn  = document.getElementById(`srcbtn-${uid}`);
+  if (!srcWrap) return;
+  const visible = srcWrap.style.display !== 'none';
+  srcWrap.style.display = visible ? 'none' : '';
+  if (srcBtn) {
+    srcBtn.textContent = visible ? '📄 材料' : '📂 材料';
+    srcBtn.style.background = visible ? '#f0f9ff' : '#fef9c3';
+    srcBtn.style.color       = visible ? '#0369a1' : '#854d0e';
+    srcBtn.style.border      = visible ? '1px solid #bae6fd' : '1px solid #fef08a';
+  }
+  // 展开时：若多页数据尚未加载，先显示 loading，再异步请求全部页
+  if (!visible && srcWrap.dataset.loaded === '0') {
+    _loadSourcePages(uid, srcWrap);
+  }
+}
+
+async function _loadSourcePages(uid, srcWrap) {
+  const gIdx = parseInt(srcWrap.dataset.gidx);
+  const qNum = parseInt(srcWrap.dataset.qnum);
+  if (!sessionId) return;
+
+  const barEl = srcWrap.querySelector('.qc-source-bar');
+  const contentArea = document.createElement('div');
+  contentArea.id = `src-content-${uid}`;
+  contentArea.innerHTML = `<div style="text-align:center;padding:16px 8px;color:#0369a1;font-size:13px">
+    <span class="spin">⏳</span> 正在加载材料（共 ${srcWrap.dataset.totalpages || '?'} 页）…
+  </div>`;
+  Array.from(srcWrap.children).forEach(el => { if (el !== barEl) el.remove(); });
+  srcWrap.appendChild(contentArea);
+
+  try {
+    const resp = await fetch(`/api/get_source_pages?session_id=${sessionId}&file_idx=${gIdx}&q_num=${qNum}`);
+    if (!resp.ok) { contentArea.innerHTML = '<div style="color:red;padding:8px">加载失败</div>'; return; }
+    const data = await resp.json();
+
+    const pages = data.source_pages;
+    if (!pages || !Array.isArray(pages) || pages.length === 0) {
+      contentArea.innerHTML = '<div style="color:#0369a1;padding:8px;font-size:12px">暂无材料数据</div>';
+      srcWrap.dataset.loaded = '1';
+      return;
+    }
+
+    let html = '';
+    for (let i = 0; i < pages.length; i++) {
+      const pg   = pages[i];
+      const mime = pg.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+      html += `<div class="qc-source-page">
+        <div class="qc-source-page-label">— 材料 第 ${i+1} 页 / 共 ${pages.length} 页 —</div>
+        <img class="qc-source-img" src="data:${mime};base64,${pg.b64}"
+             alt="Source p${i+1}" style="width:100%;display:block;">
+      </div>`;
+    }
+    contentArea.innerHTML = html;
+    srcWrap.dataset.loaded = '1';
+    // 缓存到 allQuestions（后续展开无需再请求）
+    const qObj = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
+    if (qObj) qObj.source_pages = pages;
+  } catch(err) {
+    console.warn('[_loadSourcePages] failed:', err);
     contentArea.innerHTML = '<div style="color:red;padding:8px">加载出错</div>';
   }
 }
