@@ -1634,6 +1634,12 @@ def _find_last_content_page(doc, start_page):
         if 'Permission to reproduce' in text:
             break
 
+        # edexcel_economics 专项：材料页（Sources for use with Section C）
+        # 材料页属于 Q12 的附属材料，不是 Q13/Q14 的题目内容，应停止扫描
+        if ('Sources for use with Section' in text or
+                'Source for use with Section' in text):
+            break
+
         # Task4: 答题页（横线页/空白答题区）→ 跳过，不更新 last_content_page，但继续扫描
         if _is_answer_writing_page(page):
             continue
@@ -4006,9 +4012,14 @@ def upload_multi():
                     q['difficulty'] = None
 
                 # ── 检测 Section C 材料页（Sources for use with Section C）──
-                # 只有 U1（WEC11）才有 Section C 阅读材料（Extract A/B + 图表）
-                # U2/U3/U4 没有 Source 材料页，跳过检测
-                if econ_unit == 'U1':
+                # 不依赖 econ_unit，直接扫描文档中是否存在 "Sources for use with Section" 标志
+                # U1 通常有，U2/U3/U4 视具体试卷而定（部分也有材料页）
+                _has_sources_marker = any(
+                    ('Sources for use with Section' in doc[_pi].get_text() or
+                     'Source for use with Section' in doc[_pi].get_text())
+                    for _pi in range(doc.page_count)
+                )
+                if _has_sources_marker:
                     try:
                         import base64 as _b64sc
                         from PIL import Image as _PILsc
@@ -4045,7 +4056,8 @@ def upload_multi():
                             _q12 = next((q for q in questions if q.get('q_num') == 12), None)
                             if _q12 is not None:
                                 _q12['source_pages'] = _sources_pages
-                                print(f'[econ_qp] 检测到 Section C 材料页 {len(_sources_pages)} 页，已附加到 Q12')
+                                print(f'[econ_qp] 检测到 Section C 材料页 {len(_sources_pages)} 页 '
+                                      f'(unit={econ_unit})，已附加到 Q12')
                     except Exception as _sc_err:
                         print(f'[econ_qp] Section C 材料页检测失败: {_sc_err}')
             elif source == 'edexcel_maths':
