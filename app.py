@@ -1640,6 +1640,12 @@ def _find_last_content_page(doc, start_page):
                 'Source for use with Section' in text):
             break
 
+        # Edexcel 封面/扉页："Pearson Edexcel International Advanced Level"
+        # 这类页面是 Source Booklet 封面或考试开始页，不是题目内容
+        if ('Pearson Edexcel International Advanced Level' in text or
+                'Pearson Edexcel International Advanced Subsidiary' in text):
+            break
+
         # Task4: 答题页（横线页/空白答题区）→ 跳过，不更新 last_content_page，但继续扫描
         if _is_answer_writing_page(page):
             continue
@@ -4494,29 +4500,34 @@ def detect_edexcel_economics_ms_questions(doc):
         q_col_thresh = (min(left_xs) + 50) if left_xs else 110
 
         # ── 若本页同时包含 Section B，找到 Section B 的起始 y（作为 Q6 行底上限）──
-        # Section B 开头特征：'Section B' 文本块，或 'Question' 行（y0 > Section A 表格区域）
+        # Section B 开头特征：独立的 'Section B' 标题块，或 'Question' 表头行（Section B question header）
+        # ⚠️  注意：pg5 中 Q6 的 "C is not correct..." 块末尾会混入 "Section B\n" 文字
+        #    不能用 'Section B' in ts 检测——要求是独立标题（ts 去除空白后就是 'Section B'）
+        #    或者检测 "Question\n..." 这种 Section B 题目 header 块（x0<100, y0 在 Section A 表格区之后）
         page_text_full = page.get_text()
         section_b_y_limit = ph  # 默认：无 Section B → 用页底
         if 'Section B' in page_text_full:
-            # 找含 'Section B' 的文本块 y0
+            # 策略1：找文本去除空白后正好是 'Section B' 的独立标题块
             for x0, y0, x1, y1, ts in text_blocks:
-                if 'Section B' in ts:
+                if re.match(r'^Section\s+B\s*$', ts):
                     section_b_y_limit = y0 - 2
                     break
             if section_b_y_limit == ph:
-                # Section B 文字可能在 'Question' 行里的大 block；
-                # 也可以用 Q7 块（左列 x0<100，文字以 '7' 开头，y > 右锚点区域）
+                # 策略2：找 "Question\n..." 块（Section B 每道题开头的题目 header）
+                # 特征：块以 'Question' 开头，y0 > Section A 表格底部（一般 > 200），x0 < 100
+                last_anchor_y1 = right_anchor_ys[-1][1] if right_anchor_ys else 200
                 for x0, y0, x1, y1, ts in text_blocks:
-                    first = ts.split('\n')[0].strip()
-                    if x0 < 100 and re.match(r'^7\s', first) and y0 > (right_anchor_ys[-1][1] if right_anchor_ys else 200):
+                    if ts.startswith('Question') and y0 > last_anchor_y1 and x0 < 100:
                         section_b_y_limit = y0 - 2
                         break
-                if section_b_y_limit == ph:
-                    # 找 "Question\n..." 块（Section B question 表头）
-                    for x0, y0, x1, y1, ts in text_blocks:
-                        if ts.startswith('Question') and y0 > 200 and x0 < 100:
-                            section_b_y_limit = y0 - 2
-                            break
+            if section_b_y_limit == ph:
+                # 策略3：找左列 '7 ' 开头的块（Q7 题号，Section B 第一题）
+                last_anchor_y1 = right_anchor_ys[-1][1] if right_anchor_ys else 200
+                for x0, y0, x1, y1, ts in text_blocks:
+                    first = ts.split('\n')[0].strip()
+                    if x0 < 100 and re.match(r'^7\s', first) and y0 > last_anchor_y1:
+                        section_b_y_limit = y0 - 2
+                        break
 
         # 先用右列锚点策略构建本页 questions
         if right_anchor_ys:
