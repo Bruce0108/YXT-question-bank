@@ -4066,6 +4066,69 @@ def upload_multi():
                                       f'(unit={econ_unit})，已附加到 Q12')
                     except Exception as _sc_err:
                         print(f'[econ_qp] Section C 材料页检测失败: {_sc_err}')
+
+                # ── U3 Section B 内联材料页检测（Figure 1 + Extract A/B/C）──
+                # U3 QP Section B 在 Q7 题目之前包含配套阅读材料，
+                # 页面特征：含 "Figure 1" / "Extract A" / "Extract B" / "Extract C"
+                # 且位于 Section B 区域（含 "Section B" 文字）
+                if econ_unit == 'U3':
+                    try:
+                        import base64 as _b64sb
+                        from PIL import Image as _PILsb
+                        _sb_sources_pages = []
+                        _sb_mat = fitz.Matrix(150 / 72.0, 150 / 72.0)
+                        # 扫描全文档，找含 Figure 1 / Extract A/B/C 的 Section B 材料页
+                        # 判断准则：含 "Extract A"/"Extract B"/"Extract C"/"Figure 1"
+                        # 且含 "Section B"（同页或前几页已出现过）
+                        _in_section_b = False
+                        for _pg_i in range(doc.page_count):
+                            _pg_text = doc[_pg_i].get_text()
+                            if 'Section B' in _pg_text:
+                                _in_section_b = True
+                            if not _in_section_b:
+                                continue
+                            # 一旦进入 Section B 的实际题目页（含问题编号 "7" 且含问题 Question 字样），停止
+                            # 材料页特征：含 "Extract" 或 "Figure 1" 关键词
+                            _is_material = (
+                                re.search(r'Extract\s+[ABC]', _pg_text) or
+                                re.search(r'Figure\s+1', _pg_text)
+                            )
+                            # 题目页特征：含 "Answer ALL questions" 且 "Section B" 同页，
+                            # 或含题目指令 "(a)" "Answer" 问题选项（但不是材料本身）
+                            # 简单判断：Section B 页含 Extract/Figure → 是材料页
+                            if _is_material:
+                                _pg = doc[_pg_i]
+                                _pw, _ph = _pg.rect.width, _pg.rect.height
+                                # 裁掉两侧装饰条，保留正文区域
+                                _clip = fitz.Rect(36, 40, min(_pw - 36, 550), _ph - 25)
+                                _pix = _pg.get_pixmap(matrix=_sb_mat, clip=_clip,
+                                                      colorspace=fitz.csRGB)
+                                _sb_buf = io.BytesIO()
+                                _PILsb.frombytes('RGB', [_pix.width, _pix.height], _pix.samples)\
+                                      .save(_sb_buf, format='JPEG', quality=88)
+                                _sb_sources_pages.append({
+                                    'b64': _b64sb.b64encode(_sb_buf.getvalue()).decode('utf-8'),
+                                    'w': _pix.width,
+                                    'h': _pix.height,
+                                })
+                                del _pix
+                            else:
+                                # Section B 中无 Extract/Figure 的页面 → 正式题目页，停止
+                                if _in_section_b and _sb_sources_pages:
+                                    break
+                        # 将材料页注入 Q7 题目对象（Section B 第一题）
+                        if _sb_sources_pages:
+                            _q7 = next((q for q in questions if q.get('q_num') == 7), None)
+                            if _q7 is None:
+                                # Q7 可能是多子题情形，取子题中 q_num==7 的第一个
+                                _q7 = next((q for q in questions
+                                            if q.get('q_num') == 7), None)
+                            if _q7 is not None:
+                                _q7['source_pages'] = _sb_sources_pages
+                                print(f'[econ_qp] 检测到 U3 Section B 材料页 '
+                                      f'{len(_sb_sources_pages)} 页，已附加到 Q7')
+                    except Exception as _sb_err:
+                        print(f'[econ_qp] U3 Section B 材料页检测失败: {_sb_err}')
             elif source == 'edexcel_maths':
                 unit_code = _MATHS_UNIT_TO_CODE.get(maths_unit or '', None)
                 for q_idx, q in enumerate(questions):
@@ -4419,15 +4482,19 @@ def _get_paper_type():
     return 'mcq'
 
 
-def detect_edexcel_economics_ms_questions(doc):
+def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
     """
     检测 Edexcel Economics Mark Scheme 中的题目边界。
 
     MS 文件结构：
       Section A (pg 3-4): 表格式，Q1-Q6，按 Answer 列块 y1 分隔
-      Section B (pg 5-9): Q7-Q11，每页独立，顶部有 Question 行
-      Section C (pg 10-16): Q12(a)-Q12(e)，子题格式
-      Section D (pg 17+): Q13-Q14，大作文格式
+      U1/U2 Section B (pg 5-9): Q7-Q11，每页独立，顶部有 Question 行
+      U3 Section B: 只有 Q7，但 Q7 包含子题 7(a)/7(b)/7(c)/7(d)/7(e)
+      Section C (pg 10+): Q12(a)-Q12(e)，子题格式
+      Section D: Q13-Q14，大作文格式
+
+    参数：
+      econ_unit: 'U1'|'U2'|'U3'|'U4'|None，若为 None 则从 doc 自动检测
 
     返回列表：[{q_num, sub_label, page_idx, y_start, y_end, pages, section}]
       - q_num: 整数题号（1-14）
@@ -4435,8 +4502,11 @@ def detect_edexcel_economics_ms_questions(doc):
       - page_idx: 题目起始页（0-based）
       - y_start: 起始 y 坐标
       - y_end: 结束 y 坐标（None 表示到页末）
-      - pages: [(page_idx, y_start, y_end)] 多页列表（用于 Q12e 等）
+      - pages: [(page_idx, y_start, y_end)] 多页列表（用于 Q12e/Q7e 等）
     """
+    # 若未提供 econ_unit，自动从文档中检测
+    if econ_unit is None:
+        econ_unit = detect_edexcel_economics_unit(doc)
     questions = []
 
     # ── Section A: 表格式，Q1-Q6 ──
@@ -4624,11 +4694,19 @@ def detect_edexcel_economics_ms_questions(doc):
     # ── Section B/C/D ──
     Q_NUM_PAT = re.compile(r'^(\d+)\s*$')
     Q12_SUB   = re.compile(r'^12\s*\(([a-e])\)', re.IGNORECASE)
+    # U3 专用：Q7 子题模式  "7(a)" / "7 (a)" / "7(a)" 等
+    Q7_SUB    = re.compile(r'^7\s*\(([a-e])\)', re.IGNORECASE)
+
+    # U3 标志：econ_unit == 'U3'（Section B 只有 Q7 且含子题）
+    is_u3 = (econ_unit == 'U3')
 
     seen_q      = set(q['q_num'] for q in questions)
     seen_12subs = set()
+    seen_7subs  = set()   # U3 专用：已检测到的 Q7 子题
     q12e_pages  = []
     q12e_started = False
+    q7e_pages   = []      # U3 Q7(e) 多页
+    q7e_started = False
 
     for pg_i in range(doc.page_count):
         page = doc[pg_i]
@@ -4658,6 +4736,26 @@ def detect_edexcel_economics_ms_questions(doc):
                 if pg_i not in [p[0] for p in q12e_pages]:
                     q12e_pages.append((pg_i, 0, None))
 
+        # U3: Q7(e) 多页追加（7(e) 有 14 分，通常跨多页，直到 Section C 或 Q12 出现）
+        if q7e_started:
+            pg_text_lower = page_text
+            if ('Section C' in pg_text_lower or 'Section D' in pg_text_lower or
+                    Q12_SUB.search(page_text)):
+                # Q7e 结束
+                q7e_started = False
+                questions.append({
+                    'q_num':     7,
+                    'sub_label': '(e)',
+                    'page_idx':  q7e_pages[0][0],
+                    'y_start':   q7e_pages[0][1],
+                    'y_end':     None,
+                    'pages':     list(q7e_pages),
+                    'section':   'B',
+                })
+            else:
+                if pg_i not in [p[0] for p in q7e_pages]:
+                    q7e_pages.append((pg_i, 0, None))
+
         blocks = page.get_text('blocks')
         for b in blocks:
             x0, y0, x1, y1, txt, bno, btype = b
@@ -4666,11 +4764,38 @@ def detect_edexcel_economics_ms_questions(doc):
             ts = txt.strip()
             first_line = ts.split('\n')[0].strip()
 
-            # Q7-Q11: 纯数字块 x0<80
+            # ── U3: Q7 子题检测（7(a)/7(b)/7(c)/7(d)/7(e)）──
+            if is_u3:
+                m7 = Q7_SUB.match(first_line)
+                if m7:
+                    sub7 = m7.group(1).lower()
+                    key7 = f'7{sub7}'
+                    if key7 not in seen_7subs:
+                        seen_7subs.add(key7)
+                        if sub7 == 'e':
+                            # Q7(e) 多页（14分），处理类似 Q12(e)
+                            if not q7e_started:
+                                q7e_started = True
+                                q7e_pages = [(pg_i, y0, None)]
+                        else:
+                            questions.append({
+                                'q_num':     7,
+                                'sub_label': f'({sub7})',
+                                'page_idx':  pg_i,
+                                'y_start':   y0,
+                                'y_end':     None,
+                                'pages':     [(pg_i, y0, None)],
+                                'section':   'B',
+                            })
+                    continue  # U3 中找到 7(x) 子题块，跳过下面的整题检测
+
+            # Q7-Q11: 纯数字块 x0<80（U1/U2 用；U3 Q7 整体不再作为一个题）
             m = Q_NUM_PAT.match(first_line)
             if m and x0 < 80:
                 q_num = int(m.group(1))
-                if 7 <= q_num <= 11 and q_num not in seen_q:
+                # U3 中 Q7 整体不检测（由子题代替）
+                section_b_max = 11 if not is_u3 else 6  # U3 Section B 只有 Q7 子题
+                if 7 <= q_num <= section_b_max and q_num not in seen_q:
                     questions.append({
                         'q_num':     q_num,
                         'sub_label': '',
@@ -4726,6 +4851,46 @@ def detect_edexcel_economics_ms_questions(doc):
             'pages':     list(q12e_pages),
             'section':   'C',
         })
+
+    # U3: Q7e 若未关闭（扫描结束时未遇到 Section C/D）
+    if q7e_started and q7e_pages:
+        questions.append({
+            'q_num':     7,
+            'sub_label': '(e)',
+            'page_idx':  q7e_pages[0][0],
+            'y_start':   q7e_pages[0][1],
+            'y_end':     None,
+            'pages':     list(q7e_pages),
+            'section':   'B',
+        })
+
+    # U3 兜底：若 Q7(d) 已找到但 Q7(e) 未找到，从 Q7(d) 所在页+1 向后扫到 Section C/D 前
+    if is_u3 and '7e' not in seen_7subs:
+        d_page_7 = None
+        for q in questions:
+            if q['q_num'] == 7 and q.get('sub_label') == '(d)':
+                d_page_7 = q['page_idx']
+                break
+        if d_page_7 is not None:
+            e7_start = d_page_7 + 1
+            q7e_pages_fb = []
+            for ext_pg in range(e7_start, doc.page_count):
+                ext_t = doc[ext_pg].get_text()
+                if ('Section C' in ext_t or 'Section D' in ext_t or
+                        re.search(r'^12\s*\([a-e]\)', ext_t, re.MULTILINE)):
+                    break
+                y_s = 63 if ext_pg == e7_start else 0
+                q7e_pages_fb.append((ext_pg, y_s, None))
+            if q7e_pages_fb:
+                questions.append({
+                    'q_num':     7,
+                    'sub_label': '(e)',
+                    'page_idx':  q7e_pages_fb[0][0],
+                    'y_start':   q7e_pages_fb[0][1],
+                    'y_end':     None,
+                    'pages':     q7e_pages_fb,
+                    'section':   'B',
+                })
 
     # Q12(e) 兜底：若 seen_12subs 仍无 '12e'，通过 Q12(d) 推断
     if '12e' not in seen_12subs:
@@ -4796,20 +4961,23 @@ def _render_edexcel_economics_ms_answers(ms_doc, dpi=150):
 
     返回：{key: {'b64': str, 'w': int, 'h': int}}
       - Section A (Q1-Q6): key = 整数 1-6
-      - Section B (Q7-Q11): key = 整数 7-11
+      - Section B (Q7-Q11): key = 整数 7-11（U1/U2）
+      - U3 Section B Q7子题: key = 字符串 '7a'/'7b'/'7c'/'7d'/'7e'
       - Section C Q12子题: key = 字符串 '12a'/'12b'/'12c'/'12d'/'12e'
       - Section D (Q13-Q14): key = 整数 13-14
 
     切割策略：
       Section A: 按表格横线行切，全宽渲染
       Section B/C/D 单页题: 从 y_start 到页末
-      Q12(e) 多页: 垂直拼接
+      Q12(e)/Q7(e) 多页: 每页单独存储
       Q13/Q14 多页: 从起始页 y_start 到文档末，多页拼接
     """
     import base64 as _b64
     from PIL import Image as _PILImg
 
-    questions = detect_edexcel_economics_ms_questions(ms_doc)
+    # 从文档检测 econ_unit，传给题目检测函数
+    ms_econ_unit = detect_edexcel_economics_unit(ms_doc)
+    questions = detect_edexcel_economics_ms_questions(ms_doc, econ_unit=ms_econ_unit)
     if not questions:
         return {}
 
@@ -7325,11 +7493,11 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                                     q_meta=(q_meta if si == 0 else None))
                 del jpeg  # 立即释放本片内存
 
-        # ── Task 2: 若题目有 source_pages（Section C 材料），先插入材料页 ──
-        # 注意：source_pages 仅限 Q12（Section C），其他题目不应有材料页
+        # ── Task 2: 若题目有 source_pages（题目材料），先插入材料页 ──
+        # source_pages 可来自 Q12（Section C 材料）或 Q7（U3 Section B 材料）
         source_pages = q_obj.get('source_pages')
         q_num_cur = q_obj.get('q_num')
-        if source_pages and isinstance(source_pages, list) and len(source_pages) > 0 and q_num_cur == 12:
+        if source_pages and isinstance(source_pages, list) and len(source_pages) > 0 and q_num_cur in (7, 12):
             _insert_source_pages(out_doc, source_pages, PW, PH, M, GAP, label)
 
         # ── Task 2: 若题目有答案图，在题目页后附加答案页（支持多页）──

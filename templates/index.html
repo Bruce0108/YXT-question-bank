@@ -2020,15 +2020,18 @@ function renderGrid() {
           <div class="qc-answer-bar">📋 Mark Scheme 答案</div>
         </div>` : '';
 
-      // 材料页（仅 Q12 有 source_pages，显示在答案区上方）
+      // 材料页（Q12 有 source_pages 来自 Section C；Q7 有 source_pages 来自 U3 Section B）
       // 同答案采用按需加载策略：点击「📄 材料」按钮时通过 /api/get_source_pages 拉取
       const _hasSourceInMem = !!(q.source_pages && Array.isArray(q.source_pages) && q.source_pages.length > 0);
       const _srcPageCount = _hasSourceInMem ? q.source_pages.length : 0;
+      const _srcBarLabel = (q.q_num === 7)
+        ? '📋 Section B 配套材料（Figure 1 + Extracts）'
+        : '📋 Sources for use with Section C（题目材料）';
       const sourcePagesHtml = _hasSourceInMem ? `
         <div class="qc-source-wrap" id="src-${uid}" style="display:none"
              data-gidx="${q.gIdx}" data-qnum="${q.q_num}"
              data-loaded="0" data-totalpages="${_srcPageCount}">
-          <div class="qc-source-bar">📋 Sources for use with Section C（题目材料）</div>
+          <div class="qc-source-bar">${_srcBarLabel}</div>
         </div>` : '';
       card.innerHTML = `
         <div class="qc-hdr">
