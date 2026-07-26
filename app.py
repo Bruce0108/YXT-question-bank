@@ -4739,7 +4739,8 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
                                 'pages':     [(pg_i, y0, None)],
                                 'section':   'B',
                             })
-                    continue  # U3 中找到 7(x) 子题块，跳过下面的整题检测
+                    continue  # 匹配到 7(x) 子题块 → 跳过下面整题检测
+                # m7 未匹配（即非 7(x) 格式）→ 继续走整题检测（Q8/Q9/Q10/Q11）
 
             # Q7-Q11: 纯数字块 x0<80
             # U3: Q7 整体块不检测（由 Q7_SUB 子题代替），但 Q8/Q9/Q10/Q11 仍正常检测
