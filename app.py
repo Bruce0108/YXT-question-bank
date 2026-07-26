@@ -4422,19 +4422,33 @@ def detect_edexcel_economics_ms_questions(doc):
     questions = []
 
     # ── Section A: 表格式，Q1-Q6 ──
-    # 识别策略（兼容 U1-U4）：
-    #   最左列（x0 最小的文本块）有题号（1-6），通过相邻题的 y_start 做行切割
-    #   不依赖特定 x 坐标范围，直接找最左列的纯数字块
+    # 识别策略（兼容 U1-U4，尤其解决 U2 左列合并单元格问题）：
+    #
+    # U2 PDF 特殊性：左列（x0≈62）的 PDF 块会把多行合并，导致 Q2-Q5 的题号
+    # 不出现在任何块的第一行——只有 Q1("1 ") 和 Q6("6 ") 是纯数字块。
+    #
+    # 核心策略：优先使用右列 "The only correct answer is X" 块的 y0 作为行锚点。
+    # 这些块在每一题对应一个，y0 精确对应该题行的视觉顶部。
+    # 按文档顺序 (pg_i, y0) 排序后，第 i 个块就是第 Q(i+1) 题的锚点。
+    #
+    # 行范围：
+    #   y_start = 该题锚点的 y0（用左列第一块的 y0 取 min 以覆盖更完整的行顶）
+    #   y_end   = 下一题锚点的 y0 - 2（同页），或页底（末题）
     section_a_pages = []
     for pg_i in range(doc.page_count):
         text = doc[pg_i].get_text()
         if 'Section A' in text and pg_i >= 2:
+            # 从 Section A 开始页往后扫，直到遇到 Section B 或超出
+            # 重要：Q6 可能在「含 Section B」的同一页面（Section B 的起始同页包含Q6尾部）
             section_a_pages.append(pg_i)
-            next_pg = pg_i + 1
-            if next_pg < doc.page_count:
-                next_text = doc[next_pg].get_text()
-                if 'Section B' not in next_text and 'Section A' not in next_text:
-                    section_a_pages.append(next_pg)
+            for ext_pg in range(pg_i + 1, min(pg_i + 5, doc.page_count)):
+                ext_text = doc[ext_pg].get_text()
+                # 如果这页包含 Section B，也把它加进来（Q6 可能在这里），然后停止
+                if 'Section B' in ext_text:
+                    section_a_pages.append(ext_pg)
+                    break
+                # 普通延续页（还在 Section A 范围内）
+                section_a_pages.append(ext_pg)
             break
 
     _section_a_table = {}   # q_num -> (page_idx, y_row_start, y_row_end)
@@ -4454,72 +4468,123 @@ def detect_edexcel_economics_ms_questions(doc):
             text_blocks.append((x0, y0, x1, y1, txt.strip()))
         text_blocks.sort(key=lambda b: b[1])
 
-        # ── 确定题号列的 x0 阈值 ──
-        # 找出所有 x0 坐标，取最小的那组中有纯数字的块所在的 x 范围
+        # ── 右列 "correct answer" 锚点（核心策略）──
+        # 收集右半页（x0 > page_width/3）含 "correct answer" / "only correct" 的块
+        right_anchor_ys = []  # 每个元素：(y0, y1)
+        for x0, y0, x1, y1, ts in text_blocks:
+            if x0 > pw / 3.0:
+                tsl = ts.lower()
+                if 'only correct answer' in tsl or 'correct answer is' in tsl:
+                    right_anchor_ys.append((y0, y1))
+
+        # ── 左列辅助：找最左侧明确的纯数字题号块（用于调整行顶 y）──
         left_xs = sorted(set(round(b[0]) for b in text_blocks if b[0] < 150))
-        # 题号列通常是最左侧的一到两列；取最小 x0 + 40pt 作为阈值
         q_col_thresh = (min(left_xs) + 50) if left_xs else 110
 
-        q_blocks = []    # (q_num, y_start_of_q_block)
-        ans_blocks = []  # (y0, y1)  含 "correct answer" 的答案文本块
-
-        for x0, y0, x1, y1, ts in text_blocks:
-            first_line = ts.split('\n')[0].strip()
-
-            # 题号块：在题号列范围内，且为纯数字 1-6
-            if x0 <= q_col_thresh:
-                # 纯数字 2-6
-                m = re.match(r'^(\d+)\s*$', first_line)
-                if m:
-                    q_num = int(m.group(1))
-                    if 2 <= q_num <= 6:
-                        q_blocks.append((q_num, y0))
-                # Q1：整块含 'Question' + '\n1'（大表头格式）
-                elif 'Question' in ts and re.search(r'(?:^|\n)\s*1\s*(?:\n|$)', ts):
-                    if not any(q[0] == 1 for q in q_blocks):
-                        q_blocks.insert(0, (1, y0))
-
-            # 答案块：含 "correct answer" 关键词（跨单元通用）
-            if ('correct answer' in ts.lower() or
-                    'The only correct' in ts or
-                    'only correct' in ts.lower()):
-                ans_blocks.append((y0, y1))
-
-        # Q1 兜底：若还没找到 Q1，用最左侧 y < 250 的第一个块
-        if not any(q[0] == 1 for q in q_blocks):
+        # ── 若本页同时包含 Section B，找到 Section B 的起始 y（作为 Q6 行底上限）──
+        # Section B 开头特征：'Section B' 文本块，或 'Question' 行（y0 > Section A 表格区域）
+        page_text_full = page.get_text()
+        section_b_y_limit = ph  # 默认：无 Section B → 用页底
+        if 'Section B' in page_text_full:
+            # 找含 'Section B' 的文本块 y0
             for x0, y0, x1, y1, ts in text_blocks:
-                if x0 <= q_col_thresh and y0 < 250 and y0 > 40:
+                if 'Section B' in ts:
+                    section_b_y_limit = y0 - 2
+                    break
+            if section_b_y_limit == ph:
+                # Section B 文字可能在 'Question' 行里的大 block；
+                # 也可以用 Q7 块（左列 x0<100，文字以 '7' 开头，y > 右锚点区域）
+                for x0, y0, x1, y1, ts in text_blocks:
                     first = ts.split('\n')[0].strip()
-                    # 不是标题行（Section A / Question 等）
-                    if not re.match(r'(?i)^section|^question\s+number', first):
-                        q_blocks.insert(0, (1, y0))
+                    if x0 < 100 and re.match(r'^7\s', first) and y0 > (right_anchor_ys[-1][1] if right_anchor_ys else 200):
+                        section_b_y_limit = y0 - 2
+                        break
+                if section_b_y_limit == ph:
+                    # 找 "Question\n..." 块（Section B question 表头）
+                    for x0, y0, x1, y1, ts in text_blocks:
+                        if ts.startswith('Question') and y0 > 200 and x0 < 100:
+                            section_b_y_limit = y0 - 2
+                            break
+
+        # 先用右列锚点策略构建本页 questions
+        if right_anchor_ys:
+            # 按 y0 排序（同页内应该已经有序）
+            right_anchor_ys.sort(key=lambda a: a[0])
+            n_anchors = len(right_anchor_ys)
+
+            # 已找到的最大 q_num（跨页累计，用于判断本页从哪个题号继续）
+            q_start_on_page = len(_section_a_table) + 1  # 本页第一题编号
+
+            for ai, (ry0, ry1) in enumerate(right_anchor_ys):
+                q_num = q_start_on_page + ai
+                if q_num > 6:
+                    break  # Section A 只有 Q1-Q6
+
+                # 行顶：取右列锚点 y0，若左列有更早（y 更小）的块则用左列
+                row_top = ry0
+                for x0, y0, x1, y1, ts in text_blocks:
+                    if x0 <= q_col_thresh and y0 < ry0 and ry0 - y0 < 30:
+                        # 左列有稍早的块，说明行顶在此
+                        row_top = min(row_top, y0)
                         break
 
-        # 对 q_blocks 按 y0 排序
-        q_blocks.sort(key=lambda x: x[1])
+                # 行底：下一个右列锚点的 y0 - 2（同页），或 Section B 起始 y（若存在），或页底
+                if ai + 1 < n_anchors:
+                    row_bottom = right_anchor_ys[ai + 1][0] - 2
+                else:
+                    row_bottom = section_b_y_limit  # 本页最后一个锚点 → 到 SectionB 或页底
 
-        # 为每个题号确定行底
-        # 策略1（优先）：用「含 correct answer 的块」的 y1 作为行底
-        # 策略2（备选）：用下一个题号块的 y0 - 2 作为行底
-        for qi, (q_num, q_y0) in enumerate(q_blocks):
-            row_bottom = ph  # 默认：页底
+                if q_num not in _section_a_table:
+                    _section_a_table[q_num] = (pg_i, row_top, row_bottom)
 
-            # 策略1：找答案块中 y0 >= q_y0（本题行内）的那个
-            for a_y0, a_y1 in sorted(ans_blocks):
-                if a_y0 >= q_y0 - 5:
-                    row_bottom = a_y1
-                    break
+            print(f'[econ_ms] Section A pg{pg_i} (right-anchor strategy): '
+                  f'anchors={n_anchors} q_range=Q{q_start_on_page}-Q{q_start_on_page+n_anchors-1} '
+                  f'table_keys={list(_section_a_table.keys())}')
 
-            # 策略2：若未命中，用下一题 y_start - 2
-            if row_bottom == ph and qi + 1 < len(q_blocks):
-                row_bottom = q_blocks[qi + 1][1] - 2
+        else:
+            # ── 兜底策略（U1 等左列纯数字清晰的情况）──
+            q_blocks = []    # (q_num, y0)
+            ans_blocks = []  # (y0, y1)
 
-            if q_num not in _section_a_table:
-                _section_a_table[q_num] = (pg_i, q_y0, row_bottom)
+            for x0, y0, x1, y1, ts in text_blocks:
+                first_line = ts.split('\n')[0].strip()
+                if x0 <= q_col_thresh:
+                    m = re.match(r'^(\d+)\s*$', first_line)
+                    if m:
+                        q_num = int(m.group(1))
+                        if 1 <= q_num <= 6:
+                            q_blocks.append((q_num, y0))
+                    elif 'Question' in ts and re.search(r'(?:^|\n)\s*1\s*(?:\n|$)', ts):
+                        if not any(q[0] == 1 for q in q_blocks):
+                            q_blocks.insert(0, (1, y0))
 
-        print(f'[econ_ms] Section A pg{pg_i}: q_col_thresh={q_col_thresh:.0f} '
-              f'q_blocks={[x[0] for x in q_blocks]} ans_blocks={len(ans_blocks)} '
-              f'table_keys={list(_section_a_table.keys())}')
+                if ('correct answer' in ts.lower() or 'only correct' in ts.lower()):
+                    ans_blocks.append((y0, y1))
+
+            if not any(q[0] == 1 for q in q_blocks):
+                for x0, y0, x1, y1, ts in text_blocks:
+                    if x0 <= q_col_thresh and 40 < y0 < 250:
+                        first = ts.split('\n')[0].strip()
+                        if not re.match(r'(?i)^section|^question\s+number', first):
+                            q_blocks.insert(0, (1, y0))
+                            break
+
+            q_blocks.sort(key=lambda x: x[1])
+
+            for qi, (q_num, q_y0) in enumerate(q_blocks):
+                row_bottom = ph
+                for a_y0, a_y1 in sorted(ans_blocks):
+                    if a_y0 >= q_y0 - 5:
+                        row_bottom = a_y1
+                        break
+                if row_bottom == ph and qi + 1 < len(q_blocks):
+                    row_bottom = q_blocks[qi + 1][1] - 2
+                if q_num not in _section_a_table:
+                    _section_a_table[q_num] = (pg_i, q_y0, row_bottom)
+
+            print(f'[econ_ms] Section A pg{pg_i} (fallback strategy): '
+                  f'q_blocks={[x[0] for x in q_blocks]} ans_blocks={len(ans_blocks)} '
+                  f'table_keys={list(_section_a_table.keys())}')
 
     for q_num in sorted(_section_a_table.keys()):
         pg_i, y_start, y_end = _section_a_table[q_num]
@@ -4730,7 +4795,20 @@ def _render_edexcel_economics_ms_answers(ms_doc, dpi=150):
     # Q14: 从 page_idx 到文档最后正文页
     q13_info = next((q for q in questions if q['q_num'] == 13), None)
     q14_info = next((q for q in questions if q['q_num'] == 14), None)
-    last_content_page = ms_doc.page_count - 2  # 最后一页通常是版权页
+
+    # 从文档末尾向前扫，跳过版权页（含 "Pearson Education"）和几乎空白页（< 80 字符）
+    # 找到最后一页真正的学术内容页
+    last_content_page = ms_doc.page_count - 1  # 先假设最后一页是正文
+    for _pg_back in range(ms_doc.page_count - 1, -1, -1):
+        _back_txt = ms_doc[_pg_back].get_text().strip()
+        # 版权页：包含 "Pearson Education" 且正文内容很短
+        # 空白页：几乎没有文字
+        if len(_back_txt) < 80 or 'Pearson Education' in _back_txt:
+            last_content_page = _pg_back - 1
+        else:
+            break  # 找到真正的内容页，停止向前扫
+    last_content_page = max(last_content_page, 0)
+    print(f'[econ_ms] last_content_page={last_content_page} (total={ms_doc.page_count})')
 
     if q13_info:
         q13_start_pg = q13_info['page_idx']
