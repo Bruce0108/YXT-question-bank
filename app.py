@@ -4006,48 +4006,48 @@ def upload_multi():
                     q['difficulty'] = None
 
                 # ── 检测 Section C 材料页（Sources for use with Section C）──
-                # 这些页面是 Q12 的阅读材料，需附加到 Q12 题目显示中
-                # 结构：通常在试卷后半部分，含 "Sources for use with Section C" 或
-                # 类似标题，后续页为图表/文字材料
-                try:
-                    import base64 as _b64sc
-                    from PIL import Image as _PILsc
-                    _sources_pages = []
-                    _in_sources = False
-                    _sc_mat = fitz.Matrix(150 / 72.0, 150 / 72.0)
-                    for _pg_i in range(doc.page_count):
-                        _pg_text = doc[_pg_i].get_text()
-                        # 检测材料页开始标志
-                        if ('Sources for use with Section' in _pg_text or
-                                'Source for use with Section' in _pg_text or
-                                'sources for use with section' in _pg_text.lower()):
-                            _in_sources = True
-                        # 检测材料页结束（Acknowledgements 或页面数超限）
-                        if _in_sources:
-                            if 'Acknowledgements' in _pg_text or 'BLANK PAGE' in _pg_text:
-                                break
-                            _pg = doc[_pg_i]
-                            _pw, _ph = _pg.rect.width, _pg.rect.height
-                            # 裁掉 Edexcel 两侧装饰条
-                            _clip = fitz.Rect(36, 40, min(_pw - 36, 550), _ph - 25)
-                            _pix = _pg.get_pixmap(matrix=_sc_mat, clip=_clip, colorspace=fitz.csRGB)
-                            _sc_buf = io.BytesIO()
-                            _PILsc.frombytes('RGB', [_pix.width, _pix.height], _pix.samples)\
-                                  .save(_sc_buf, format='JPEG', quality=88)
-                            _sources_pages.append({
-                                'b64': _b64sc.b64encode(_sc_buf.getvalue()).decode('utf-8'),
-                                'w': _pix.width,
-                                'h': _pix.height,
-                            })
-                            del _pix
-                    # 将材料页注入 Q12 题目对象
-                    if _sources_pages:
-                        _q12 = next((q for q in questions if q.get('q_num') == 12), None)
-                        if _q12 is not None:
-                            _q12['source_pages'] = _sources_pages
-                            print(f'[econ_qp] 检测到 Section C 材料页 {len(_sources_pages)} 页，已附加到 Q12')
-                except Exception as _sc_err:
-                    print(f'[econ_qp] Section C 材料页检测失败: {_sc_err}')
+                # 只有 U1（WEC11）才有 Section C 阅读材料（Extract A/B + 图表）
+                # U2/U3/U4 没有 Source 材料页，跳过检测
+                if econ_unit == 'U1':
+                    try:
+                        import base64 as _b64sc
+                        from PIL import Image as _PILsc
+                        _sources_pages = []
+                        _in_sources = False
+                        _sc_mat = fitz.Matrix(150 / 72.0, 150 / 72.0)
+                        for _pg_i in range(doc.page_count):
+                            _pg_text = doc[_pg_i].get_text()
+                            # 检测材料页开始标志
+                            if ('Sources for use with Section' in _pg_text or
+                                    'Source for use with Section' in _pg_text or
+                                    'sources for use with section' in _pg_text.lower()):
+                                _in_sources = True
+                            # 检测材料页结束（Acknowledgements 或页面数超限）
+                            if _in_sources:
+                                if 'Acknowledgements' in _pg_text or 'BLANK PAGE' in _pg_text:
+                                    break
+                                _pg = doc[_pg_i]
+                                _pw, _ph = _pg.rect.width, _pg.rect.height
+                                # 裁掉 Edexcel 两侧装饰条
+                                _clip = fitz.Rect(36, 40, min(_pw - 36, 550), _ph - 25)
+                                _pix = _pg.get_pixmap(matrix=_sc_mat, clip=_clip, colorspace=fitz.csRGB)
+                                _sc_buf = io.BytesIO()
+                                _PILsc.frombytes('RGB', [_pix.width, _pix.height], _pix.samples)\
+                                      .save(_sc_buf, format='JPEG', quality=88)
+                                _sources_pages.append({
+                                    'b64': _b64sc.b64encode(_sc_buf.getvalue()).decode('utf-8'),
+                                    'w': _pix.width,
+                                    'h': _pix.height,
+                                })
+                                del _pix
+                        # 将材料页注入 Q12 题目对象
+                        if _sources_pages:
+                            _q12 = next((q for q in questions if q.get('q_num') == 12), None)
+                            if _q12 is not None:
+                                _q12['source_pages'] = _sources_pages
+                                print(f'[econ_qp] 检测到 Section C 材料页 {len(_sources_pages)} 页，已附加到 Q12')
+                    except Exception as _sc_err:
+                        print(f'[econ_qp] Section C 材料页检测失败: {_sc_err}')
             elif source == 'edexcel_maths':
                 unit_code = _MATHS_UNIT_TO_CODE.get(maths_unit or '', None)
                 for q_idx, q in enumerate(questions):
@@ -4422,16 +4422,14 @@ def detect_edexcel_economics_ms_questions(doc):
     questions = []
 
     # ── Section A: 表格式，Q1-Q6 ──
-    # 识别策略：
-    #   - 左列（x0≈62）有题号块（纯数字或含 Q1 的大块）
-    #   - 中间答案列（x0≈296）的 y1 是该题行底
+    # 识别策略（兼容 U1-U4）：
+    #   最左列（x0 最小的文本块）有题号（1-6），通过相邻题的 y_start 做行切割
+    #   不依赖特定 x 坐标范围，直接找最左列的纯数字块
     section_a_pages = []
     for pg_i in range(doc.page_count):
         text = doc[pg_i].get_text()
         if 'Section A' in text and pg_i >= 2:
-            # Section A 第一页：包含 "Section A" 标题
             section_a_pages.append(pg_i)
-            # Section A 第二页：紧接着的下一页（不含 Section B 标题）
             next_pg = pg_i + 1
             if next_pg < doc.page_count:
                 next_text = doc[next_pg].get_text()
@@ -4456,58 +4454,72 @@ def detect_edexcel_economics_ms_questions(doc):
             text_blocks.append((x0, y0, x1, y1, txt.strip()))
         text_blocks.sort(key=lambda b: b[1])
 
+        # ── 确定题号列的 x0 阈值 ──
+        # 找出所有 x0 坐标，取最小的那组中有纯数字的块所在的 x 范围
+        left_xs = sorted(set(round(b[0]) for b in text_blocks if b[0] < 150))
+        # 题号列通常是最左侧的一到两列；取最小 x0 + 40pt 作为阈值
+        q_col_thresh = (min(left_xs) + 50) if left_xs else 110
+
         q_blocks = []    # (q_num, y_start_of_q_block)
-        ans_blocks = []  # (y0, y1)  Answer 列块
+        ans_blocks = []  # (y0, y1)  含 "correct answer" 的答案文本块
 
         for x0, y0, x1, y1, ts in text_blocks:
             first_line = ts.split('\n')[0].strip()
 
-            # 题号块：x0 < 80
-            if x0 < 80:
+            # 题号块：在题号列范围内，且为纯数字 1-6
+            if x0 <= q_col_thresh:
+                # 纯数字 2-6
                 m = re.match(r'^(\d+)\s*$', first_line)
                 if m:
                     q_num = int(m.group(1))
                     if 2 <= q_num <= 6:
                         q_blocks.append((q_num, y0))
-                # Q1 大块（包含 'Question' 和 '1'）
-                elif 'Question' in first_line and re.search(r'\n1[\s\n]', ts):
+                # Q1：整块含 'Question' + '\n1'（大表头格式）
+                elif 'Question' in ts and re.search(r'(?:^|\n)\s*1\s*(?:\n|$)', ts):
                     if not any(q[0] == 1 for q in q_blocks):
                         q_blocks.insert(0, (1, y0))
 
-            # Answer 列块：Edexcel Economics MS 表格中间列
-            # U1 约 x0≈280-310；U2/U3/U4 可能布局稍不同，扩宽至 240-360
-            if 240 < x0 < 360 and y0 > 50:
+            # 答案块：含 "correct answer" 关键词（跨单元通用）
+            if ('correct answer' in ts.lower() or
+                    'The only correct' in ts or
+                    'only correct' in ts.lower()):
                 ans_blocks.append((y0, y1))
 
-        # Q1 兜底：如果没找到，用第一个 x0<80 的块
+        # Q1 兜底：若还没找到 Q1，用最左侧 y < 250 的第一个块
         if not any(q[0] == 1 for q in q_blocks):
             for x0, y0, x1, y1, ts in text_blocks:
-                if x0 < 80 and y0 < 200:
-                    q_blocks.insert(0, (1, y0))
-                    break
+                if x0 <= q_col_thresh and y0 < 250 and y0 > 40:
+                    first = ts.split('\n')[0].strip()
+                    # 不是标题行（Section A / Question 等）
+                    if not re.match(r'(?i)^section|^question\s+number', first):
+                        q_blocks.insert(0, (1, y0))
+                        break
 
-        # 对 q_blocks 按 y0 排序，用于备选切割
+        # 对 q_blocks 按 y0 排序
         q_blocks.sort(key=lambda x: x[1])
 
-        # 为每个题号找对应的行底（优先用 ans_blocks；备选用相邻题号的 y_start）
+        # 为每个题号确定行底
+        # 策略1（优先）：用「含 correct answer 的块」的 y1 作为行底
+        # 策略2（备选）：用下一个题号块的 y0 - 2 作为行底
         for qi, (q_num, q_y0) in enumerate(q_blocks):
             row_bottom = ph  # 默认：页底
 
-            # 优先：找答案列中 y0 >= q_y0 的最近块作为行底
+            # 策略1：找答案块中 y0 >= q_y0（本题行内）的那个
             for a_y0, a_y1 in sorted(ans_blocks):
-                if a_y0 >= q_y0 - 10:   # 允许 10pt 容差
+                if a_y0 >= q_y0 - 5:
                     row_bottom = a_y1
                     break
 
-            # 备选：若 ans_blocks 为空或未找到匹配，用下一题的 y_start - 2 作为行底
+            # 策略2：若未命中，用下一题 y_start - 2
             if row_bottom == ph and qi + 1 < len(q_blocks):
-                next_q_y0 = q_blocks[qi + 1][1]
-                row_bottom = next_q_y0 - 2
+                row_bottom = q_blocks[qi + 1][1] - 2
 
             if q_num not in _section_a_table:
                 _section_a_table[q_num] = (pg_i, q_y0, row_bottom)
 
-        print(f'[econ_ms] Section A pg{pg_i}: q_blocks={[x[0] for x in q_blocks]} ans_blocks={len(ans_blocks)} table_keys={list(_section_a_table.keys())}')
+        print(f'[econ_ms] Section A pg{pg_i}: q_col_thresh={q_col_thresh:.0f} '
+              f'q_blocks={[x[0] for x in q_blocks]} ans_blocks={len(ans_blocks)} '
+              f'table_keys={list(_section_a_table.keys())}')
 
     for q_num in sorted(_section_a_table.keys()):
         pg_i, y_start, y_end = _section_a_table[q_num]
