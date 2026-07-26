@@ -4474,8 +4474,9 @@ def detect_edexcel_economics_ms_questions(doc):
                     if not any(q[0] == 1 for q in q_blocks):
                         q_blocks.insert(0, (1, y0))
 
-            # Answer 列块：x0≈280-310（中间列），含有答案文字
-            if 270 < x0 < 320 and y0 > 50:
+            # Answer 列块：Edexcel Economics MS 表格中间列
+            # U1 约 x0≈280-310；U2/U3/U4 可能布局稍不同，扩宽至 240-360
+            if 240 < x0 < 360 and y0 > 50:
                 ans_blocks.append((y0, y1))
 
         # Q1 兜底：如果没找到，用第一个 x0<80 的块
@@ -4485,15 +4486,28 @@ def detect_edexcel_economics_ms_questions(doc):
                     q_blocks.insert(0, (1, y0))
                     break
 
-        # 为每个题号找对应的答案块（y0 >= q_y0 且最接近）
-        for q_num, q_y0 in q_blocks:
-            row_bottom = ph
+        # 对 q_blocks 按 y0 排序，用于备选切割
+        q_blocks.sort(key=lambda x: x[1])
+
+        # 为每个题号找对应的行底（优先用 ans_blocks；备选用相邻题号的 y_start）
+        for qi, (q_num, q_y0) in enumerate(q_blocks):
+            row_bottom = ph  # 默认：页底
+
+            # 优先：找答案列中 y0 >= q_y0 的最近块作为行底
             for a_y0, a_y1 in sorted(ans_blocks):
                 if a_y0 >= q_y0 - 10:   # 允许 10pt 容差
                     row_bottom = a_y1
                     break
+
+            # 备选：若 ans_blocks 为空或未找到匹配，用下一题的 y_start - 2 作为行底
+            if row_bottom == ph and qi + 1 < len(q_blocks):
+                next_q_y0 = q_blocks[qi + 1][1]
+                row_bottom = next_q_y0 - 2
+
             if q_num not in _section_a_table:
                 _section_a_table[q_num] = (pg_i, q_y0, row_bottom)
+
+        print(f'[econ_ms] Section A pg{pg_i}: q_blocks={[x[0] for x in q_blocks]} ans_blocks={len(ans_blocks)} table_keys={list(_section_a_table.keys())}')
 
     for q_num in sorted(_section_a_table.keys()):
         pg_i, y_start, y_end = _section_a_table[q_num]
@@ -7028,10 +7042,18 @@ def _place_answer_on_page(out_doc, ans_jpeg, ans_w, ans_h,
 def _insert_source_pages(out_doc, source_pages, PW, PH, M, GAP, label):
     """
     将 source_pages（Section C 材料页）插入 out_doc，每页单独一 PDF 页。
-    用于 Q12 PDF 导出时在题目页与答案页之间插入材料。
+    使用蓝色「材料」头栏样式（区别于绿色答案头栏），归属于题目部分。
     """
     import base64 as _b64src
     from PIL import Image as _PILSrc
+
+    BAND_H  = 22
+    SRC_GAP = 4
+    AVAIL_W = PW - 2 * M
+    AVAIL_H = PH - 2 * M - BAND_H - SRC_GAP - GAP
+    # 蓝色系（与答案绿色区分）
+    C_SRC_BG  = (0.88, 0.95, 1.00)   # 浅蓝
+    C_SRC_TXT = (0.03, 0.42, 0.63)   # 深蓝
 
     total = len(source_pages)
     for pg_idx, pg in enumerate(source_pages):
@@ -7042,10 +7064,29 @@ def _insert_source_pages(out_doc, source_pages, PW, PH, M, GAP, label):
             buf  = io.BytesIO()
             img.convert('RGB').save(buf, format='JPEG', quality=88)
             jpeg = buf.getvalue()
-            _place_answer_on_page(out_doc, jpeg, w, h,
-                                  PW, PH, M, GAP,
-                                  f'{label} 材料',
-                                  page_no=pg_idx + 1, total_pages=total)
+
+            page = out_doc.new_page(width=PW, height=PH)
+
+            # 蓝色材料头栏
+            band_rect = fitz.Rect(M, M, PW - M, M + BAND_H)
+            page.draw_rect(band_rect, color=C_SRC_BG, fill=C_SRC_BG)
+            if total > 1:
+                hdr_text = f'题目材料 Sources — {label}  (第{pg_idx+1}页/共{total}页)'
+            else:
+                hdr_text = f'题目材料 Sources — {label}'
+            page.insert_text(
+                (M + 8, M + BAND_H - 7),
+                hdr_text,
+                fontsize=11, color=C_SRC_TXT, fontname='helv'
+            )
+
+            # 材料图片
+            img_y0 = M + BAND_H + SRC_GAP
+            scale  = min(AVAIL_W / max(w, 1), AVAIL_H / max(h, 1))
+            draw_w = w * scale
+            draw_h = h * scale
+            img_rect = fitz.Rect(M, img_y0, M + draw_w, img_y0 + draw_h)
+            page.insert_image(img_rect, stream=io.BytesIO(jpeg))
         except Exception as _se:
             print(f'[pdf_export] source page {pg_idx+1} error: {_se}')
 
@@ -7172,8 +7213,10 @@ def _export_one_per_page(out_doc, src_doc, questions, q_nums, dpi,
                 del jpeg  # 立即释放本片内存
 
         # ── Task 2: 若题目有 source_pages（Section C 材料），先插入材料页 ──
+        # 注意：source_pages 仅限 Q12（Section C），其他题目不应有材料页
         source_pages = q_obj.get('source_pages')
-        if source_pages and isinstance(source_pages, list) and len(source_pages) > 0:
+        q_num_cur = q_obj.get('q_num')
+        if source_pages and isinstance(source_pages, list) and len(source_pages) > 0 and q_num_cur == 12:
             _insert_source_pages(out_doc, source_pages, PW, PH, M, GAP, label)
 
         # ── Task 2: 若题目有答案图，在题目页后附加答案页（支持多页）──
