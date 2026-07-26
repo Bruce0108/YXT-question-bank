@@ -4017,9 +4017,11 @@ def upload_multi():
                         q['topics'] = []
                     q['difficulty'] = None
 
-                # ── 检测 Section C 材料页（Sources for use with Section C）──
-                # 不依赖 econ_unit，直接扫描文档中是否存在 "Sources for use with Section" 标志
-                # U1 通常有，U2/U3/U4 视具体试卷而定（部分也有材料页）
+                # ── 检测材料页（Sources for use with Section B/C）──
+                # 通用策略：扫描文档中是否存在 "Sources for use with Section" 标志页
+                # - U1/U2 通常有 "Sources for use with Section C" → 附加到 Q12
+                # - U3 通常有 "Sources for use with Section B" → 附加到 Q7
+                # - 通过检测标题页的 Section B/C 决定附加目标
                 _has_sources_marker = any(
                     ('Sources for use with Section' in doc[_pi].get_text() or
                      'Source for use with Section' in doc[_pi].get_text())
@@ -4031,14 +4033,25 @@ def upload_multi():
                         from PIL import Image as _PILsc
                         _sources_pages = []
                         _in_sources = False
+                        _sources_section = None   # 'B' 或 'C'，从标题页检测
                         _sc_mat = fitz.Matrix(150 / 72.0, 150 / 72.0)
                         for _pg_i in range(doc.page_count):
                             _pg_text = doc[_pg_i].get_text()
-                            # 检测材料页开始标志
-                            if ('Sources for use with Section' in _pg_text or
+                            # 检测材料页开始标志，同时记录是 Section B 还是 C
+                            if not _in_sources and (
+                                    'Sources for use with Section' in _pg_text or
                                     'Source for use with Section' in _pg_text or
                                     'sources for use with section' in _pg_text.lower()):
                                 _in_sources = True
+                                # 判断 Section B / C
+                                _tl = _pg_text.lower()
+                                if 'section b' in _tl:
+                                    _sources_section = 'B'
+                                elif 'section c' in _tl:
+                                    _sources_section = 'C'
+                                else:
+                                    # 默认根据 econ_unit 判断
+                                    _sources_section = 'B' if econ_unit == 'U3' else 'C'
                             # 检测材料页结束（Acknowledgements 或页面数超限）
                             if _in_sources:
                                 if 'Acknowledgements' in _pg_text or 'BLANK PAGE' in _pg_text:
@@ -4057,78 +4070,17 @@ def upload_multi():
                                     'h': _pix.height,
                                 })
                                 del _pix
-                        # 将材料页注入 Q12 题目对象
+                        # 根据 _sources_section 决定注入 Q7（Section B）还是 Q12（Section C）
                         if _sources_pages:
-                            _q12 = next((q for q in questions if q.get('q_num') == 12), None)
-                            if _q12 is not None:
-                                _q12['source_pages'] = _sources_pages
-                                print(f'[econ_qp] 检测到 Section C 材料页 {len(_sources_pages)} 页 '
-                                      f'(unit={econ_unit})，已附加到 Q12')
+                            _target_qnum = 7 if _sources_section == 'B' else 12
+                            _tq = next((q for q in questions if q.get('q_num') == _target_qnum), None)
+                            if _tq is not None:
+                                _tq['source_pages'] = _sources_pages
+                                print(f'[econ_qp] 检测到 Sources for use with Section {_sources_section} '
+                                      f'材料页 {len(_sources_pages)} 页 (unit={econ_unit})，'
+                                      f'已附加到 Q{_target_qnum}')
                     except Exception as _sc_err:
-                        print(f'[econ_qp] Section C 材料页检测失败: {_sc_err}')
-
-                # ── U3 Section B 内联材料页检测（Figure 1 + Extract A/B/C）──
-                # U3 QP Section B 在 Q7 题目之前包含配套阅读材料，
-                # 页面特征：含 "Figure 1" / "Extract A" / "Extract B" / "Extract C"
-                # 且位于 Section B 区域（含 "Section B" 文字）
-                if econ_unit == 'U3':
-                    try:
-                        import base64 as _b64sb
-                        from PIL import Image as _PILsb
-                        _sb_sources_pages = []
-                        _sb_mat = fitz.Matrix(150 / 72.0, 150 / 72.0)
-                        # 扫描全文档，找含 Figure 1 / Extract A/B/C 的 Section B 材料页
-                        # 判断准则：含 "Extract A"/"Extract B"/"Extract C"/"Figure 1"
-                        # 且含 "Section B"（同页或前几页已出现过）
-                        _in_section_b = False
-                        for _pg_i in range(doc.page_count):
-                            _pg_text = doc[_pg_i].get_text()
-                            if 'Section B' in _pg_text:
-                                _in_section_b = True
-                            if not _in_section_b:
-                                continue
-                            # 一旦进入 Section B 的实际题目页（含问题编号 "7" 且含问题 Question 字样），停止
-                            # 材料页特征：含 "Extract" 或 "Figure 1" 关键词
-                            _is_material = (
-                                re.search(r'Extract\s+[ABC]', _pg_text) or
-                                re.search(r'Figure\s+1', _pg_text)
-                            )
-                            # 题目页特征：含 "Answer ALL questions" 且 "Section B" 同页，
-                            # 或含题目指令 "(a)" "Answer" 问题选项（但不是材料本身）
-                            # 简单判断：Section B 页含 Extract/Figure → 是材料页
-                            if _is_material:
-                                _pg = doc[_pg_i]
-                                _pw, _ph = _pg.rect.width, _pg.rect.height
-                                # 裁掉两侧装饰条，保留正文区域
-                                _clip = fitz.Rect(36, 40, min(_pw - 36, 550), _ph - 25)
-                                _pix = _pg.get_pixmap(matrix=_sb_mat, clip=_clip,
-                                                      colorspace=fitz.csRGB)
-                                _sb_buf = io.BytesIO()
-                                _PILsb.frombytes('RGB', [_pix.width, _pix.height], _pix.samples)\
-                                      .save(_sb_buf, format='JPEG', quality=88)
-                                _sb_sources_pages.append({
-                                    'b64': _b64sb.b64encode(_sb_buf.getvalue()).decode('utf-8'),
-                                    'w': _pix.width,
-                                    'h': _pix.height,
-                                })
-                                del _pix
-                            else:
-                                # Section B 中无 Extract/Figure 的页面 → 正式题目页，停止
-                                if _in_section_b and _sb_sources_pages:
-                                    break
-                        # 将材料页注入 Q7 题目对象（Section B 第一题）
-                        if _sb_sources_pages:
-                            _q7 = next((q for q in questions if q.get('q_num') == 7), None)
-                            if _q7 is None:
-                                # Q7 可能是多子题情形，取子题中 q_num==7 的第一个
-                                _q7 = next((q for q in questions
-                                            if q.get('q_num') == 7), None)
-                            if _q7 is not None:
-                                _q7['source_pages'] = _sb_sources_pages
-                                print(f'[econ_qp] 检测到 U3 Section B 材料页 '
-                                      f'{len(_sb_sources_pages)} 页，已附加到 Q7')
-                    except Exception as _sb_err:
-                        print(f'[econ_qp] U3 Section B 材料页检测失败: {_sb_err}')
+                        print(f'[econ_qp] 材料页检测失败: {_sc_err}')
             elif source == 'edexcel_maths':
                 unit_code = _MATHS_UNIT_TO_CODE.get(maths_unit or '', None)
                 for q_idx, q in enumerate(questions):
@@ -4789,13 +4741,14 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
                             })
                     continue  # U3 中找到 7(x) 子题块，跳过下面的整题检测
 
-            # Q7-Q11: 纯数字块 x0<80（U1/U2 用；U3 Q7 整体不再作为一个题）
+            # Q7-Q11: 纯数字块 x0<80
+            # U3: Q7 整体块不检测（由 Q7_SUB 子题代替），但 Q8/Q9/Q10/Q11 仍正常检测
             m = Q_NUM_PAT.match(first_line)
             if m and x0 < 80:
                 q_num = int(m.group(1))
-                # U3 中 Q7 整体不检测（由子题代替）
-                section_b_max = 11 if not is_u3 else 6  # U3 Section B 只有 Q7 子题
-                if 7 <= q_num <= section_b_max and q_num not in seen_q:
+                # U3 中跳过 q_num==7 整体（由 Q7 子题逻辑处理）
+                skip_q7_whole = is_u3 and q_num == 7
+                if not skip_q7_whole and 7 <= q_num <= 11 and q_num not in seen_q:
                     questions.append({
                         'q_num':     q_num,
                         'sub_label': '',
