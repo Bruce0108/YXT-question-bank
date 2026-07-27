@@ -1058,10 +1058,24 @@ def crop_question_image(doc, questions, q_idx, dpi=150, paper_type='mcq'):
             stem_bottom = _find_question_stem_bottom(page, ph, paper_type)
             if y_end is not None:
                 bottom = min(stem_bottom, min(ph, y_end))
-                # ★ 修复：对 edexcel_economics，若末页上无实质内容（只有 Section header），跳过
-                # 例：Q6 pg_end=page7，top~y_end 区域只有 "SECTION B / Answer ALL questions..."
+                # ★ 修复：对 edexcel_economics，若末页上完全没有任何文字，跳过
+                # Section header（SECTION B / Study Figures...）也算有效内容，
+                # 因为这类过渡说明需要随前一题切割一起呈现给学生
                 if pg_i != pg_start and paper_type == 'edexcel_economics':
-                    if not _has_question_content_in_range(page, top, y_end):
+                    _SKIP_BLANK_RE2 = re.compile(
+                        r'^(DO NOT WRITE|Turn over|©|\*P\w+\*|\d{1,4}$|\s*$)',
+                        re.IGNORECASE
+                    )
+                    _has_any2 = False
+                    for _bb2 in page.get_text('blocks'):
+                        _bx0, _by0, _bx1, _by1, _btxt2, _bno2, _btype2 = _bb2
+                        if _btype2 != 0: continue
+                        if _by0 < top or _by0 >= y_end: continue
+                        _ts2 = _btxt2.strip()
+                        if _ts2 and not _SKIP_BLANK_RE2.match(_ts2):
+                            _has_any2 = True
+                            break
+                    if not _has_any2:
                         continue
             else:
                 bottom = stem_bottom
@@ -6921,10 +6935,25 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
                 # ★ 修复1：若下一题紧接页面顶部（y_end 极小），该页几乎没有当前题内容，跳过
                 if pg_i != pg_start and bottom <= top + 45:
                     continue
-                # ★ 修复2：对 edexcel_economics，若当前题在此末页上无实质内容（只有 Section header），跳过
-                # 判断标准：top 到 y_end 之间不存在属于当前题的文字块（排除 Section header 类）
+                # ★ 修复2：对 edexcel_economics，若当前题在此末页上完全没有任何文字，跳过
+                # 注意：Section header（SECTION B / Study Figures...）也算有效内容，
+                # 因为这类过渡说明需要随 Q6 切割一起呈现给学生
+                # 只跳过真正空白（无任何文字块）的末页
                 if pg_i != pg_start and paper_type == 'edexcel_economics':
-                    if not _has_question_content_in_range(page, top, y_end):
+                    SKIP_BLANK_RE = re.compile(
+                        r'^(DO NOT WRITE|Turn over|©|\*P\w+\*|\d{1,4}$|\s*$)',
+                        re.IGNORECASE
+                    )
+                    _has_any = False
+                    for _bb in page.get_text('blocks'):
+                        _bx0, _by0, _bx1, _by1, _btxt, _bno, _btype = _bb
+                        if _btype != 0: continue
+                        if _by0 < top or _by0 >= y_end: continue
+                        _ts = _btxt.strip()
+                        if _ts and not SKIP_BLANK_RE.match(_ts):
+                            _has_any = True
+                            break
+                    if not _has_any:
                         continue
             else:
                 bottom = stem_bottom
