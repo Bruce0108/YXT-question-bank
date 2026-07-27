@@ -4573,11 +4573,19 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
                         row_top = min(row_top, y0)
                         break
 
-                # 行底：下一个右列锚点的 y0 - 2（同页），或 Section B 起始 y（若存在），或页底
-                if ai + 1 < n_anchors:
-                    row_bottom = right_anchor_ys[ai + 1][0] - 2
-                else:
-                    row_bottom = section_b_y_limit  # 本页最后一个锚点 → 到 SectionB 或页底
+                # ── 行底计算（修复：用行内最大y1+margin，而非下一题y0-2）──
+                # 原逻辑 next_anchor_y0 - 2 会截断底部框线；
+                # 新逻辑：取本行范围内（ry0 ~ next_row_y0）所有块的最大 y1，
+                # 加上 6pt 边距（包含框线），但不超过 section_b_y_limit
+                next_row_y0 = right_anchor_ys[ai + 1][0] if ai + 1 < n_anchors else section_b_y_limit
+                # 收集本行内所有块的 y1（限制在 next_row_y0 以内，防止跨行大块污染）
+                row_max_y1 = ry1  # 至少是右列锚点块自身的 y1
+                for x0, y0, x1, y1, ts in text_blocks:
+                    if ry0 - 5 <= y0 < next_row_y0:
+                        # 用 min(y1, next_row_y0) 防止跨行块（如左列大块）溢出
+                        row_max_y1 = max(row_max_y1, min(y1, next_row_y0))
+                # 行底 = 行内最大y1 + 6pt，但不超过 section_b_y_limit
+                row_bottom = min(row_max_y1 + 6, section_b_y_limit)
 
                 if q_num not in _section_a_table:
                     _section_a_table[q_num] = (pg_i, row_top, row_bottom)
