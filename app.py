@@ -4550,6 +4550,14 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
                     if x0 < 100 and re.match(r'^7\s', first) and y0 > last_anchor_y1:
                         section_b_y_limit = y0 - 2
                         break
+            if section_b_y_limit == ph:
+                # 策略4（兜底）：找任何含 'Section B' 的块，取其 y0 作为上限
+                # 适用于 U4 等格式：'Section B' 嵌在 Q6 的 (1) 标记块里
+                # （如 '(1)\n\n\nSection B\n'），此时取该块的 y0 即可
+                for x0, y0, x1, y1, ts in text_blocks:
+                    if 'Section B' in ts:
+                        section_b_y_limit = y0 - 2
+                        break
 
         # 先用右列锚点策略构建本页 questions
         if right_anchor_ys:
@@ -4654,19 +4662,25 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
     # ── Section B/C/D ──
     Q_NUM_PAT = re.compile(r'^(\d+)\s*$')
     Q12_SUB   = re.compile(r'^12\s*\(([a-e])\)', re.IGNORECASE)
-    # U3 专用：Q7 子题模式  "7(a)" / "7 (a)" / "7(a)" 等
+    # U3/U4 专用：Q7 子题模式  "7(a)" / "7 (a)" / "7(a)" 等
     Q7_SUB    = re.compile(r'^7\s*\(([a-e])\)', re.IGNORECASE)
 
-    # U3 标志：econ_unit == 'U3'（Section B 只有 Q7 且含子题）
+    # U3/U4 标志：Section B 只有 Q7 且含子题；Section C Q8-Q10 使用嵌入格式
     is_u3 = (econ_unit == 'U3')
+    is_u4 = (econ_unit == 'U4')
+    is_u3_or_u4 = is_u3 or is_u4
+    # U4 Q7 子题上限：U4 只有 7(a)-7(d)（无 7(e)）；U3 有 7(a)-7(e)
+    u4_q7_max_sub = 'd' if is_u4 else 'e'
 
     seen_q      = set(q['q_num'] for q in questions)
     seen_12subs = set()
-    seen_7subs  = set()   # U3 专用：已检测到的 Q7 子题
+    seen_7subs  = set()   # U3/U4 专用：已检测到的 Q7 子题
     q12e_pages  = []
     q12e_started = False
-    q7e_pages   = []      # U3 Q7(e) 多页
+    q7e_pages   = []      # U3 Q7(e) 多页（U4 无 Q7(e)）
     q7e_started = False
+    # U3/U4: 用于跨块检测 Q9 等（前一个块含 'Indicative content'）
+    _prev_had_indicative = False
 
     for pg_i in range(doc.page_count):
         page = doc[pg_i]
@@ -4717,23 +4731,25 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
                     q7e_pages.append((pg_i, 0, None))
 
         blocks = page.get_text('blocks')
+        _prev_had_indicative = False  # 重置跨块状态（每页重置）
         for b in blocks:
             x0, y0, x1, y1, txt, bno, btype = b
             if btype != 0:
+                _prev_had_indicative = False
                 continue
             ts = txt.strip()
             first_line = ts.split('\n')[0].strip()
 
-            # ── U3: Q7 子题检测（7(a)/7(b)/7(c)/7(d)/7(e)）──
-            if is_u3:
+            # ── U3/U4: Q7 子题检测（7(a)/7(b)/7(c)/7(d)/7(e)）──
+            if is_u3_or_u4:
                 m7 = Q7_SUB.match(first_line)
                 if m7:
                     sub7 = m7.group(1).lower()
                     key7 = f'7{sub7}'
                     if key7 not in seen_7subs:
                         seen_7subs.add(key7)
-                        if sub7 == 'e':
-                            # Q7(e) 多页（14分），处理类似 Q12(e)
+                        if sub7 == 'e' and is_u3:
+                            # Q7(e) 多页（U3 专有，14分），处理类似 Q12(e)
                             if not q7e_started:
                                 q7e_started = True
                                 q7e_pages = [(pg_i, y0, None)]
@@ -4747,36 +4763,52 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
                                 'pages':     [(pg_i, y0, None)],
                                 'section':   'B',
                             })
+                    _prev_had_indicative = 'Indicative content' in ts
                     continue  # 匹配到 7(x) 子题块 → 跳过下面整题检测
                 # m7 未匹配（即非 7(x) 格式）→ 继续走整题检测（Q8/Q9/Q10/Q11）
 
-                # ── U3 Section C: Q8/Q9/Q10 格式特殊 ──
-                # 题号不是独立纯数字块，而是嵌在 "Question\n...\nIndicative content\n8\n..." 大块里
-                # 检测条件：块含 'Question' 且含 'Indicative content'，块内有嵌入数字行
-                if 'Question' in ts and 'Indicative content' in ts:
+                # ── U3/U4 Section C: Q8/Q9/Q10 格式特殊 ──
+                # 情况1：题号嵌在含 Indicative content 的块里
+                #   1a（U3/U4 Q8,Q10）：同一块含 "Question" + "Indicative content\n{n}\n"
+                #   1b（U4 Q8 分离）：块含 "Indicative content\n\n{n}\n"（无 Question）
+                # 情况2（U4 Q9）：题号在独立小块 "\n{n}\nIndicative content guidance\n"
+                #                 而前一个块含 'Indicative content'
+                _emb_q_num = None
+                if 'Indicative content' in ts:
+                    # 情况1：块内嵌入数字，正则匹配 \nIndicative content\n(空行)\n{num}\n
                     _emb = re.search(r'\nIndicative content\s*\n\s*(\d+)\s*\n', ts)
                     if _emb:
-                        q_num_emb = int(_emb.group(1))
-                        if 8 <= q_num_emb <= 11 and q_num_emb not in seen_q:
-                            questions.append({
-                                'q_num':     q_num_emb,
-                                'sub_label': '',
-                                'page_idx':  pg_i,
-                                'y_start':   y0,
-                                'y_end':     None,
-                                'pages':     [(pg_i, y0, None)],
-                                'section':   'C',   # U3 Section C
-                            })
-                            seen_q.add(q_num_emb)
-                            continue
+                        _emb_q_num = int(_emb.group(1))
+                if _emb_q_num is None and _prev_had_indicative and re.match(r'^\s*(\d+)\s*\n', ts):
+                    # 情况2：当前块以独立数字行开头，且上一个块含 Indicative content
+                    _m_num = re.match(r'^\s*(\d+)\s*\n', ts)
+                    if _m_num:
+                        _emb_q_num = int(_m_num.group(1))
+
+                if _emb_q_num is not None and 8 <= _emb_q_num <= 11 and _emb_q_num not in seen_q:
+                    questions.append({
+                        'q_num':     _emb_q_num,
+                        'sub_label': '',
+                        'page_idx':  pg_i,
+                        'y_start':   y0,
+                        'y_end':     None,
+                        'pages':     [(pg_i, y0, None)],
+                        'section':   'C',   # U3/U4 Section C
+                    })
+                    seen_q.add(_emb_q_num)
+                    _prev_had_indicative = 'Indicative content' in ts
+                    continue
+
+            # 更新跨块状态
+            _prev_had_indicative = 'Indicative content' in ts
 
             # Q7-Q11: 纯数字块 x0<80（U1/U2）
-            # U3: Q7 整体块不检测（由 Q7_SUB 子题代替），Q8-Q11由上方嵌入块逻辑检测
+            # U3/U4: Q7 整体块不检测（由 Q7_SUB 子题代替），Q8-Q11由上方嵌入块逻辑检测
             m = Q_NUM_PAT.match(first_line)
             if m and x0 < 80:
                 q_num = int(m.group(1))
-                # U3 中跳过 q_num==7 整体（由 Q7 子题逻辑处理）
-                skip_q7_whole = is_u3 and q_num == 7
+                # U3/U4 中跳过 q_num==7 整体（由 Q7 子题逻辑处理）
+                skip_q7_whole = is_u3_or_u4 and q_num == 7
                 if not skip_q7_whole and 7 <= q_num <= 11 and q_num not in seen_q:
                     questions.append({
                         'q_num':     q_num,
@@ -4998,10 +5030,10 @@ def _render_edexcel_economics_ms_answers(ms_doc, dpi=150):
         q14_info = dict(q14_info)
         q14_info['pages'] = q14_pages
 
-    # ── U3 Section C 多页扩展：Q8/Q9/Q10 每题跨3页 ──
+    # ── U3/U4 Section C 多页扩展：Q8/Q9/Q10 每题跨3页 ──
     # 策略：按题号排序，Q8的范围=Q8起始页到Q9起始页-1，以此类推
     # 最后一题(Q10)到 last_content_page
-    if ms_econ_unit == 'U3':
+    if ms_econ_unit in ('U3', 'U4'):
         _sec_c_qs = sorted(
             [q for q in questions if q.get('section') == 'C' and isinstance(q.get('q_num'), int)],
             key=lambda x: x['q_num']
@@ -5021,7 +5053,7 @@ def _render_edexcel_economics_ms_answers(ms_doc, dpi=150):
                 for _q in questions:
                     if _q.get('q_num') == _qn and _q.get('section') == 'C':
                         _q['pages'] = _mp
-                        print(f'[econ_ms] U3 Q{_qn} Section C 多页扩展: {len(_mp)}页 (p{_start_pg+1}~p{_end_pg})')
+                        print(f'[econ_ms] {ms_econ_unit} Q{_qn} Section C 多页扩展: {len(_mp)}页 (p{_start_pg+1}~p{_end_pg})')
 
     result = {}
     scale = dpi / 72.0
