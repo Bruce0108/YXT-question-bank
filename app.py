@@ -282,7 +282,31 @@ def detect_edexcel_questions(doc):
     questions = []
     seen_nums = set()
 
+    # ── 预检测 Source Booklet 开始页 ──
+    # Economics U4 等 QP 内嵌 Source Booklet（页面含图表轴标签如 "32\n%"），
+    # 会被正则误识别为 Q32 等题号。检测到 Source Booklet 开始页后停止扫描。
+    # 检测策略：
+    #   1. 'Sources for use with Section'：Source Booklet 内容页标题（最可靠）
+    #   2. 'Source for use with Section'：变体拼写
+    #   3. 'Source Booklet' + 'Do not return'：Source Booklet 封面（封面没有题目）
+    # 注意：'Source Booklet' 单独出现可能在封面说明或题目中（"refer to Source Booklet"），
+    #       需要结合其他特征判断，或只用更精确的 'Sources for use with Section'
+    source_booklet_start_pg = None
+    for _pg in range(doc.page_count):
+        _pg_txt = doc[_pg].get_text()
+        if ('Sources for use with Section' in _pg_txt or
+                'Source for use with Section' in _pg_txt):
+            source_booklet_start_pg = _pg
+            break
+        # Source Booklet 封面特征：同时含 'Source Booklet' 和 'Do not return'
+        if 'Source Booklet' in _pg_txt and 'Do not return' in _pg_txt:
+            source_booklet_start_pg = _pg
+            break
+
     for pg_i in range(doc.page_count):
+        # 到达 Source Booklet 开始页时停止扫描
+        if source_booklet_start_pg is not None and pg_i >= source_booklet_start_pg:
+            break
         page = doc[pg_i]
         blocks = page.get_text('blocks')
 
@@ -685,6 +709,8 @@ def _find_question_stem_bottom(page, ph, paper_type='structured', y_min=None, y_
         r'do\s+not\s+write\s+(in\s+this\s+space|here|outside)|'
         r'question\s+\d+\s+continued|'
         r'total\s+for\s+(question|this\s+question)\s*[\d\s]*|'
+        r'\(total\s+for\s+(question|this\s+question)\s*[\d\s=a-z]*\)|'
+        r'total\s+for\s+section\s+[a-z]\s*=|'
         r'additional\s+(answer\s+)?space|'
         r'use\s+(this\s+)?(page\s+)?space\s+(for\s+)?(your\s+)?(working|answer)|'
         r'space\s+for\s+(rough\s+)?working|'
@@ -6797,6 +6823,28 @@ def _collect_question_slices(src_doc, questions, q_idx, paper_type):
     else:
         pg_end = _find_last_content_page(src_doc, pg_start)
         y_end  = None
+
+    # ── edexcel_economics 专项：检测 Source Booklet 开始页，限制 pg_end ──
+    # U4 等 QP 将 Source Booklet 内嵌于 PDF 末尾（含图表页），不应纳入题目切割范围
+    # 扫描文档，找到 Source Booklet 封面/内容页，pg_end 不超过其前一页
+    if paper_type == 'edexcel_economics':
+        _sb_start = None
+        for _pi in range(src_doc.page_count):
+            _pt = src_doc[_pi].get_text()
+            if ('Sources for use with Section' in _pt or
+                    'Source for use with Section' in _pt):
+                _sb_start = _pi
+                break
+            # Source Booklet 封面特征：同时含 'Source Booklet' 和 'Do not return'
+            if 'Source Booklet' in _pt and 'Do not return' in _pt:
+                _sb_start = _pi
+                break
+        if _sb_start is not None and pg_end >= _sb_start:
+            pg_end = _sb_start - 1
+            y_end  = None  # pg_end 变了，y_end 不再适用（Source Booklet 前的整页）
+            if pg_end < pg_start:
+                # 题目本身就在 Source Booklet 之后（极端情况），不切割
+                return []
 
     # Edexcel 有左右两侧的 "DO NOT WRITE" 装饰条，裁掉边缘
     is_edexcel = paper_type in ('edexcel', 'edexcel_mcq', 'edexcel_economics')
