@@ -2978,6 +2978,19 @@ def _extract_year_from_filename(filename: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _extract_file_uuid(filename: str) -> str | None:
+    """
+    从文件名中提取 UUID 前缀（如果存在）。
+    格式：{uuid}_{原始文件名}，例如：
+      f767253f-6f06-4de5-a046-f62820eb7603_A-Level-EDEXCELQP-202505-Economics-U4.pdf
+    返回 UUID 字符串，或 None（若文件名不含 UUID 前缀）。
+    """
+    if not filename:
+        return None
+    m = re.match(r'^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_', filename, re.IGNORECASE)
+    return m.group(1).lower() if m else None
+
+
 # 月份名称 → 标准月份编号（用于 session key 规范化）
 _MONTH_TO_NUM = {
     'january':1,'february':2,'march':3,'april':4,'may':5,'june':6,
@@ -3002,11 +3015,21 @@ def _extract_exam_session(filename: str) -> str | None:
       Markscheme-WMA11-October2022.pdf         → '2022_oct'
       WMA13_QP_Jan2021.pdf                     → '2021_jan'
       P3_June_2021_QP.pdf                      → '2021_jun'
+      A-Level-EDEXCELQP-202505-Economics.pdf   → '2025_may'
+      A-Level-EDEXCELQP-202510-Economics.pdf   → '2025_oct'
     返回 None 表示无法提取。
     """
     if not filename:
         return None
     fn = filename
+    # 模式0：6位数字年月格式（如 202505 → 2025_may，202510 → 2025_oct）
+    # 用于 A-Level-EDEXCELQP-202505-... 格式文件名
+    m0 = re.search(r'(20\d{2})(0[1-9]|1[0-2])(?!\d)', fn)
+    if m0:
+        year_str = m0.group(1)
+        month_num = int(m0.group(2))
+        sess = _MONTH_NUM_TO_SESSION[month_num]
+        return f'{year_str}_{sess}'
     # 模式1：MonthName + 4位年份（顺序，如 June2023 / June 2023 / June-2023）
     m = re.search(r'([A-Za-z]+)[-_ ]?(20\d{2})', fn, re.IGNORECASE)
     if m:
@@ -3993,6 +4016,7 @@ def upload_multi():
                         print(f'[upload] 9702 MS parsed: {file.filename} → {sorted(ms_answers.keys())} questions')
                         ms_registry.append({
                             'filename':    file.filename,
+                            'file_uuid':   _extract_file_uuid(file.filename),
                             'unit':        maths_unit,
                             'source':      source,
                             'answers':     ms_answers,
@@ -4009,6 +4033,7 @@ def upload_multi():
                       f'answers={sorted(ms_answers.keys(), key=str) if ms_answers else []}')
                 ms_registry.append({
                     'filename':   file.filename,
+                    'file_uuid':  _extract_file_uuid(file.filename),
                     'unit':       maths_unit,
                     'econ_unit':  econ_unit,   # ← 新增：供 econ 匹配使用
                     'source':     source,
@@ -4136,6 +4161,7 @@ def upload_multi():
 
             qp_groups.append({
                 'filename':        file.filename,
+                'file_uuid':       _extract_file_uuid(file.filename),
                 'path':            tmp_path,
                 'r2_key':          r2_key,
                 'source':          source,
@@ -4295,6 +4321,18 @@ def upload_multi():
         ms_session   = ms_info.get('session')   # 如 '2023_jun' 或 '2023'
         ms_p9702     = ms_info.get('paper9702', {})
         matched      = False
+
+        # ── 优先级⓪U：UUID 前缀精确匹配（最可靠，同 UUID = 同批次上传的配对文件）──
+        # 文件名格式：{uuid}_{原始文件名}.pdf，同一对 QP+MS 共享相同 UUID 前缀
+        ms_uuid = ms_info.get('file_uuid')
+        if not matched and ms_uuid:
+            for grp in qp_groups:
+                if grp.get('file_uuid') == ms_uuid and not grp.get('has_ms'):
+                    cnt = _inject_answers(grp, ms_answers, ms_info['filename'])
+                    print(f'[MS match⓪U] UUID: {ms_info["filename"]} → {grp["filename"]} '
+                          f'(uuid={ms_uuid}, answers={cnt})')
+                    matched = True
+                    break
 
         # ── 优先级⓪：9702 文件名精确匹配（session_key 完全一致）──
         # 例：9702_m20_ms_42 精确匹配 9702_m20_qp_42
