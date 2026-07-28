@@ -2686,14 +2686,28 @@ _ECONOMICS_CODE_MAP = {
 def detect_edexcel_economics_unit(doc) -> str:
     """
     从封面识别 Edexcel IAL 经济学试卷的具体单元。
-    返回：'U1'|'U2'|'U3'|'U4'|'unknown'
+    返回：'U1'|'U1A'|'U2'|'U2A'|'U3'|'U3A'|'U4'|'U4A'|'unknown'
+
+    WEC 代码格式：
+      WEC11/01  → U1     WEC11/01A → U1A
+      WEC12/01  → U2     WEC12/01A → U2A
+      WEC13/01  → U3     WEC13/01A → U3A
+      WEC14/01  → U4     WEC14/01A → U4A
+    同一年份可能同时存在 WEC11/01 和 WEC11/01A 两套卷子，必须区分。
     """
     for pg_i in range(min(2, doc.page_count)):
         text = doc[pg_i].get_text()
-        m = re.search(r'WEC1([1-4])', text)
+        # 精确匹配 WEC1x/数字[可选后缀字母]，如 WEC11/01A、WEC14/01
+        m = re.search(r'WEC1([1-4])/\d+([A-Z])?', text)
         if m:
-            return f'U{m.group(1)}'
-        # 通过标题文字识别
+            unit_num = m.group(1)
+            suffix   = m.group(2) or ''   # 'A' 或 ''
+            return f'U{unit_num}{suffix}'
+        # fallback：只含 WEC1x（无 /数字 部分）
+        m2 = re.search(r'WEC1([1-4])', text)
+        if m2:
+            return f'U{m2.group(1)}'
+        # 通过标题文字识别（无 WEC 代码时的兜底）
         if 'Markets in action' in text:
             return 'U1'
         if 'Macroeconomic performance' in text:
@@ -4101,8 +4115,8 @@ def upload_multi():
                                 elif 'section c' in _tl:
                                     _sources_section = 'C'
                                 else:
-                                    # 默认根据 econ_unit 判断
-                                    _sources_section = 'B' if econ_unit == 'U3' else 'C'
+                                    # 默认根据 econ_unit 判断（U3/U3A 用 Section B，其余用 Section C）
+                                    _sources_section = 'B' if econ_unit in ('U3', 'U3A') else 'C'
                             # 检测材料页结束（Acknowledgements 或页面数超限）
                             if _in_sources:
                                 if 'Acknowledgements' in _pg_text or 'BLANK PAGE' in _pg_text:
@@ -4730,10 +4744,11 @@ def detect_edexcel_economics_ms_questions(doc, econ_unit=None):
     Q7_SUB    = re.compile(r'^7\s*\(([a-e])\)', re.IGNORECASE)
 
     # U3/U4 标志：Section B 只有 Q7 且含子题；Section C Q8-Q10 使用嵌入格式
-    is_u3 = (econ_unit == 'U3')
-    is_u4 = (econ_unit == 'U4')
+    # U4A 与 U4 结构相同；U3A 与 U3 结构相同
+    is_u3 = (econ_unit in ('U3', 'U3A'))
+    is_u4 = (econ_unit in ('U4', 'U4A'))
     is_u3_or_u4 = is_u3 or is_u4
-    # U4 Q7 子题上限：U4 只有 7(a)-7(d)（无 7(e)）；U3 有 7(a)-7(e)
+    # U4/U4A Q7 子题上限：只有 7(a)-7(d)（无 7(e)）；U3/U3A 有 7(a)-7(e)
     u4_q7_max_sub = 'd' if is_u4 else 'e'
 
     seen_q      = set(q['q_num'] for q in questions)
@@ -5097,7 +5112,7 @@ def _render_edexcel_economics_ms_answers(ms_doc, dpi=150):
     # ── U3/U4 Section C 多页扩展：Q8/Q9/Q10 每题跨3页 ──
     # 策略：按题号排序，Q8的范围=Q8起始页到Q9起始页-1，以此类推
     # 最后一题(Q10)到 last_content_page
-    if ms_econ_unit in ('U3', 'U4'):
+    if ms_econ_unit in ('U3', 'U3A', 'U4', 'U4A'):
         _sec_c_qs = sorted(
             [q for q in questions if q.get('section') == 'C' and isinstance(q.get('q_num'), int)],
             key=lambda x: x['q_num']
