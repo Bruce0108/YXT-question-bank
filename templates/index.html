@@ -584,10 +584,10 @@
         <button id="btnToggleAllAns" onclick="toggleAllAnswers()">👁 显示所有答案</button>
       </div>
       <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
-        <!-- 追加套题按钮：读取题册后才显示 -->
+        <!-- 追加套题按钮：有题目时始终可见 -->
         <button class="btn btn-sm" id="btnAppendPdf" onclick="triggerAppendPdf()"
-                style="display:none;background:#2563eb;color:#fff;font-weight:600;white-space:nowrap"
-                title="在当前题目基础上继续追加新套题">
+                style="display:none;background:#2563eb;color:#fff;font-weight:600;white-space:nowrap;border-radius:7px;padding:5px 12px"
+                title="在当前题目基础上继续上传新套题（PDF），叠加到现有题目后面">
           ➕ 追加套题
         </button>
         <button class="btn btn-outline btn-sm" onclick="reset()">🔄 重新上传</button>
@@ -1622,6 +1622,9 @@ function renderStats() {
   document.getElementById('actCard').style.display   = '';
   document.getElementById('toolbar').style.display   = '';
   document.getElementById('empty').style.display     = 'none';
+  // 有题目时始终显示「追加套题」按钮
+  const _abtn = document.getElementById('btnAppendPdf');
+  if (_abtn) _abtn.style.display = allQuestions.length > 0 ? '' : 'none';
 }
 
 // ══════════════════════════════════════════════════════════
@@ -3790,10 +3793,14 @@ async function importExportedPdf(file) {
 
     renderGrid();
     renderSyllabusCard();
+    renderStats();   // 同步统计栏 + 控制 btnAppendPdf 可见性
     document.getElementById('statsCard').style.display = '';
     document.getElementById('actCard').style.display   = '';
     document.getElementById('toolbar').style.display   = '';
     document.getElementById('empty').style.display     = 'none';
+    // 有题目就显示「追加套题」按钮
+    const _iaBtn = document.getElementById('btnAppendPdf');
+    if (_iaBtn) _iaBtn.style.display = allQuestions.length > 0 ? '' : 'none';
 
     toast(`✅ 已导入 ${data.total_questions} 道题目（来自 ${data.filename}）`, 'ok');
   } catch(e) {
@@ -4240,27 +4247,24 @@ function triggerAppendPdf() {
 async function appendPdfToCurrentSession(input) {
   const files = Array.from(input.files || []);
   if (!files.length) return;
+  // 清空 input，允许下次选同名文件
+  input.value = '';
 
-  // 快照当前题目数量（追加前保留，防止任何异步重置）
-  const prevCount  = allQuestions.length;
-  const startGIdx  = groups.length;
-  console.log(`[appendPdf] 追加前：allQuestions=${prevCount}, groups=${startGIdx}`);
+  // ── 快照：在 XHR 期间锁住当前数据，防止外部事件误清空 ──
+  const snapAllQ   = allQuestions.slice();   // 浅拷贝，保留所有元素
+  const snapGroups = groups.slice();
+  const prevCount  = snapAllQ.length;
+  const startGIdx  = snapGroups.length;
 
   if (prevCount === 0) {
-    // 如果当前没有题目（不应该出现），提示用户先读取题册
-    toast('请先读取题册，再追加套题', 'err');
+    toast('请先上传或读取题册，再使用追加套题功能', 'err');
     return;
   }
 
-  // 记录追加前的原始数据引用（防止被外部重置）
-  const savedAllQuestions = allQuestions;
-  const savedGroups       = groups;
-
-  // 显示进度提示
   showLdProgress(`正在上传并解析 ${files.length} 个文件…`, 5, '上传中…');
 
   try {
-    // Step 1: 上传并解析新 PDF
+    // ── Step 1: 上传解析 ──
     const fd = new FormData();
     files.forEach(f => fd.append('files[]', f));
     fd.append('paper_type', chosenPT || 'auto');
@@ -4269,9 +4273,8 @@ async function appendPdfToCurrentSession(input) {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload_multi');
       xhr.upload.onprogress = e => {
-        if (e.lengthComputable) {
+        if (e.lengthComputable)
           setLdProgress(5 + Math.round(e.loaded / e.total * 40), '上传中…');
-        }
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
@@ -4282,101 +4285,105 @@ async function appendPdfToCurrentSession(input) {
           catch(e) { reject(new Error(`HTTP ${xhr.status}`)); }
         }
       };
-      xhr.onerror = () => reject(new Error('网络错误'));
-      xhr.timeout = 180000;
-      xhr.ontimeout = () => reject(new Error('请求超时（文件较大，请重试）'));
+      xhr.onerror   = () => reject(new Error('网络错误'));
+      xhr.timeout   = 180000;
+      xhr.ontimeout = () => reject(new Error('请求超时，请减少文件数量后重试'));
       xhr.send(fd);
     });
 
     if (newData.error) throw new Error(newData.error);
 
     setLdProgress(50, '解析完成，正在合并题目…');
-    await new Promise(r => setTimeout(r, 80));
+    await new Promise(r => setTimeout(r, 60));
 
-    // Step 2: 将新 session 的 groups/questions 追加到全局状态
     const newGroups = newData.groups || [];
-    if (!newGroups.length || !newGroups.some(g => (g.questions || []).length > 0)) {
+    const newQCount = newGroups.reduce((s, g) => s + (g.questions || []).length, 0);
+    if (!newQCount) {
       hideLd();
-      toast('未从上传的文件中识别到题目，请检查文件类型', 'err');
+      toast('未识别到题目，请检查文件类型是否正确', 'err');
       return;
     }
 
-    // 如果外部代码在 XHR 期间意外重置了全局变量，恢复快照
-    if (allQuestions !== savedAllQuestions || allQuestions.length < prevCount) {
-      console.warn('[appendPdf] 检测到外部重置，恢复快照数据');
-      allQuestions = savedAllQuestions;
-      groups       = savedGroups;
-    }
+    // ── Step 2: 恢复快照（防止 XHR 期间外部事件误清空），然后追加 ──
+    // 无论 XHR 期间发生了什么，直接以快照为基准追加
+    allQuestions = snapAllQ;
+    groups       = snapGroups;
 
-    console.log(`[appendPdf] 合并前：allQuestions=${allQuestions.length}, groups=${groups.length}`);
+    const newSessionId = newData.session_id;
 
-    // 追加 groups + questions
     newGroups.forEach((g, gi) => {
       const newGIdx = startGIdx + gi;
-      const newG = { ...g, _appended: true };
+      // 克隆 group，不修改后端返回的原始对象
+      const newG = {
+        ...g,
+        questions: [],
+        _appended: true,
+      };
       groups.push(newG);
 
       (g.questions || []).forEach(q => {
-        const seq = allQuestions.length;
-        allQuestions.push({
+        const globalSeq = allQuestions.length;          // 全局唯一序号
+        const qObj = {
           ...q,
-          gIdx:       newGIdx,
-          source:     g.source      || 'pdf',
-          paper_type: g.paper_type  || 'auto',
-          maths_unit: g.maths_unit  || null,
-          econ_unit:  g.econ_unit   || null,
-          exam_date:  g.exam_date   || '',
-          _seq:       seq,
-        });
+          gIdx:                newGIdx,
+          source:              g.source      || 'pdf',
+          paper_type:          g.paper_type  || 'auto',
+          maths_unit:          g.maths_unit  || null,
+          econ_unit:           g.econ_unit   || null,
+          exam_date:           g.exam_date   || '',
+          _seq:                globalSeq,               // 全局唯一序号（uid 基础）
+          _append_session_id:  newSessionId,            // 取高清图时使用
+          _append_file_idx:    gi,                      // 相对新 session 的文件索引
+        };
+        allQuestions.push(qObj);
+        newG.questions.push(qObj);
       });
     });
 
-    // 追加后更新 sessionId（多 session 共存，后端用 file_idx 定位）
-    // 保持原有 sessionId 不变（原题册题目用 _img_b64 直接读取）
-    // 新题目用新 session 的 session_id 裁图
-    // 在 questions 里标记 _append_session_id 以便保存时识别
-    const newSessionId = newData.session_id;
     const appendedCount = allQuestions.length - prevCount;
-    console.log(`[appendPdf] 合并后：allQuestions=${allQuestions.length}，新增=${appendedCount}`);
 
-    // 为追加的题目标记来源 session（保存时用于取高清图）
-    allQuestions.slice(prevCount).forEach(q => {
-      q._append_session_id = newSessionId;
-      // file_idx 相对于新 session 的偏移（从0开始）
-      q._append_file_idx = q.gIdx - startGIdx;
-    });
+    setLdProgress(80, `已合并 ${appendedCount} 题，共 ${allQuestions.length} 题，正在渲染…`);
+    await new Promise(r => setTimeout(r, 60));
 
-    setLdProgress(80, `已合并 ${appendedCount} 题，正在渲染…`);
-    await new Promise(r => setTimeout(r, 80));
-
-    // Step 3: 刷新渲染（含统计栏）
+    // ── Step 3: 全量刷新渲染 ──
     renderGrid();
-    renderStats();
+    renderStats();          // 更新题目数统计
+    renderFileList();       // 更新文件列表（追加的文件也会出现）
     renderSyllabusCard();
     _updateDiffFilterVisibility();
     _loadAllSyllabi();
 
-    // 确保所有卡片可见
+    // 确保界面卡片可见
     document.getElementById('statsCard').style.display = '';
     document.getElementById('actCard').style.display   = '';
     document.getElementById('toolbar').style.display   = '';
     document.getElementById('empty').style.display     = 'none';
 
-    // 保存按钮激活
+    // 确保追加按钮保持可见（renderStats 已处理，这里双重保障）
+    const abtn = document.getElementById('btnAppendPdf');
+    if (abtn) abtn.style.display = '';
+
+    // 激活保存按钮
     const wbBtn = document.getElementById('btnSaveWb');
     if (wbBtn) wbBtn.disabled = false;
 
+    // 持久化 session（方便刷新页面后恢复）
+    _saveSession();
+
     setLdProgress(100, '追加完成！');
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 350));
     hideLd();
 
-    // 统计有答案的题目数
+    // ── Toast 汇总：已追加 N 题，其中 X 题含答案 ──
     const withAns = allQuestions.slice(prevCount).filter(q => q.answer_b64).length;
-    let msg = `✅ 已追加 ${appendedCount} 题（共 ${allQuestions.length} 题）`;
-    if (withAns > 0) msg += `，其中 ${withAns} 题含答案`;
+    let   msg     = `✅ 已追加 ${appendedCount} 题，题目总数 ${allQuestions.length} 题`;
+    if (withAns > 0) msg += `（含答案 ${withAns} 题）`;
     toast(msg, 'ok');
 
   } catch(e) {
+    // 出错时恢复快照，不破坏已有数据
+    allQuestions = snapAllQ;
+    groups       = snapGroups;
     hideLd();
     console.error('[appendPdfToCurrentSession]', e);
     toast('追加失败：' + e.message, 'err');
@@ -4722,10 +4729,23 @@ async function loadWorkbook(file) {
 
     renderGrid();
     renderSyllabusCard();
+    renderStats();   // 同步统计栏 + 控制 btnAppendPdf 可见性
     document.getElementById('statsCard').style.display = '';
     document.getElementById('actCard').style.display   = '';
     document.getElementById('toolbar').style.display   = '';
     document.getElementById('empty').style.display     = 'none';
+    // .wb 文件读取路径：设置 _loadedWb + 显示追加按钮
+    _loadedWb = {
+      id:      data.workbook_id   || '',
+      title:   data.workbook_title || file.name,
+      board:   data.board         || '',
+      subject: data.subject       || '',
+    };
+    const _lwBtn = document.getElementById('btnAppendPdf');
+    if (_lwBtn) _lwBtn.style.display = allQuestions.length > 0 ? '' : 'none';
+    // 激活保存按钮
+    const _lwSaveBtn = document.getElementById('btnSaveWb');
+    if (_lwSaveBtn) _lwSaveBtn.disabled = false;
 
     const wbName = data.workbook_title ? `《${data.workbook_title}》` : file.name;
     toast(`✅ 题册 ${wbName} 已读取，共 ${data.total_questions} 道题`, 'ok');
