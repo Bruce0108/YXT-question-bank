@@ -429,9 +429,12 @@
         <p style="margin-top:4px;color:var(--g400);font-size:11px">支持同时选择多个文件 · 自动区分考试局</p>
         <p style="margin-top:3px;color:#15803d;font-size:11px;font-weight:500">💡 可同时上传 Question Paper + Mark Scheme，自动关联答案</p>
         <input type="file" id="fileIn" accept=".pdf" multiple>
-        <!-- 追加套题专用隐藏 file input -->
+        <!-- 追加套题专用隐藏 file input（题册列表按钮触发） -->
         <input type="file" id="appendFileInput" accept=".pdf" multiple style="display:none"
                onchange="_onAppendFilesSelected(this)">
+        <!-- Toolbar 追加套题专用 file input（读取题册后 toolbar 按钮触发） -->
+        <input type="file" id="appendPdfInput" accept=".pdf" multiple style="display:none"
+               onchange="appendPdfToCurrentSession(this)">
       </div>
 
       <!-- 从云端图库导入 -->
@@ -583,7 +586,13 @@
       <div id="toggleAllAnsWrap" style="display:none">
         <button id="btnToggleAllAns" onclick="toggleAllAnswers()">👁 显示所有答案</button>
       </div>
-      <div style="margin-left:auto">
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <!-- 追加套题按钮：读取题册后才显示 -->
+        <button class="btn btn-sm" id="btnAppendPdf" onclick="triggerAppendPdf()"
+                style="display:none;background:#2563eb;color:#fff;font-weight:600;white-space:nowrap"
+                title="在当前题目基础上继续追加新套题">
+          ➕ 追加套题
+        </button>
         <button class="btn btn-outline btn-sm" onclick="reset()">🔄 重新上传</button>
       </div>
     </div>
@@ -3160,6 +3169,10 @@ function reset() {
   document.getElementById('typeBadge').style.display='none';
   setPaperType('auto', document.querySelector('.pt-btn.auto'));
   updateSelUI();
+  // 清理题册追加状态
+  _loadedWb = null;
+  const appendBtn = document.getElementById('btnAppendPdf');
+  if (appendBtn) appendBtn.style.display = 'none';
 }
 
 // ══════════════════════════════════════════════════════════
@@ -3840,18 +3853,31 @@ async function openSaveLibDialog() {
   boardSel.innerHTML = _libBoards.map(b => `<option value="${b}">${b}</option>`).join('');
   _onSaveBoardChange();
 
-  // 默认题册名称：从当前文件/source推断
-  const activeG  = groups[activeGIdx] || {};
-  const examDate = allQuestions.find(q => q.exam_date)?.exam_date || '';
-  const defTitle = [activeG.maths_unit || '', examDate].filter(Boolean).join(' ') || '题册';
-  document.getElementById('libSaveTitle').value = defTitle;
+  // ── 优先用题册原始信息预填（追加后保存场景）──
+  if (_loadedWb && _loadedWb.board) {
+    // 用读取的题册的 board/subject/title 预填，覆盖默认推断
+    document.getElementById('libSaveTitle').value = _loadedWb.title || '题册';
+    if (_libBoards.includes(_loadedWb.board)) {
+      boardSel.value = _loadedWb.board;
+      _onSaveBoardChange();
+    }
+    const subjSel = document.getElementById('libSaveSubject');
+    const subs = _libSubjects[_loadedWb.board] || [];
+    if (subs.includes(_loadedWb.subject)) subjSel.value = _loadedWb.subject;
+  } else {
+    // 默认题册名称：从当前文件/source推断
+    const activeG  = groups[activeGIdx] || {};
+    const examDate = allQuestions.find(q => q.exam_date)?.exam_date || '';
+    const defTitle = [activeG.maths_unit || '', examDate].filter(Boolean).join(' ') || '题册';
+    document.getElementById('libSaveTitle').value = defTitle;
 
-  // 默认考试局推断
-  const src = (activeG.source || '').toLowerCase();
-  if (src.includes('edexcel') || src.includes('edexcel_maths')) boardSel.value = 'Edexcel';
-  else if (src.includes('cambridge') || src === 'caie') boardSel.value = 'CAIE';
-  else if (src.includes('aqa')) boardSel.value = 'AQA';
-  _onSaveBoardChange();
+    // 默认考试局推断
+    const src = (activeG.source || '').toLowerCase();
+    if (src.includes('edexcel') || src.includes('edexcel_maths')) boardSel.value = 'Edexcel';
+    else if (src.includes('cambridge') || src === 'caie') boardSel.value = 'CAIE';
+    else if (src.includes('aqa')) boardSel.value = 'AQA';
+    _onSaveBoardChange();
+  }
 
   // 显示题目数量
   document.getElementById('libSaveCount').textContent = visibles.length;
@@ -3911,8 +3937,11 @@ async function confirmSaveLib() {
         }
       } else {
         // PDF 来源题目：用 300dpi 重新获取高清图（保存时始终以高清存储）
+        // 追加的题目用其自己的 _append_session_id 和 _append_file_idx
+        const fetchSid  = q._append_session_id || sessionId;
+        const fetchFIdx = q._append_session_id ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
         try {
-          const hiRes = await fetch(`/api/preview_b64/${q.q_num}?dpi=300&session_id=${sessionId}&file_idx=${q.gIdx}`);
+          const hiRes = await fetch(`/api/preview_b64/${q.q_num}?dpi=300&session_id=${fetchSid}&file_idx=${fetchFIdx}`);
           if (hiRes.ok) {
             const hiData = await hiRes.json();
             if (hiData.img_b64) {
@@ -4199,6 +4228,136 @@ async function deleteFromLib(evt, board, subject, wbId) {
 //─────────────────────────────────────────────────────────────────────────────
 
 let _appendTarget = null;  // {board, subject, wbId, title}
+let _loadedWb     = null;  // 当前已读取的题册信息 {id, title, board, subject}
+
+// ─────────────────────── Toolbar「追加套题」─────────────────────────────────
+// 触发 toolbar 上的「追加套题」按钮 → 打开文件选择
+function triggerAppendPdf() {
+  const inp = document.getElementById('appendPdfInput');
+  if (!inp) return;
+  inp.value = '';
+  inp.click();
+}
+
+// 上传新 PDF → 解析 → 直接追加到当前 allQuestions/groups，然后刷新渲染
+async function appendPdfToCurrentSession(input) {
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+
+  // 显示进度提示
+  showLdProgress(`正在上传并解析 ${files.length} 个文件…`, 5, '上传中…');
+
+  try {
+    // Step 1: 上传并解析新 PDF
+    const fd = new FormData();
+    files.forEach(f => fd.append('files[]', f));
+    fd.append('paper_type', chosenPT || 'auto');
+
+    const newData = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload_multi');
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) {
+          setLdProgress(5 + Math.round(e.loaded / e.total * 40), '上传中…');
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch(e) { reject(new Error('响应解析失败')); }
+        } else {
+          try { reject(new Error(JSON.parse(xhr.responseText).error || `HTTP ${xhr.status}`)); }
+          catch(e) { reject(new Error(`HTTP ${xhr.status}`)); }
+        }
+      };
+      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.timeout = 180000;
+      xhr.ontimeout = () => reject(new Error('请求超时（文件较大，请重试）'));
+      xhr.send(fd);
+    });
+
+    if (newData.error) throw new Error(newData.error);
+
+    setLdProgress(50, '解析完成，正在合并题目…');
+    await new Promise(r => setTimeout(r, 80));
+
+    // Step 2: 将新 session 的 groups/questions 追加到全局状态
+    const newGroups = newData.groups || [];
+    if (!newGroups.length || !newGroups.some(g => (g.questions || []).length > 0)) {
+      hideLd();
+      toast('未从上传的文件中识别到题目，请检查文件类型', 'err');
+      return;
+    }
+
+    const prevCount  = allQuestions.length;
+    const startGIdx  = groups.length;   // 新 group 的起始索引
+
+    // 追加 groups
+    newGroups.forEach((g, gi) => {
+      const newGIdx = startGIdx + gi;
+      const newG = { ...g, _appended: true };
+      groups.push(newG);
+
+      (g.questions || []).forEach(q => {
+        const seq = allQuestions.length;
+        allQuestions.push({
+          ...q,
+          gIdx:       newGIdx,
+          source:     g.source      || 'pdf',
+          paper_type: g.paper_type  || 'auto',
+          maths_unit: g.maths_unit  || null,
+          econ_unit:  g.econ_unit   || null,
+          exam_date:  g.exam_date   || '',
+          _seq:       seq,
+        });
+        newG.questions = newG.questions || [];
+      });
+    });
+
+    // 追加后更新 sessionId（多 session 共存，后端用 file_idx 定位）
+    // 保持原有 sessionId 不变（原题册题目用 _img_b64 直接读取）
+    // 新题目用新 session 的 session_id 裁图
+    // 在 questions 里标记 _append_session_id 以便保存时识别
+    const newSessionId = newData.session_id;
+    const appendedCount = allQuestions.length - prevCount;
+
+    // 为追加的题目标记来源 session（保存时用于取高清图）
+    allQuestions.slice(prevCount).forEach(q => {
+      q._append_session_id = newSessionId;
+      // 同时修正 file_idx 相对于 startGIdx 的偏移
+      q._append_file_idx = q.gIdx - startGIdx;
+    });
+
+    setLdProgress(80, `已合并 ${appendedCount} 题，正在渲染…`);
+    await new Promise(r => setTimeout(r, 80));
+
+    // Step 3: 刷新渲染
+    renderGrid();
+    renderSyllabusCard();
+    _updateDiffFilterVisibility();
+    _loadAllSyllabi();
+
+    // 保存按钮激活
+    const wbBtn = document.getElementById('btnSaveWb');
+    if (wbBtn) wbBtn.disabled = false;
+
+    setLdProgress(100, '追加完成！');
+    await new Promise(r => setTimeout(r, 400));
+    hideLd();
+
+    // 统计有答案的题目数
+    const withAns = allQuestions.slice(prevCount).filter(q => q.answer_b64).length;
+    let msg = `✅ 已追加 ${appendedCount} 题（共 ${allQuestions.length} 题）`;
+    if (withAns > 0) msg += `，其中 ${withAns} 题含答案`;
+    toast(msg, 'ok');
+
+  } catch(e) {
+    hideLd();
+    console.error('[appendPdfToCurrentSession]', e);
+    toast('追加失败：' + e.message, 'err');
+  }
+}
+
 
 function appendToLib(evt, board, subject, wbId, title) {
   evt.stopPropagation();
@@ -4397,6 +4556,18 @@ function _applyLoadedWorkbook(d) {
   // 更新保存按钮状态
   const wbBtn = document.getElementById('btnSaveWb');
   if (wbBtn) wbBtn.disabled = false;
+
+  // 记录当前题册信息（用于 toolbar 追加套题 + 保存时预填）
+  _loadedWb = {
+    id:      d.id,
+    title:   d.title,
+    board:   d.board   || '',
+    subject: d.subject || '',
+  };
+
+  // 显示 toolbar「追加套题」按钮
+  const appendBtn = document.getElementById('btnAppendPdf');
+  if (appendBtn) appendBtn.style.display = '';
 }
 
 function closeLoadLibDialog() {
