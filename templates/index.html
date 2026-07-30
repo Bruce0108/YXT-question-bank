@@ -3638,7 +3638,125 @@ function clearAllTopicSel() {
   document.querySelectorAll('#editTopicTree .tree-star-btn,.tree-sub-star').forEach(b => b.classList.remove('starred'));
 }
 
-function editNavQ(dir) {
+// ─────────────────────────────────────────────────────────────────────────────
+// 内部：将当前 _editMeta（难度 + 知识点）保存到后端 session，并同步内存 + 刷新卡片
+// showToast=true 时弹出成功提示；返回 true=成功 / false=失败
+// ─────────────────────────────────────────────────────────────────────────────
+async function _commitCurrentEdit(showToast) {
+  const { gIdx, qNum, diff, selectedIds, coreIds, sessionTopics } = _editMeta;
+
+  // 构建 topics 数组
+  const topicsArr = [];
+  if (sessionTopics) {
+    sessionTopics.forEach(ch => {
+      const chId = String(ch.id);
+      if (selectedIds.has(chId)) {
+        topicsArr.push({ id: chId, title: ch.title, score: 99, is_core: coreIds.has(chId) });
+      }
+      (ch.subtopics || []).forEach(sub => {
+        const subId = String(sub.id);
+        if (selectedIds.has(subId)) {
+          topicsArr.push({ id: subId, title: sub.title, parent_id: chId, score: 99,
+                           is_core: coreIds.has(subId) });
+        }
+      });
+    });
+  }
+
+  // 无有效 session 时只写内存，不报错（离线模式）
+  if (!sessionId) {
+    _applyEditMetaToMemory();
+    _refreshEditCard();
+    return true;
+  }
+
+  try {
+    const results = await Promise.all([
+      fetch('/api/update_question_meta', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ session_id: sessionId, g_idx: gIdx, q_num: qNum,
+                               field: 'difficulty', value: diff })
+      }).then(r => r.json()),
+      fetch('/api/update_question_meta', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ session_id: sessionId, g_idx: gIdx, q_num: qNum,
+                               field: 'topics', value: topicsArr.length ? topicsArr : [] })
+      }).then(r => r.json()),
+    ]);
+
+    const failed = results.filter(r => !r.ok);
+    if (failed.length) {
+      toast('部分保存失败：' + failed.map(r => r.error).join(', '), 'err');
+      return false;
+    }
+    // 写内存 + 刷新卡片
+    _applyEditMetaToMemory();
+    _refreshEditCard();
+    if (showToast) toast(`Q${String(qNum).padStart(2,'0')} 已保存`, 'ok');
+    return true;
+  } catch(e) {
+    toast('保存失败：' + e.message, 'err');
+    return false;
+  }
+}
+
+// 刷新当前编辑题的网格卡片（难度区 + 知识点标签区）— 无需 renderGrid() 全量重绘
+function _refreshEditCard() {
+  const uid = _editMeta._uid;
+  const q = allQuestions.find(x => {
+    if (uid && uid.startsWith('s')) return x._seq === +uid.slice(1);
+    const [gi, qn] = (uid || '').split('_').map(Number);
+    return x.gIdx === gi && x.q_num === qn;
+  });
+  if (!q) return;
+
+  // ── 难度区：卡片 id=qc-${uid} 内的 .q-difficulty div ──
+  const card = document.getElementById(`qc-${uid}`);
+  if (card) {
+    const diffDiv = card.querySelector('.q-difficulty');
+    if (diffDiv) {
+      const d = typeof q.difficulty === 'number' ? q.difficulty : null;
+      const diffLabelMap = {1:'Starter',2:'Basic',3:'Medium',4:'Hard',5:'Expert'};
+      if (d) {
+        const starsHtml = Array.from({length:5},(_,i) =>
+          `<span class="star-icon ${i<d?'full':'empty'}-star"
+                 onclick="setDiffQuick('${uid}',${q.gIdx},${q.q_num},${i+1},event)"
+                 title="设为${i+1}星">★</span>`
+        ).join('');
+        diffDiv.innerHTML =
+          `<span class="diff-label">Difficulty</span>` +
+          `<span class="diff-stars">${starsHtml}</span>` +
+          `<span class="diff-badge diff-${d}">${diffLabelMap[d]||''}</span>`;
+      } else {
+        diffDiv.innerHTML =
+          `<span class="diff-label no-diff"
+                 onclick="openEditMeta('${uid}',null,null,'difficulty',event)">点击设置难度</span>`;
+      }
+    }
+  }
+
+  // ── 知识点标签区：id=tp-${uid} ──
+  const tpDiv = document.getElementById(`tp-${uid}`);
+  if (tpDiv) {
+    const topics = Array.isArray(q.topics) ? q.topics : [];
+    tpDiv.innerHTML = topics.slice(0,3).map(t =>
+      `<span class="topic-tag" title="点击修改知识点"
+             onclick="openEditMeta('${uid}',null,null,'topics',event)">${t.id} ${t.title}</span>`
+    ).join('') +
+    (topics.length > 3
+      ? `<span class="topic-tag" onclick="openEditMeta('${uid}',null,null,'topics',event)">+${topics.length-3}</span>`
+      : ''
+    ) +
+    `<span class="topic-tag add-tag" title="添加/修改知识点"
+           onclick="openEditMeta('${uid}',null,null,'topics',event)">✏️</span>`;
+  }
+
+  // ── 同步统计栏 ──
+  renderStats();
+}
+
+// 上一题 / 下一题 导航：先自动保存当前题，再跳转
+async function editNavQ(dir) {
   const vis = getVisibleQuestions();
   const cur = _editMeta;
   // 用 _seq 或 gIdx+qNum 在 vis 里定位当前题
@@ -3646,13 +3764,25 @@ function editNavQ(dir) {
     ? vis.findIndex(x => x._seq === +cur._uid.slice(1))
     : vis.findIndex(x => x.gIdx === cur.gIdx && x.q_num === cur.qNum);
   const next = vis[visIdx + dir];
-  if (next) {
-    // 先自动保存当前题
-    _applyEditMetaToMemory();
-    // 用 next 的 _seq uid（或 gIdx_qNum 兼容）
-    const nextUid = next._seq != null ? `s${next._seq}` : `${next.gIdx}_${next.q_num}`;
-    openEditMeta(nextUid, null, null, null, null);
-  }
+  if (!next) return;
+
+  // ── 禁用导航按钮，防止连点 ──
+  const btnPrev = document.getElementById('editNavPrev');
+  const btnNext = document.getElementById('editNavNext');
+  const origPrevText = btnPrev ? btnPrev.textContent : '';
+  const origNextText = btnNext ? btnNext.textContent : '';
+  if (btnPrev) { btnPrev.disabled = true; btnPrev.textContent = '⏳'; }
+  if (btnNext) { btnNext.disabled = true; btnNext.textContent = '⏳'; }
+
+  // ── 自动保存当前题（静默，不弹 toast）──
+  await _commitCurrentEdit(false);
+
+  // ── 恢复按钮后跳到下一题 ──
+  if (btnPrev) { btnPrev.disabled = false; btnPrev.textContent = origPrevText; }
+  if (btnNext) { btnNext.disabled = false; btnNext.textContent = origNextText; }
+
+  const nextUid = next._seq != null ? `s${next._seq}` : `${next.gIdx}_${next.q_num}`;
+  openEditMeta(nextUid, null, null, null, null);
 }
 
 function closeEditMeta() {
@@ -3704,53 +3834,22 @@ function _applyEditMetaToMemory() {
   if (topicsArr.length) q.topics = topicsArr;
 }
 
+// 「✅ 保存修改」按钮：保存后关闭弹框
 async function saveEditMeta() {
-  const { gIdx, qNum, diff, selectedIds, coreIds, sessionTopics } = _editMeta;
-  if (!sessionId) { toast('无效会话', 'err'); return; }
+  const qNum = _editMeta.qNum;
 
-  // 构建 topics 列表
-  const topicsArr = [];
-  if (sessionTopics) {
-    sessionTopics.forEach(ch => {
-      const chId = String(ch.id);
-      if (selectedIds.has(chId)) {
-        topicsArr.push({ id: chId, title: ch.title, score: 99, is_core: coreIds.has(chId) });
-      }
-      (ch.subtopics || []).forEach(sub => {
-        const subId = String(sub.id);
-        if (selectedIds.has(subId)) {
-          topicsArr.push({ id: subId, title: sub.title, parent_id: chId, score: 99, is_core: coreIds.has(subId) });
-        }
-      });
-    });
-  }
+  // 禁用保存按钮防止重复点击
+  const saveBtn = document.querySelector('#editMetaMo .mo-ft .btn-primary');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ 保存中…'; }
 
-  const promises = [
-    fetch('/api/update_question_meta', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({session_id: sessionId, g_idx: gIdx, q_num: qNum,
-                            field: 'difficulty', value: diff})
-    }).then(r => r.json()),
-    fetch('/api/update_question_meta', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({session_id: sessionId, g_idx: gIdx, q_num: qNum,
-                            field: 'topics', value: topicsArr.length ? topicsArr : []})
-    }).then(r => r.json()),
-  ];
+  const ok = await _commitCurrentEdit(false);
 
-  try {
-    const results = await Promise.all(promises);
-    const failed = results.filter(r => !r.ok);
-    if (failed.length) {
-      toast('部分保存失败：' + failed.map(r => r.error).join(', '), 'err');
-    } else {
-      _applyEditMetaToMemory();
-      closeEditMeta();
-      renderGrid();
-      toast(`Q${String(qNum).padStart(2,'0')} 已保存`, 'ok');
-    }
-  } catch(e) {
-    toast('网络错误', 'err');
+  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '✅ 保存修改'; }
+
+  if (ok) {
+    closeEditMeta();
+    renderGrid();   // 全量重绘，让卡片完整呈现最新难度+知识点
+    toast(`Q${String(qNum).padStart(2,'0')} 已保存`, 'ok');
   }
 }
 
