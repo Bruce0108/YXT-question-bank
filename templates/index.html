@@ -4075,10 +4075,10 @@ function renderLibTree(tree) {
           </div>
         </div>
         <div class="lib-wb-actions" id="lib-act-${wb.id}" style="display:none">
-          <button class="lib-act-btn lib-act-load" onclick="loadFromLib('${board}','${subjNode.subject}','${wb.id}','${wb.title.replace(/'/g,'\\'') }')">
+          <button class="lib-act-btn lib-act-load" onclick="loadFromLib('${board}','${subjNode.subject}','${wb.id}','${esc(wb.title)}')">
             ✅ 读取题册
           </button>
-          <button class="lib-act-btn lib-act-append" onclick="appendToLib(event,'${board}','${subjNode.subject}','${wb.id}','${wb.title.replace(/'/g,'\\'') }')">
+          <button class="lib-act-btn lib-act-append" onclick="appendToLib(event,'${board}','${subjNode.subject}','${wb.id}','${esc(wb.title)}')">
             ➕ 追加套题
           </button>
           <button class="lib-act-btn lib-act-del" onclick="deleteFromLib(event,'${board}','${subjNode.subject}','${wb.id}')">
@@ -4315,6 +4315,7 @@ async function _onAppendFilesSelected(input) {
 }
 
 
+function _applyLoadedWorkbook(d) {
   // ── 构建一个新的 group（workbook 类型）并追加到当前 groups ──
   const isAppend = allQuestions.length > 0;
   const newGIdx  = isAppend ? groups.length : 0;
