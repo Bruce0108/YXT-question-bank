@@ -8290,8 +8290,259 @@ def library_delete(wb_id):
     return jsonify({'ok': True})
 
 
+@app.route('/api/library/append/<wb_id>', methods=['POST'])
+def library_append(wb_id):
+    """
+    将新一批题目（来自 upload_multi session）追加到已有题册，不覆盖原有题目。
 
-def save_workbook():
+    前端传 JSON：
+    {
+      session_id,          # 本次新上传的 session
+      board, subject,      # 题册所在分类（用于定位题册目录）
+      questions: [{        # 仅传新增的题目
+        q_num, file_idx,
+        difficulty, topics, exam_date, source,
+        img_bytes_b64      # 可选，已有 b64 时跳过裁图
+      }]
+    }
+
+    返回：{ok, id, title, added, total, msg}
+    """
+    import base64 as _b64
+    data       = request.json or {}
+    session_id = data.get('session_id', '')
+    board      = data.get('board', 'Edexcel')
+    subject    = data.get('subject', '经济 Economics')
+    questions  = data.get('questions', [])
+
+    if not questions:
+        return jsonify({'error': '没有新题目数据'}), 400
+
+    wb_prefix = _lib_key_prefix(board, subject, wb_id)
+
+    # ── 读取已有 manifest ──
+    if storage.is_r2_mode():
+        manifest = storage.load_json(f'{wb_prefix}/manifest.json')
+    else:
+        mfest_path = os.path.join(wb_prefix, 'manifest.json')
+        if not os.path.isfile(mfest_path):
+            return jsonify({'error': '题册不存在'}), 404
+        with open(mfest_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+
+    if manifest is None:
+        return jsonify({'error': '题册不存在'}), 404
+
+    # ── 获取 session（用于裁图）──
+    sess = None
+    if session_id:
+        sess = _get_session(session_id)
+
+    # ── 计算新图片的起始序号（在旧题目后面接续编号）──
+    existing_qs = manifest.get('questions', [])
+    start_idx   = len(existing_qs)   # 旧题目数量，新题从 start_idx+1 开始编号
+
+    # ── 按 file_idx 分组，批量裁图（复用 library/save 逻辑）──
+    from collections import defaultdict
+    file_idx_map = defaultdict(list)
+    q_has_b64    = {}
+
+    for i, q in enumerate(questions):
+        if q.get('img_bytes_b64'):
+            q_has_b64[i] = True
+        else:
+            file_idx = int(q.get('file_idx', q.get('gIdx', 0)))
+            file_idx_map[file_idx].append((i, q))
+
+    img_results = {}
+
+    # 处理已有 b64 的题目
+    for i, q in enumerate(questions):
+        if not q_has_b64.get(i):
+            continue
+        b64       = q.get('img_bytes_b64', '')
+        img_fname = f'q_{start_idx + i + 1:03d}.jpg'
+        try:
+            raw = _b64.b64decode(b64)
+            from PIL import Image as _PIL
+            _im = _PIL.open(io.BytesIO(raw))
+            buf = io.BytesIO()
+            _im.convert('RGB').save(buf, format='JPEG', quality=88)
+            img_bytes = buf.getvalue()
+            w, h = _im.width, _im.height
+            if storage.is_r2_mode():
+                storage.store_bytes(f'{wb_prefix}/{img_fname}', img_bytes)
+            else:
+                with open(os.path.join(wb_prefix, img_fname), 'wb') as f:
+                    f.write(img_bytes)
+            # 答案图片
+            ans_fname = ''
+            ans_b64   = q.get('answer_b64', '')
+            if ans_b64:
+                ans_fname = f'q_{start_idx + i + 1:03d}_ans.jpg'
+                try:
+                    ans_raw = _b64.b64decode(ans_b64)
+                    from PIL import Image as _PIL2
+                    _aim = _PIL2.open(io.BytesIO(ans_raw))
+                    abuf = io.BytesIO()
+                    _aim.convert('RGB').save(abuf, format='JPEG', quality=88)
+                    if storage.is_r2_mode():
+                        storage.store_bytes(f'{wb_prefix}/{ans_fname}', abuf.getvalue())
+                    else:
+                        with open(os.path.join(wb_prefix, ans_fname), 'wb') as f:
+                            f.write(abuf.getvalue())
+                except Exception:
+                    ans_fname = ''
+            img_results[i] = (img_fname, w, h, ans_fname)
+        except Exception:
+            img_results[i] = ('', 0, 0, '')
+
+    # 裁图（从原始 PDF session 中裁取）
+    if sess and file_idx_map:
+        for file_idx, items in file_idx_map.items():
+            if file_idx >= len(sess):
+                for (i, q) in items:
+                    img_results[i] = ('', 0, 0, '')
+                continue
+            grp = sess[file_idx]
+            pdf_path = grp.get('path', '')
+            try:
+                if pdf_path and os.path.isfile(pdf_path):
+                    doc = fitz.open(pdf_path)
+                else:
+                    doc = None
+
+                for (i, q) in items:
+                    img_fname = f'q_{start_idx + i + 1:03d}.jpg'
+                    img_bytes = b''
+                    w = h = 0
+                    # 优先从 grp.questions 取已缓存的 img_bytes_b64
+                    grp_qs    = grp.get('questions', [])
+                    q_num     = q.get('q_num')
+                    cached_b64 = ''
+                    for gq in grp_qs:
+                        if gq.get('q_num') == q_num:
+                            cached_b64 = gq.get('img_bytes_b64', '')
+                            break
+                    if cached_b64:
+                        raw = _b64.b64decode(cached_b64)
+                        from PIL import Image as _PIL3
+                        _im = _PIL3.open(io.BytesIO(raw))
+                        buf = io.BytesIO()
+                        _im.convert('RGB').save(buf, format='JPEG', quality=88)
+                        img_bytes = buf.getvalue()
+                        w, h = _im.width, _im.height
+                    elif doc:
+                        # 从 PDF 裁图（fallback）
+                        try:
+                            grp_qs_list = grp.get('questions', [])
+                            q_idx_in_grp = next(
+                                (idx for idx, gq in enumerate(grp_qs_list) if gq.get('q_num') == q_num),
+                                None
+                            )
+                            if q_idx_in_grp is not None:
+                                paper_type = grp.get('paper_type', 'edexcel_economics')
+                                img_bytes_raw, w, h = crop_question_image(
+                                    doc, grp_qs_list, q_idx_in_grp, dpi=300, paper_type=paper_type
+                                )
+                                if img_bytes_raw:
+                                    from PIL import Image as _PIL4
+                                    _im4 = _PIL4.open(io.BytesIO(img_bytes_raw))
+                                    buf2 = io.BytesIO()
+                                    _im4.convert('RGB').save(buf2, format='JPEG', quality=88)
+                                    img_bytes = buf2.getvalue()
+                        except Exception:
+                            pass
+
+                    if img_bytes:
+                        if storage.is_r2_mode():
+                            storage.store_bytes(f'{wb_prefix}/{img_fname}', img_bytes)
+                        else:
+                            with open(os.path.join(wb_prefix, img_fname), 'wb') as f:
+                                f.write(img_bytes)
+                        # 答案图片
+                        ans_fname = ''
+                        for gq in grp_qs:
+                            if gq.get('q_num') == q_num:
+                                ans_b64 = gq.get('answer_b64', '')
+                                if ans_b64:
+                                    ans_fname = f'q_{start_idx + i + 1:03d}_ans.jpg'
+                                    try:
+                                        ans_raw = _b64.b64decode(ans_b64)
+                                        from PIL import Image as _PIL5
+                                        _aim = _PIL5.open(io.BytesIO(ans_raw))
+                                        abuf = io.BytesIO()
+                                        _aim.convert('RGB').save(abuf, format='JPEG', quality=88)
+                                        if storage.is_r2_mode():
+                                            storage.store_bytes(f'{wb_prefix}/{ans_fname}', abuf.getvalue())
+                                        else:
+                                            with open(os.path.join(wb_prefix, ans_fname), 'wb') as f:
+                                                f.write(abuf.getvalue())
+                                    except Exception:
+                                        ans_fname = ''
+                                break
+                        img_results[i] = (img_fname, w, h, ans_fname)
+                    else:
+                        img_results[i] = ('', 0, 0, '')
+
+                if doc:
+                    doc.close()
+            except Exception as e:
+                print(f'[library/append] 裁图异常 file_idx={file_idx}: {e}')
+                for (i, q) in items:
+                    img_results[i] = ('', 0, 0, '')
+
+    # ── 构建新增题目条目，追加到 existing_qs ──
+    new_qs = []
+    for i, q in enumerate(questions):
+        img_file, img_w, img_h, ans_file = img_results.get(i, ('', 0, 0, ''))
+        new_qs.append({
+            'seq':        start_idx + i + 1,
+            'q_num':      q.get('q_num', start_idx + i + 1),
+            'file_idx':   int(q.get('file_idx', q.get('gIdx', 0))),
+            'difficulty': q.get('difficulty'),
+            'topics':     q.get('topics', []),
+            'exam_date':  q.get('exam_date', ''),
+            'source':     q.get('source', ''),
+            'img_file':   img_file,
+            'img_w':      img_w,
+            'img_h':      img_h,
+            'ans_file':   ans_file,
+        })
+
+    added_count   = sum(1 for q in new_qs if q.get('img_file'))
+    all_questions = existing_qs + new_qs
+
+    # ── 更新 manifest ──
+    manifest['questions']     = all_questions
+    manifest['count']         = len(all_questions)
+    manifest['success_count'] = sum(1 for q in all_questions if q.get('img_file'))
+    manifest['updated_at']    = time.strftime('%Y-%m-%d %H:%M', time.localtime())
+
+    if storage.is_r2_mode():
+        storage.store_json(f'{wb_prefix}/manifest.json', manifest)
+    else:
+        with open(os.path.join(wb_prefix, 'manifest.json'), 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    msg = f'已追加 {added_count} 题，题册共 {len(all_questions)} 题'
+    if added_count < len(questions):
+        msg += f'（{len(questions) - added_count} 题图片获取失败）'
+
+    print(f'[library/append] wb_id={wb_id} 追加 {added_count}/{len(questions)} 题，'
+          f'题册合计 {len(all_questions)} 题')
+
+    return jsonify({
+        'ok':    True,
+        'id':    wb_id,
+        'title': manifest.get('title', wb_id),
+        'added': added_count,
+        'total': len(all_questions),
+        'msg':   msg,
+    })
+
+
+
     """
     把当前 session 的题目元数据（难度、知识点）嵌入 PDF 并保存为题册文件。
     题册格式：
