@@ -432,9 +432,6 @@
         <!-- 追加套题专用隐藏 file input（题册列表按钮触发） -->
         <input type="file" id="appendFileInput" accept=".pdf" multiple style="display:none"
                onchange="_onAppendFilesSelected(this)">
-        <!-- Toolbar 追加套题专用 file input（读取题册后 toolbar 按钮触发） -->
-        <input type="file" id="appendPdfInput" accept=".pdf" multiple style="display:none"
-               onchange="appendPdfToCurrentSession(this)">
       </div>
 
       <!-- 从云端图库导入 -->
@@ -4244,6 +4241,21 @@ async function appendPdfToCurrentSession(input) {
   const files = Array.from(input.files || []);
   if (!files.length) return;
 
+  // 快照当前题目数量（追加前保留，防止任何异步重置）
+  const prevCount  = allQuestions.length;
+  const startGIdx  = groups.length;
+  console.log(`[appendPdf] 追加前：allQuestions=${prevCount}, groups=${startGIdx}`);
+
+  if (prevCount === 0) {
+    // 如果当前没有题目（不应该出现），提示用户先读取题册
+    toast('请先读取题册，再追加套题', 'err');
+    return;
+  }
+
+  // 记录追加前的原始数据引用（防止被外部重置）
+  const savedAllQuestions = allQuestions;
+  const savedGroups       = groups;
+
   // 显示进度提示
   showLdProgress(`正在上传并解析 ${files.length} 个文件…`, 5, '上传中…');
 
@@ -4289,10 +4301,16 @@ async function appendPdfToCurrentSession(input) {
       return;
     }
 
-    const prevCount  = allQuestions.length;
-    const startGIdx  = groups.length;   // 新 group 的起始索引
+    // 如果外部代码在 XHR 期间意外重置了全局变量，恢复快照
+    if (allQuestions !== savedAllQuestions || allQuestions.length < prevCount) {
+      console.warn('[appendPdf] 检测到外部重置，恢复快照数据');
+      allQuestions = savedAllQuestions;
+      groups       = savedGroups;
+    }
 
-    // 追加 groups
+    console.log(`[appendPdf] 合并前：allQuestions=${allQuestions.length}, groups=${groups.length}`);
+
+    // 追加 groups + questions
     newGroups.forEach((g, gi) => {
       const newGIdx = startGIdx + gi;
       const newG = { ...g, _appended: true };
@@ -4310,7 +4328,6 @@ async function appendPdfToCurrentSession(input) {
           exam_date:  g.exam_date   || '',
           _seq:       seq,
         });
-        newG.questions = newG.questions || [];
       });
     });
 
@@ -4320,22 +4337,30 @@ async function appendPdfToCurrentSession(input) {
     // 在 questions 里标记 _append_session_id 以便保存时识别
     const newSessionId = newData.session_id;
     const appendedCount = allQuestions.length - prevCount;
+    console.log(`[appendPdf] 合并后：allQuestions=${allQuestions.length}，新增=${appendedCount}`);
 
     // 为追加的题目标记来源 session（保存时用于取高清图）
     allQuestions.slice(prevCount).forEach(q => {
       q._append_session_id = newSessionId;
-      // 同时修正 file_idx 相对于 startGIdx 的偏移
+      // file_idx 相对于新 session 的偏移（从0开始）
       q._append_file_idx = q.gIdx - startGIdx;
     });
 
     setLdProgress(80, `已合并 ${appendedCount} 题，正在渲染…`);
     await new Promise(r => setTimeout(r, 80));
 
-    // Step 3: 刷新渲染
+    // Step 3: 刷新渲染（含统计栏）
     renderGrid();
+    renderStats();
     renderSyllabusCard();
     _updateDiffFilterVisibility();
     _loadAllSyllabi();
+
+    // 确保所有卡片可见
+    document.getElementById('statsCard').style.display = '';
+    document.getElementById('actCard').style.display   = '';
+    document.getElementById('toolbar').style.display   = '';
+    document.getElementById('empty').style.display     = 'none';
 
     // 保存按钮激活
     const wbBtn = document.getElementById('btnSaveWb');
@@ -5982,5 +6007,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (grid) observer.observe(grid, {childList: true, subtree: true, attributes: true, attributeFilter: ['class']});
 });
 </script>
+
+<!-- Toolbar 追加套题专用 file input：放在 body 最末尾，完全脱离 drop 事件树 -->
+<input type="file" id="appendPdfInput" accept=".pdf" multiple style="display:none"
+       onchange="appendPdfToCurrentSession(this)">
+
 </body>
 </html>
