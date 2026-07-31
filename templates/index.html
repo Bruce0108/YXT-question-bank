@@ -3303,10 +3303,11 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
   treeWrap.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px">⏳ 加载中...</div>';
 
   const grp = groups[gIdx] || {};
-  // 判断来源：cambridge用9702，edexcel_economics用经济学考纲，edexcel_maths用数学考纲
-  const grpSource = grp.source || q.source || '';
-  const isCambridge  = (grpSource === 'cambridge');
-  const isEconomy    = (grpSource === 'edexcel_economics');
+  // ── 科目判断：统一使用与主页侧栏相同的智能判断函数，避免 source='workbook' 时误判 ──
+  // _isEconGroup / _isMathsGroup 会检查 paper_type / econ_unit / topics id 前缀，
+  // 与主页知识点筛选树保持完全一致。
+  const isCambridge = (grp.source === 'cambridge') || (q.source === 'cambridge');
+  const isEconomy   = !isCambridge && _isEconGroup(grp);
 
   let apiUrl;
   if (isCambridge) {
@@ -3314,7 +3315,13 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
     apiUrl = '/api/syllabus';
   } else if (isEconomy) {
     // Edexcel Economics：根据 econ_unit 过滤（与筛选侧栏 econSyllabus 一致）
-    const econUnit = grp.econ_unit || q.econ_unit || null;
+    // econ_unit 优先取 group 字段，其次取 question 字段，再从 topics id 前缀推导
+    let econUnit = grp.econ_unit || q.econ_unit || null;
+    if (!econUnit && Array.isArray(q.topics) && q.topics.length > 0) {
+      // 从 topics id 前缀推导（格式 U1-xx / U2-xx 等）
+      const m = String(q.topics[0].id || q.topics[0].parent_id || '').match(/^(U[1-4])-/);
+      if (m) econUnit = m[1];
+    }
     apiUrl = econUnit
       ? `/api/syllabus/edexcel_economics?unit=${encodeURIComponent(econUnit)}`
       : '/api/syllabus/edexcel_economics';
