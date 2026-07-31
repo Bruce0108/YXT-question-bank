@@ -2081,7 +2081,15 @@ function renderGrid() {
       card.addEventListener('click', e => { if(e.target.tagName==='BUTTON') return; toggleSel(uid); });
       grid.appendChild(card);
 
-      thumbQ.push({ q_num: q.q_num, gIdx: q.gIdx, uid, tok });
+      // 追加套题使用独立 session，需携带正确的 session_id 和 file_idx
+      thumbQ.push({
+        q_num:   q.q_num,
+        gIdx:    q.gIdx,
+        uid,
+        tok,
+        appendSid:  q._append_session_id  || null,
+        appendFIdx: q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : null,
+      });
       procThumbQ();
     });
   });
@@ -2299,7 +2307,7 @@ function toggleAllAnswers() {
 
 function procThumbQ() {
   while (thumbIng < MAX_CO && thumbQ.length > 0) {
-    const { q_num, gIdx, uid, tok } = thumbQ.shift();
+    const { q_num, gIdx, uid, tok, appendSid, appendFIdx } = thumbQ.shift();
     if (tok !== uploadToken) { procThumbQ(); continue; }
     thumbIng++;
     const img = document.getElementById(`th-${uid}`);
@@ -2327,7 +2335,10 @@ function procThumbQ() {
       thumbIng--; procThumbQ();
     };
     t.onerror = () => { if(ld) ld.innerHTML='⚠️'; thumbIng--; procThumbQ(); };
-    t.src = `/api/preview/${q_num}?dpi=96&session_id=${sessionId}&file_idx=${gIdx}&_t=${tok}`;
+    // 追加套题用自己的 session_id + file_idx，普通题用全局 sessionId + gIdx
+    const _sid  = appendSid  != null ? appendSid  : sessionId;
+    const _fidx = appendFIdx != null ? appendFIdx : gIdx;
+    t.src = `/api/preview/${q_num}?dpi=96&session_id=${_sid}&file_idx=${_fidx}&_t=${tok}`;
   }
 }
 
@@ -2792,7 +2803,10 @@ function openPrev(qNum, gIdx, e) {
     const mime = b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
     document.getElementById('prevImg').src = `data:${mime};base64,${b64}`;
   } else {
-    document.getElementById('prevImg').src = `/api/preview/${qNum}?dpi=150&session_id=${sessionId}&file_idx=${gIdx}&_t=${uploadToken}`;
+    // 追加套题用自己的 session_id + file_idx
+    const _pSid  = qObj && qObj._append_session_id != null ? qObj._append_session_id : sessionId;
+    const _pFidx = qObj && qObj._append_session_id != null ? (qObj._append_file_idx ?? gIdx) : gIdx;
+    document.getElementById('prevImg').src = `/api/preview/${qNum}?dpi=150&session_id=${_pSid}&file_idx=${_pFidx}&_t=${uploadToken}`;
   }
   document.getElementById('prevMo').classList.add('show');
   updateMoNav();
@@ -2819,7 +2833,10 @@ function navMo(dir) {
     const mime = b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
     document.getElementById('prevImg').src = `data:${mime};base64,${b64}`;
   } else {
-    document.getElementById('prevImg').src = `/api/preview/${curMoQ}?dpi=150&session_id=${sessionId}&file_idx=${curMoGIdx}&_t=${uploadToken}`;
+    // 追加套题用自己的 session_id + file_idx
+    const _nSid  = qObj && qObj._append_session_id != null ? qObj._append_session_id : sessionId;
+    const _nFidx = qObj && qObj._append_session_id != null ? (qObj._append_file_idx ?? curMoGIdx) : curMoGIdx;
+    document.getElementById('prevImg').src = `/api/preview/${curMoQ}?dpi=150&session_id=${_nSid}&file_idx=${_nFidx}&_t=${uploadToken}`;
   }
   updateMoNav();
 }
@@ -3360,7 +3377,10 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
     prevLoad.style.display = 'none';
   } else {
     const tok = uploadToken;
-    const imgSrc = `/api/preview/${q.q_num}?dpi=150&session_id=${sessionId}&file_idx=${q.gIdx}&_t=${tok}`;
+    // 追加套题用自己的 session_id + file_idx，普通题用全局 sessionId + q.gIdx
+    const _eSid  = q._append_session_id != null ? q._append_session_id : sessionId;
+    const _eFidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
+    const imgSrc = `/api/preview/${q.q_num}?dpi=150&session_id=${_eSid}&file_idx=${_eFidx}&_t=${tok}`;
     const tmpImg = new Image();
     tmpImg.onload = () => { prevImg.src = tmpImg.src; prevImg.style.display=''; prevLoad.style.display='none'; };
     tmpImg.onerror = () => { prevLoad.textContent = '⚠️ 预览加载失败'; };
