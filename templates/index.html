@@ -2124,6 +2124,11 @@ async function _loadAnswerPages(uid, ansWrap) {
   const qNum  = parseInt(ansWrap.dataset.qnum);
   if (!sessionId) return;
 
+  // 追加套题用自己的 session_id + file_idx
+  const _qObj  = _uidToQ(uid);
+  const _aSid  = _qObj && _qObj._append_session_id != null ? _qObj._append_session_id : sessionId;
+  const _aFidx = _qObj && _qObj._append_session_id != null ? (_qObj._append_file_idx ?? gIdx) : gIdx;
+
   // 把当前答案区内容替换为 loading 提示
   const barEl = ansWrap.querySelector('.qc-answer-bar');
   const contentArea = document.createElement('div');
@@ -2136,7 +2141,7 @@ async function _loadAnswerPages(uid, ansWrap) {
   ansWrap.appendChild(contentArea);
 
   try {
-    const resp = await fetch(`/api/get_answer?session_id=${sessionId}&file_idx=${gIdx}&q_num=${qNum}`);
+    const resp = await fetch(`/api/get_answer?session_id=${_aSid}&file_idx=${_aFidx}&q_num=${qNum}`);
     if (!resp.ok) { contentArea.innerHTML = '<div style="color:red;padding:8px">加载失败</div>'; return; }
     const data = await resp.json();
 
@@ -2197,6 +2202,11 @@ async function _loadSourcePages(uid, srcWrap) {
   const qNum = parseInt(srcWrap.dataset.qnum);
   if (!sessionId) return;
 
+  // 追加套题用自己的 session_id + file_idx
+  const _sqObj  = _uidToQ(uid);
+  const _sSid   = _sqObj && _sqObj._append_session_id != null ? _sqObj._append_session_id : sessionId;
+  const _sFidx  = _sqObj && _sqObj._append_session_id != null ? (_sqObj._append_file_idx ?? gIdx) : gIdx;
+
   const barEl = srcWrap.querySelector('.qc-source-bar');
   const contentArea = document.createElement('div');
   contentArea.id = `src-content-${uid}`;
@@ -2207,7 +2217,7 @@ async function _loadSourcePages(uid, srcWrap) {
   srcWrap.appendChild(contentArea);
 
   try {
-    const resp = await fetch(`/api/get_source_pages?session_id=${sessionId}&file_idx=${gIdx}&q_num=${qNum}`);
+    const resp = await fetch(`/api/get_source_pages?session_id=${_sSid}&file_idx=${_sFidx}&q_num=${qNum}`);
     if (!resp.ok) { contentArea.innerHTML = '<div style="color:red;padding:8px">加载失败</div>'; return; }
     const data = await resp.json();
 
@@ -2943,41 +2953,49 @@ async function doExportPdf() {
 
   if (!exportItems.length) { toast('没有可导出的题目','err'); return; }
 
-  // 按 gIdx 分组（保持 exportItems 中的顺序）
-  const byGroup = {};
+  // ── 按 (session_id, file_idx) 分组，支持追加套题的独立 session ──
+  // key = "sid::fidx"，每组携带正确的 session_id 和 file_idx
+  const bySessionGroup = {};
   exportItems.forEach(q => {
-    if (!byGroup[q.gIdx]) byGroup[q.gIdx] = [];
-    byGroup[q.gIdx].push(q.q_num);
+    const sid  = q._append_session_id != null ? q._append_session_id : sessionId;
+    const fidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
+    const key  = `${sid}::${fidx}`;
+    if (!bySessionGroup[key]) bySessionGroup[key] = { session_id: sid, file_idx: fidx, q_nums: [] };
+    bySessionGroup[key].q_nums.push(q.q_num);
   });
 
   closePdfModal();
 
-  const gIdxList = Object.keys(byGroup).map(Number);
   const totalQ   = exportItems.length;
 
   // 全局有序列表（保留 sortOrder 排序，跨 gIdx）
-  const ordered_items = exportItems.map(q => ({ gIdx: q.gIdx, q_num: q.q_num }));
+  // ordered_items 也需要携带正确的 session_id + file_idx
+  const ordered_items = exportItems.map(q => ({
+    gIdx:       q.gIdx,
+    q_num:      q.q_num,
+    session_id: q._append_session_id != null ? q._append_session_id : sessionId,
+    file_idx:   q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx,
+  }));
 
-  // 构建 per-question 答案可见性映射：key = "${gIdx}_${q_num}"，value = true 表示导出时附加答案
+  // 构建 per-question 答案可见性映射：key = "${session_id}::${file_idx}_${q_num}"
   const exportMode = document.querySelector('input[name="pdfExportMode"]:checked')?.value || 'question_only';
   const includeAnswerMode = exportMode === 'question_markscheme';
   const answer_visible_map = {};
   exportItems.forEach(q => {
-    const uid = `${q.gIdx}_${q.q_num}`;
-    if (includeAnswerMode) {
-      // Question + Mark Scheme：凡有 answer_b64 的题目都导出答案，无论界面是否展开
-      answer_visible_map[uid] = !!(q.answer_b64);
-    } else {
-      // Question Only：全部不导出答案
-      answer_visible_map[uid] = false;
-    }
+    const sid  = q._append_session_id != null ? q._append_session_id : sessionId;
+    const fidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
+    const uid = `${q.gIdx}_${q.q_num}`;           // 保持后端旧 key 格式兼容
+    const uid2 = `${sid}::${fidx}_${q.q_num}`;    // 新 key 格式（后端按需选用）
+    const hasAns = !!(q.answer_b64);
+    answer_visible_map[uid]  = includeAnswerMode ? hasAns : false;
+    answer_visible_map[uid2] = includeAnswerMode ? hasAns : false;
   });
 
   showLdProgress(`正在生成合并 PDF（共 ${totalQ} 道题）…`, 0, '提交任务中…');
 
   try {
-    // ── 统一走合并模式（单文件也用合并接口，简洁统一）──
-    const sel_by_group = gIdxList.map(gi => ({ gIdx: gi, q_nums: byGroup[gi] }));
+    // sel_by_group：每项携带自己的 session_id + file_idx（替代旧的全局 gIdx 方案）
+    const sel_by_group = Object.values(bySessionGroup);
 
     const startRes = await fetch('/api/export_pdf', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -3034,6 +3052,36 @@ document.getElementById('pdfMo').addEventListener('click', e => {
 });
 
 // ══════════════════════════════════════════════════════════
+//  EXPORT PAYLOAD HELPER
+// ══════════════════════════════════════════════════════════
+/**
+ * 将题目列表按 (session_id, file_idx) 分组，构建 export_pdf 需要的 payload。
+ * 支持追加套题（_append_session_id）和原始题（全局 sessionId）混合导出。
+ * @param {Array} questions - allQuestions 或 selectedSorted 子集
+ * @returns {Object} - sel_by_group: Array, ordered_items: Array
+ */
+function _buildExportPayload(questions) {
+  const bySessionGroup = {};
+  questions.forEach(q => {
+    const sid  = q._append_session_id != null ? q._append_session_id : sessionId;
+    const fidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
+    const key  = `${sid}::${fidx}`;
+    if (!bySessionGroup[key]) {
+      bySessionGroup[key] = { session_id: sid, file_idx: fidx, q_nums: [] };
+    }
+    bySessionGroup[key].q_nums.push(q.q_num);
+  });
+  const sel_by_group = Object.values(bySessionGroup);
+  const ordered_items = questions.map(q => ({
+    gIdx:       q.gIdx,
+    q_num:      q.q_num,
+    session_id: q._append_session_id != null ? q._append_session_id : sessionId,
+    file_idx:   q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx,
+  }));
+  return { sel_by_group, ordered_items };
+}
+
+// ══════════════════════════════════════════════════════════
 //  DOWNLOAD
 // ══════════════════════════════════════════════════════════
 async function dlOne(qNum, gIdx, e) {
@@ -3041,22 +3089,20 @@ async function dlOne(qNum, gIdx, e) {
   const g  = groups[gIdx] || {};
   const st = isSt(g.paper_type);
   toast(`正在导出 ${st?'第'+qNum+'题':'Q'+String(qNum).padStart(2,'0')}…`, 'info', 2000);
+  // 追加套题用自己的 session_id + file_idx
+  const _dlQ    = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
+  const _dlSid  = _dlQ && _dlQ._append_session_id != null ? _dlQ._append_session_id : sessionId;
+  const _dlFidx = _dlQ && _dlQ._append_session_id != null ? (_dlQ._append_file_idx ?? gIdx) : gIdx;
   const a  = document.createElement('a');
-  a.href   = `/api/download/${qNum}?dpi=${getDPI()}&format=${getFmt()}&session_id=${sessionId}&file_idx=${gIdx}`;
+  a.href   = `/api/download/${qNum}?dpi=${getDPI()}&format=${getFmt()}&session_id=${_dlSid}&file_idx=${_dlFidx}`;
   a.download = `Q${String(qNum).padStart(2,'0')}.${getFmt()}`;
   a.click();
 }
 
 async function dlAll() {
   if (!allQuestions.length) { toast('请先上传PDF','err'); return; }
-  // 按 gIdx 分组全部题目（支持多文件）
-  const byGroup = {};
-  allQuestions.forEach(q => {
-    if (!byGroup[q.gIdx]) byGroup[q.gIdx] = [];
-    byGroup[q.gIdx].push(q.q_num);
-  });
-  const sel_by_group = Object.entries(byGroup).map(([gi, qns]) => ({gIdx: Number(gi), q_nums: qns}));
-  const ordered_items = allQuestions.map(q => ({gIdx: q.gIdx, q_num: q.q_num}));
+
+  const { sel_by_group, ordered_items } = _buildExportPayload(allQuestions);
 
   showLd(`正在打包全部 ${allQuestions.length} 道题目…`);
   try {
@@ -3104,20 +3150,12 @@ async function dlSelected() {
   });
   if (!selectedSorted.length) { toast('请先选择题目','err'); return; }
 
-  // 按 gIdx 分组（保持顺序）
-  const byGroup = {};
-  selectedSorted.forEach(q => {
-    if (!byGroup[q.gIdx]) byGroup[q.gIdx] = [];
-    byGroup[q.gIdx].push(q.q_num);
-  });
-
   const totalSel = selectedSorted.length;
+  const { sel_by_group, ordered_items } = _buildExportPayload(selectedSorted);
+
   showLd(`正在打包 ${totalSel} 道题目…`);
   try {
     // 统一走合并导出接口（复用 export_pdf 的合并模式）
-    const sel_by_group = Object.entries(byGroup).map(([gi, qns]) => ({gIdx: Number(gi), q_nums: qns}));
-    const ordered_items = selectedSorted.map(q => ({ gIdx: q.gIdx, q_num: q.q_num }));
-
     const startRes = await fetch('/api/export_pdf', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({

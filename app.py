@@ -6077,11 +6077,31 @@ def export_pdf():
         groups_info = []
         total_q = 0
         for item in sel_by_group:
-            g_idx  = item.get('gIdx', 0)
             q_nums = item.get('q_nums', [])
-            if not q_nums or g_idx >= len(sess):
+            if not q_nums:
                 continue
-            g = sess[g_idx]
+            # ── 支持新格式（item 携带 session_id + file_idx）和旧格式（gIdx）──
+            item_sid   = item.get('session_id', None)
+            item_fidx  = item.get('file_idx',   None)
+            g_idx      = item.get('gIdx', item_fidx or 0)  # 兼容旧格式
+
+            if item_sid and item_sid != sess_id:
+                # 追加套题：使用 item 指定的 session
+                item_sess = _get_session(item_sid)
+                if not item_sess:
+                    app.logger.warning(f'[export_pdf] append session not found: {item_sid}')
+                    continue
+                fidx = item_fidx if item_fidx is not None else 0
+                if fidx >= len(item_sess):
+                    app.logger.warning(f'[export_pdf] append file_idx {fidx} out of range for session {item_sid}')
+                    continue
+                g = item_sess[fidx]
+            else:
+                # 原始题：使用主 session
+                if g_idx >= len(sess):
+                    continue
+                g = sess[g_idx]
+
             groups_info.append({
                 'path':       g['path'],
                 'paper_type': g['paper_type'],
