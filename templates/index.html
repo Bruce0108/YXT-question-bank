@@ -3744,8 +3744,14 @@ async function _commitCurrentEdit(showToast) {
     });
   }
 
+  // ── 判断是追加题还是原始题，选择正确的 session_id + g_idx ──
+  const _qObj = _uidToQ(_editMeta._uid);
+  const _isAppend = _qObj && _qObj._append_session_id != null;
+  const _useSid   = _isAppend ? _qObj._append_session_id : sessionId;
+  const _useGIdx  = _isAppend ? (_qObj._append_file_idx ?? gIdx) : gIdx;
+
   // 无有效 session 时只写内存，不报错（离线模式）
-  if (!sessionId) {
+  if (!_useSid) {
     _applyEditMetaToMemory();
     _refreshEditCard();
     return true;
@@ -3755,12 +3761,12 @@ async function _commitCurrentEdit(showToast) {
     const results = await Promise.all([
       fetch('/api/update_question_meta', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ session_id: sessionId, g_idx: gIdx, q_num: qNum,
+        body: JSON.stringify({ session_id: _useSid, g_idx: _useGIdx, q_num: qNum,
                                field: 'difficulty', value: diff })
       }).then(r => r.json()),
       fetch('/api/update_question_meta', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ session_id: sessionId, g_idx: gIdx, q_num: qNum,
+        body: JSON.stringify({ session_id: _useSid, g_idx: _useGIdx, q_num: qNum,
                                field: 'topics', value: topicsArr.length ? topicsArr : [] })
       }).then(r => r.json()),
     ]);
