@@ -318,3 +318,10 @@ def get_local_path_for_key(key: str) -> str:
 def is_r2_mode() -> bool:
     """当前是否在 R2 云端模式"""
     return _USE_R2
+
+
+def local_root() -> str:
+    """返回本地存储根目录（LOCAL_STORAGE_ROOT 环境变量，默认 webapp/uploads）。
+    在本地模式下，app.py 中所有对 uploads/ 的直接路径引用应改用此函数，
+    确保 LOCAL_STORAGE_ROOT 环境变量生效。"""
+    return _LOCAL_ROOT

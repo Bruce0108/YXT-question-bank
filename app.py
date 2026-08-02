@@ -23,7 +23,7 @@ import storage  # 统一文件存储抽象层（本地 / Cloudflare R2 双模式
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
 # 临时文件目录（本地模式存 uploads/；云端模式存 /tmp/）
-app.config['UPLOAD_FOLDER'] = storage.local_tmp_path('') if storage.is_r2_mode() else os.path.join(os.path.dirname(__file__), 'uploads')
+app.config['UPLOAD_FOLDER'] = storage.local_tmp_path('') if storage.is_r2_mode() else storage.local_root()
 app.config['OUTPUT_FOLDER'] = storage.local_tmp_path('') if storage.is_r2_mode() else os.path.join(os.path.dirname(__file__), 'output')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
@@ -32,7 +32,7 @@ os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 # 用文件持久化，防止多进程/重启后丢失
 _tasks = {}
 _tasks_lock = threading.Lock()
-_TASKS_DIR = os.path.join(os.path.dirname(__file__), 'uploads', 'tasks') if not storage.is_r2_mode() else storage.local_tmp_path('tasks')
+_TASKS_DIR = os.path.join(storage.local_root(), 'tasks') if not storage.is_r2_mode() else storage.local_tmp_path('tasks')
 os.makedirs(_TASKS_DIR, exist_ok=True)
 
 
@@ -3126,7 +3126,7 @@ def _extract_exam_date_label(doc, filename: str = '') -> str:
 _multi_sessions = {}
 _multi_sessions_lock = threading.Lock()
 # R2 模式下 PDF 临时存在 /tmp/pdf_uploads/本地模式存在 uploads/multi/
-_MULTI_DIR = storage.local_tmp_path('') if storage.is_r2_mode() else os.path.join(os.path.dirname(__file__), 'uploads', 'multi')
+_MULTI_DIR = storage.local_tmp_path('') if storage.is_r2_mode() else os.path.join(storage.local_root(), 'multi')
 if not storage.is_r2_mode():
     os.makedirs(_MULTI_DIR, exist_ok=True)
 
@@ -7803,7 +7803,7 @@ _WORKBOOK_MARKER = '##YUANXUETONG_WORKBOOK_V1##'  # 题册识别标记
 # ─────────────────────────────────────────────────────────────────────────────
 # 本地模式使用本地目录，R2 模式使用 'library/' 前缀
 if not storage.is_r2_mode():
-    _LIBRARY_DIR = os.path.join(os.path.dirname(__file__), 'uploads', 'library')
+    _LIBRARY_DIR = os.path.join(storage.local_root(), 'library')
     os.makedirs(_LIBRARY_DIR, exist_ok=True)
 else:
     _LIBRARY_DIR = None  # R2 模式不使用本地 library 目录
@@ -8773,7 +8773,7 @@ def _cloud_prefix(subject: str = '', board: str = '', topic1: str = '',
     if storage.is_r2_mode():
         return '/'.join(parts)
     else:
-        base = os.path.join(os.path.dirname(__file__), 'uploads')
+        base = storage.local_root()
         return os.path.join(base, *parts)
 
 
@@ -8782,7 +8782,7 @@ def _cloud_img_key(qid: str) -> str:
     if storage.is_r2_mode():
         return f'cloud_db/images/question/{qid}.jpg'
     else:
-        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db', 'images', 'question')
+        base = os.path.join(storage.local_root(), 'cloud_db', 'images', 'question')
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, f'{qid}.jpg')
 
@@ -8792,7 +8792,7 @@ def _cloud_ans_img_key(qid: str) -> str:
     if storage.is_r2_mode():
         return f'cloud_db/images/scheme/{qid}.jpg'
     else:
-        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db', 'images', 'scheme')
+        base = os.path.join(storage.local_root(), 'cloud_db', 'images', 'scheme')
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, f'{qid}.jpg')
 
@@ -8801,7 +8801,7 @@ def _cloud_stats_key() -> str:
     if storage.is_r2_mode():
         return 'cloud_db/_stats.json'
     else:
-        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db')
+        base = os.path.join(storage.local_root(), 'cloud_db')
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, '_stats.json')
 
@@ -9262,7 +9262,7 @@ def cloud_library_clear_all():
         storage.delete_prefix('cloud_db/')
     else:
         import shutil
-        base = os.path.join(os.path.dirname(__file__), 'uploads', 'cloud_db')
+        base = os.path.join(storage.local_root(), 'cloud_db')
         shutil.rmtree(base, ignore_errors=True)
         os.makedirs(base, exist_ok=True)
 
