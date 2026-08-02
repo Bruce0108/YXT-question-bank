@@ -2,6 +2,7 @@
 node_modules/
 dist/
 .wrangler/
+worker-configuration.d.ts
 
 # Python
 __pycache__/
@@ -65,3 +66,4 @@ Thumbs.db
 *.backup
 *.tar.gz
 *.zip
+package-lock.json
