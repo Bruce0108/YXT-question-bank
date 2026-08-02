@@ -8,6 +8,7 @@ module.exports = {
       interpreter: 'none',
       env: {
         PYTHONUNBUFFERED: '1',
+        LOCAL_STORAGE_ROOT: '/home/user/uploads',
         // R2 云端存储配置（通过环境变量传入，留空则使用本地文件模式）
         // R2_BUCKET_NAME: '',
         // R2_ACCOUNT_ID: '',
