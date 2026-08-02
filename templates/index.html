@@ -1151,8 +1151,14 @@ function _saveSession() {
   try {
     // _img_b64 数据量巨大（每题 ~50KB base64），会撑爆 5MB 的 sessionStorage
     // 存储时剔除 _img_b64/_img_w/_img_h 和 answer_pages（数据量太大会撑爆5MB sessionStorage）
+    // 例外：_img_replaced=true 的题目保留 _img_b64（用户手动替换的图片，刷新后不丢失）
     // answer_pages 通过 /api/get_answer 按需加载，不需要持久化
     const stripImg = (q) => {
+      if (q._img_replaced) {
+        // 保留替换后的图片，只剔除不必要的大字段
+        const {answer_pages, source_pages, ...rest} = q;
+        return rest;
+      }
       const {_img_b64, _img_w, _img_h, answer_pages, source_pages, ...rest} = q;
       return rest;
     };
@@ -3491,8 +3497,9 @@ function replaceQuestionImage(file) {
     const dataUrl = ev.target.result;
     // 取 base64 部分（去掉 data:image/xxx;base64, 前缀）
     const b64 = dataUrl.split(',')[1] || '';
-    // 更新内存中的题目图片
+    // 更新内存中的题目图片，并打标记（保存题册时不被原始PDF图片覆盖）
     q._img_b64 = b64;
+    q._img_replaced = true;   // ← 标记用户已手动替换图片
     // 刷新弹框预览
     const prevImg  = document.getElementById('editPreviewImg');
     const prevLoad = document.getElementById('editPreviewLoad');
@@ -4125,6 +4132,11 @@ async function confirmSaveLib() {
           entry.img_w         = q._img_w || 0;
           entry.img_h         = q._img_h || 0;
         }
+      } else if (q._img_replaced) {
+        // 用户已手动替换图片：直接用替换后的 _img_b64，不走 PDF 抓图（否则覆盖用户图片）
+        entry.img_bytes_b64 = q._img_b64;
+        entry.img_w         = q._img_w || 0;
+        entry.img_h         = q._img_h || 0;
       } else {
         // PDF 来源题目：用 300dpi 重新获取高清图（保存时始终以高清存储）
         // 追加的题目用其自己的 _append_session_id 和 _append_file_idx
