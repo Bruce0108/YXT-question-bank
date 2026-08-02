@@ -1,0 +1,17 @@
+{
+  "name": "webapp",
+  "version": "1.0.0",
+  "description": "- **名称**: 教学教研题库 - **功能**: 将 Cambridge / Edexcel 试卷 PDF 自动解析，按题切割成图片，存储到图库，支持按知识点筛选、组卷导出 PDF - **运行方式**: Python Flask 在 Sandbox 本地运行；图片和题库数据存储到 Cloudflare R2 云端",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.118.0"
+  }
+}

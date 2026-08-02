@@ -1,3 +1,8 @@
+# Node.js
+node_modules/
+dist/
+.wrangler/
+
 # Python
 __pycache__/
 *.py[cod]

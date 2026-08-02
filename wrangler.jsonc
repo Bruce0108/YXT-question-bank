@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pdf-tool",
+  "main": "src/worker.ts",
+  "compatibility_date": "2024-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // 静态资源目录（前端 HTML / JS / CSS 等）
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  }
+}
