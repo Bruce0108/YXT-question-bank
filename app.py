@@ -485,34 +485,37 @@ def detect_bpho_questions(doc):
     """
     MARKS_PAT = re.compile(r'\[(\d+)\]')
 
-    # ── Step 1：判断格式（优先旧格式 "a) "，因为 2010 两者都有但 a) 是主题） ──
-    # 旧格式：行首 "x) " (小写字母+右括号+空格)，排除 i/v/x 罗马数字
-    old_fmt_labels = set()
-    new_fmt_labels = set()
+    # ── Step 1：判断格式（先扫描全文行，统计旧/新格式出现的字母集合）──────
+    old_fmt_labels = set()   # 旧格式 "a) " 收集到的字母（排除罗马数字 i,v,x）
+    new_fmt_labels = set()   # 新格式 "(a)" 收集到的字母
     for pg_i in range(doc.page_count):
-        txt = doc[pg_i].get_text()
-        for ln in txt.split('\n'):
+        for ln in doc[pg_i].get_text().split('\n'):
             ln = ln.strip()
-            # 旧格式: "a) xxxxx" — 字母后跟右括号+空格+内容
-            m_old = re.match(r'^([a-hj-np-z])\)\s+\S', ln)  # 排除 i,o (罗马数字/形状)
+            # 旧格式：行首 单字母 + ')' + 空格 + 非空，排除易混罗马数字
+            m_old = re.match(r'^([a-hj-np-z])\)\s+\S', ln)
             if m_old:
                 old_fmt_labels.add(m_old.group(1).lower())
-            # 新格式: "(a) xxxxx" or "(a)" alone
+            # 新格式：行首 "(单字母)"
             m_new = re.match(r'^\(([a-z])\)', ln, re.IGNORECASE)
             if m_new:
                 new_fmt_labels.add(m_new.group(1).lower())
 
-    # 旧格式判断：旧格式字母集合（不含罗马数字）数量 > 新格式字母集合
+    # 旧格式：若有 ≥3 个旧格式字母且 ≥ 新格式字母数，优先使用旧格式
     use_old_fmt = len(old_fmt_labels) >= 3 and len(old_fmt_labels) >= len(new_fmt_labels)
 
     if use_old_fmt:
+        # 旧格式匹配：行首 单字母+右括号+空格
         LABEL_PAT = re.compile(r'^([a-hj-np-z])\)\s+\S', re.IGNORECASE)
     else:
+        # 新格式匹配：行首 "(单字母)"
         LABEL_PAT = re.compile(r'^\(([a-z])\)', re.IGNORECASE)
 
-    # ── Step 2：主扫描 ──────────────────────────────────────────────────────
-    questions = []
-    seen_labels = set()
+    # 用于 has_sub_q 检测的多行版本（search 需要 MULTILINE 才能让 ^ 匹配每行）
+    LABEL_PAT_ML = re.compile(LABEL_PAT.pattern, re.IGNORECASE | re.MULTILINE)
+
+    # ── Step 2：收集所有命中条目（非 'i' 去重；'i' 收集全部候选后挑最佳）──
+    all_hits = []
+    seen_non_i = set()
     q1_found = False
 
     for pg_i in range(doc.page_count):
@@ -520,15 +523,14 @@ def detect_bpho_questions(doc):
         ph = page.rect.height
         page_text = page.get_text()
 
-        # 跳过封面和常量页（注意：如果页面同时含有 (a) 则不跳过）
-        has_sub_q = bool(LABEL_PAT.search(page_text))
+        has_sub_q = bool(LABEL_PAT_ML.search(page_text))
+
         if not has_sub_q:
             if 'Important Constants' in page_text:
                 continue
             if pg_i < 3 and 'Instructions' in page_text:
                 continue
 
-        # Q1 开始标志：含 "Q1" 或直接含 (a)/(a) 题目块
         if not q1_found:
             if (re.search(r'\bQ1\b', page_text) or
                     re.search(r'^Q\s*1', page_text, re.MULTILINE) or
@@ -549,54 +551,86 @@ def detect_bpho_questions(doc):
             text_s = text.strip()
             if not text_s:
                 continue
-
             lines = [l.strip() for l in text_s.split('\n') if l.strip()]
             if not lines:
                 continue
-            first_line = lines[0]
 
-            m = LABEL_PAT.match(first_line)
+            m = LABEL_PAT.match(lines[0])
             if not m:
                 continue
 
             label = m.group(1).lower()
 
-            # 新格式下：排除 (i)(ii)(iii) 等罗马数字子问
-            # 判断依据：label=='i' 且 block 文字较短（纯子问编号）或 block 内只有 "(i)"
-            if not use_old_fmt and label == 'i':
-                # 若 'i' 已跳过，但 'h' 和 'j' 都存在，说明 i 是真题目
-                # 简单规则：如果 (h) 已出现且 (j) 将出现，允许 (i) 作为题目标签
-                # 但如果 (i) block 文字很短（≤ 15字符），大概率是子问编号
-                if len(text_s.replace('\n', '').strip()) <= 5:
-                    continue   # 只有 "(i)" 字符，是子问编号
+            # 非 i 标签只取首次出现；i 标签收集全部（稍后挑最佳）
+            if label != 'i':
+                if label in seen_non_i:
+                    continue
+                seen_non_i.add(label)
 
-            if label in seen_labels:
-                continue
-            seen_labels.add(label)
-
-            q_num = ord(label) - ord('a') + 1
             marks_in_block = MARKS_PAT.findall(text_s)
             marks = int(marks_in_block[-1]) if marks_in_block else None
 
-            questions.append({
-                'q_num':    q_num,
-                'q_label':  label,
-                'page_idx': pg_i,
-                'y_start':  y0,
-                'x_start':  x0,
-                'marks':    marks,
+            all_hits.append({
+                'q_num':      ord(label) - ord('a') + 1,
+                'q_label':    label,
+                'page_idx':   pg_i,
+                'y_start':    y0,
+                'x_start':    x0,
+                'marks':      marks,
+                '_block_len': len(text_s),
             })
 
-    # ── 补充分值：块内无分值时从页面文本中找 [N] ──
+    # ── Step 3：处理 (i) 标签歧义 ────────────────────────────────────────────
+    # (i) 既可能是主题目标签（字母序列 a-p 中的第9个），
+    # 也可能是子问题的罗马数字编号 (i)(ii)(iii)。
+    # 判断规则（三个条件均需满足）：
+    #   A. 最长候选 block_len > 5（有实质内容）
+    #   B. 'j' 在 non_i 标签集中（字母序列在 i 之后有 j，证明是字母序列成员）
+    #   C. best_i 的文档位置在最后一个 'h' 块之后（若 h 存在）
+    if not use_old_fmt:
+        i_hits     = [h for h in all_hits if h['q_label'] == 'i']
+        non_i_hits = [h for h in all_hits if h['q_label'] != 'i']
+        non_i_labels = {h['q_label'] for h in non_i_hits}
+
+        best_i = None
+        if i_hits:
+            best_i = max(i_hits, key=lambda h: h['_block_len'])
+            # 条件 A：有实质内容
+            if best_i['_block_len'] <= 5:
+                best_i = None   # 最长也只是空标签，全丢
+            # 条件 B：字母序列必须延伸到 j（没有 j 则 i 是罗马数字子问）
+            elif 'j' not in non_i_labels:
+                best_i = None   # 无 j，(i) 只是子问编号，丢弃
+            else:
+                # 条件 C：best_i 位置必须在最后一个 h 块之后（若 h 存在）
+                h_hits = [h for h in non_i_hits if h['q_label'] == 'h']
+                if h_hits:
+                    last_h = max(h_hits, key=lambda h: (h['page_idx'], h['y_start']))
+                    i_after_h = (
+                        best_i['page_idx'] > last_h['page_idx'] or
+                        (best_i['page_idx'] == last_h['page_idx'] and
+                         best_i['y_start'] > last_h['y_start'])
+                    )
+                    if not i_after_h:
+                        best_i = None  # (i) 在 h 之前，是罗马数字子问
+
+        candidates = non_i_hits + ([best_i] if best_i else [])
+    else:
+        candidates = all_hits
+
+    # ── Step 4：按页码+y坐标排序输出 ─────────────────────────────────────────
+    questions = sorted(candidates, key=lambda q: (q['page_idx'], q['y_start']))
+    for q in questions:
+        q.pop('_block_len', None)
+
+    # ── Step 5：补充分值（块内无 [N] 时从页面全文找）────────────────────────
     for q in questions:
         if q['marks'] is not None:
             continue
         pg_text = doc[q['page_idx']].get_text()
-        if use_old_fmt:
-            pat = re.escape(f"{q['q_label']})") + r'.*?\[(\d+)\]'
-        else:
-            pat = re.escape(f"({q['q_label']})") + r'.*?\[(\d+)\]'
-        m2 = re.search(pat, pg_text, re.DOTALL)
+        pat = (re.escape(f"{q['q_label']})") if use_old_fmt
+               else re.escape(f"({q['q_label']})"))
+        m2 = re.search(pat + r'.*?\[(\d+)\]', pg_text, re.DOTALL)
         if m2:
             q['marks'] = int(m2.group(1))
 
