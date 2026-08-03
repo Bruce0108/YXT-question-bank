@@ -2989,39 +2989,22 @@ async function doExportPdf() {
 
   if (!exportItems.length) { toast('没有可导出的题目','err'); return; }
 
-  // ── 按 (session_id, file_idx) 分组，支持追加套题的独立 session ──
-  // key = "sid::fidx"，每组携带正确的 session_id 和 file_idx
-  const bySessionGroup = {};
-  exportItems.forEach(q => {
-    const sid  = q._append_session_id != null ? q._append_session_id : sessionId;
-    const fidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
-    const key  = `${sid}::${fidx}`;
-    if (!bySessionGroup[key]) bySessionGroup[key] = { session_id: sid, file_idx: fidx, q_nums: [] };
-    bySessionGroup[key].q_nums.push(q.q_num);
-  });
+  // ── 用统一的 _buildExportPayload 构建分组+有序列表（含 gIdx 防追加套题碰撞，含 _seq 精确定位 workbook）──
+  const { sel_by_group, ordered_items } = _buildExportPayload(exportItems);
 
   closePdfModal();
 
   const totalQ   = exportItems.length;
 
-  // 全局有序列表（保留 sortOrder 排序，跨 gIdx）
-  // ordered_items 也需要携带正确的 session_id + file_idx
-  const ordered_items = exportItems.map(q => ({
-    gIdx:       q.gIdx,
-    q_num:      q.q_num,
-    session_id: q._append_session_id != null ? q._append_session_id : sessionId,
-    file_idx:   q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx,
-  }));
-
-  // 构建 per-question 答案可见性映射：key = "${session_id}::${file_idx}_${q_num}"
+  // 构建 per-question 答案可见性映射：key = "${gIdx}_{q_num}" 和 "${session_id}::${file_idx}_${q_num}"
   const exportMode = document.querySelector('input[name="pdfExportMode"]:checked')?.value || 'question_only';
   const includeAnswerMode = exportMode === 'question_markscheme';
   const answer_visible_map = {};
   exportItems.forEach(q => {
     const sid  = q._append_session_id != null ? q._append_session_id : sessionId;
     const fidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
-    const uid = `${q.gIdx}_${q.q_num}`;           // 保持后端旧 key 格式兼容
-    const uid2 = `${sid}::${fidx}_${q.q_num}`;    // 新 key 格式（后端按需选用）
+    const uid  = `${q.gIdx}_${q.q_num}`;        // 旧 key 格式兼容
+    const uid2 = `${sid}::${fidx}_${q.q_num}`;  // 新 key 格式
     const hasAns = !!(q.answer_b64);
     answer_visible_map[uid]  = includeAnswerMode ? hasAns : false;
     answer_visible_map[uid2] = includeAnswerMode ? hasAns : false;
@@ -3030,8 +3013,6 @@ async function doExportPdf() {
   showLdProgress(`正在生成合并 PDF（共 ${totalQ} 道题）…`, 0, '提交任务中…');
 
   try {
-    // sel_by_group：每项携带自己的 session_id + file_idx（替代旧的全局 gIdx 方案）
-    const sel_by_group = Object.values(bySessionGroup);
 
     const startRes = await fetch('/api/export_pdf', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -3101,9 +3082,10 @@ function _buildExportPayload(questions) {
   questions.forEach(q => {
     const sid  = q._append_session_id != null ? q._append_session_id : sessionId;
     const fidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
-    const key  = `${sid}::${fidx}`;
+    // key 包含 gIdx（前端全局组索引），确保追加套题的不同 group 不会因 file_idx 相同而合并
+    const key  = `${q.gIdx}::${sid}::${fidx}`;
     if (!bySessionGroup[key]) {
-      bySessionGroup[key] = { session_id: sid, file_idx: fidx, q_nums: [] };
+      bySessionGroup[key] = { gIdx: q.gIdx, session_id: sid, file_idx: fidx, q_nums: [] };
     }
     bySessionGroup[key].q_nums.push(q.q_num);
   });

@@ -5921,15 +5921,20 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
             # 按 gIdx 预打开文件（跳过路径为空的云端组，以及 workbook/img_bytes_b64 组）
             for ginfo in groups_info:
                 gi = ginfo['g_idx']
-                # workbook 题目：source=='workbook' 或 questions 含 img_bytes_b64，
-                # 即使有 save_path 也不打开，强制走 _export_cloud_questions 路径
+                # workbook/云端题目判断：
+                #   1. source == 'workbook' / 'imported' / 'cloud'（由 export_pdf 明确传递）
+                #   2. 或 questions 中有任意题目含 img_bytes_b64（兜底检测，不限第一题）
+                #   3. 或 path 为空（无实体 PDF）
+                # 符合任一条件 → 不打开 src_doc → 强制走 _export_cloud_questions 路径
+                src = ginfo.get('source', '')
                 is_cloud = (
-                    ginfo.get('source') == 'workbook'
-                    or any(q.get('img_bytes_b64') for q in (ginfo.get('questions') or [])[:1])
+                    src in ('workbook', 'imported', 'cloud')
+                    or not ginfo.get('path')
+                    or any(q.get('img_bytes_b64') for q in (ginfo.get('questions') or []))
                 )
                 if is_cloud:
                     continue  # 不加入 src_docs → gi not in src_docs → _export_cloud_questions
-                if ginfo.get('path') and os.path.exists(ginfo['path']):
+                if os.path.exists(ginfo['path']):
                     src_docs[gi] = fitz.open(ginfo['path'])
 
             # 注意：MCQ 打包模式（多题共页）在全局顺序下需要特殊处理
@@ -6009,8 +6014,14 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                 if not q_nums:
                     continue
 
-                # ── 云端题目（path 为空）：直接从 img_bytes_b64 渲染 ──
-                if not save_path or not os.path.exists(save_path):
+                # ── 云端/workbook 题目：直接从 img_bytes_b64 渲染（不依赖实体 PDF）──
+                src = ginfo.get('source', '')
+                is_cloud_group = (
+                    src in ('workbook', 'imported', 'cloud')
+                    or not save_path or not os.path.exists(save_path)
+                    or any(q.get('img_bytes_b64') for q in (questions or []))
+                )
+                if is_cloud_group:
                     _export_cloud_questions(out_doc, questions, q_nums, dpi,
                                             PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
                                             seq_start=done_total)
@@ -6106,10 +6117,12 @@ def export_pdf():
             q_nums = item.get('q_nums', [])
             if not q_nums:
                 continue
-            # ── 支持新格式（item 携带 session_id + file_idx）和旧格式（gIdx）──
+            # ── 支持新格式（item 携带 gIdx + session_id + file_idx）和旧格式 ──
             item_sid   = item.get('session_id', None)
             item_fidx  = item.get('file_idx',   None)
-            g_idx      = item.get('gIdx', item_fidx or 0)  # 兼容旧格式
+            # g_idx 优先用前端传来的 gIdx（全局唯一 group 索引），
+            # 这确保 groups_info 里不同 group 的 g_idx 不重复（追加套题修复）
+            g_idx      = item.get('gIdx', item_fidx or 0)
 
             if item_sid and item_sid != sess_id:
                 # 追加套题：使用 item 指定的 session
@@ -6129,11 +6142,12 @@ def export_pdf():
                 g = sess[g_idx]
 
             groups_info.append({
-                'path':       g['path'],
-                'paper_type': g['paper_type'],
-                'questions':  g['questions'],
+                'path':       g.get('path', ''),
+                'paper_type': g.get('paper_type', ''),
+                'questions':  g.get('questions', []),
                 'q_nums':     q_nums,
                 'g_idx':      g_idx,
+                'source':     g.get('source', ''),   # 必须传递：_build_pdf_merged_worker 用此判断是否 workbook
             })
             total_q += len(q_nums)
 
