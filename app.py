@@ -3163,7 +3163,11 @@ def _load_session_from_disk(session_id):
                 if r2_key and not storage.exists(r2_key):
                     return None  # PDF 已从 R2 删除
             else:
-                if not os.path.exists(g.get('path', '')):
+                path = g.get('path', '')
+                # workbook 虚拟组：path 为空或 source==workbook，跳过文件存在检查
+                if g.get('source') == 'workbook':
+                    continue
+                if not path or not os.path.exists(path):
                     return None  # PDF 本地文件不存在
         return groups
     except Exception:
@@ -5914,9 +5918,17 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
             src_docs = {}  # g_idx -> fitz.Document
             done_total = 0
 
-            # 按 gIdx 预打开文件（跳过路径为空的云端组）
+            # 按 gIdx 预打开文件（跳过路径为空的云端组，以及 workbook/img_bytes_b64 组）
             for ginfo in groups_info:
                 gi = ginfo['g_idx']
+                # workbook 题目：source=='workbook' 或 questions 含 img_bytes_b64，
+                # 即使有 save_path 也不打开，强制走 _export_cloud_questions 路径
+                is_cloud = (
+                    ginfo.get('source') == 'workbook'
+                    or any(q.get('img_bytes_b64') for q in (ginfo.get('questions') or [])[:1])
+                )
+                if is_cloud:
+                    continue  # 不加入 src_docs → gi not in src_docs → _export_cloud_questions
                 if ginfo.get('path') and os.path.exists(ginfo['path']):
                     src_docs[gi] = fitz.open(ginfo['path'])
 
