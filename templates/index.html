@@ -6105,7 +6105,7 @@ async function saveCloudEdit() {
   }
 }
 
-
+function renderCloudPagination(page, pages, subject, board, paper, topic1, topic2) {
   const pg = document.getElementById('cloudPagination');
   if (pages <= 1) { pg.style.display = 'none'; return; }
   pg.style.display = 'flex';
