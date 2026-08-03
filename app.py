@@ -420,12 +420,16 @@ def detect_edexcel_maths_unit(doc) -> str:
 
 def detect_paper_source(doc) -> str:
     """
-    返回 'cambridge'、'edexcel'、'edexcel_maths' 或 'edexcel_economics'。
+    返回 'cambridge'、'edexcel'、'edexcel_maths'、'edexcel_economics' 或 'bpho'。
     通过封面/前几页文字关键词判断。
-    优先级：edexcel_economics > edexcel_maths > edexcel > cambridge
+    优先级：bpho > edexcel_economics > edexcel_maths > edexcel > cambridge
     """
     for pg_i in range(min(3, doc.page_count)):
         text = doc[pg_i].get_text()
+        # 最高优先：BPhO / British Physics Olympiad
+        if ('British Physics Olympiad' in text or 'BRITISH PHYSICS OLYMPIAD' in text or
+                'BPhO' in text or 'Physics Olympiad' in text):
+            return 'bpho'
         # 最高优先：Edexcel Economics IAL 试卷代码 WEC11/WEC12/WEC13/WEC14
         if re.search(r'WEC1[1-4]', text):
             return 'edexcel_economics'
@@ -462,6 +466,164 @@ def detect_paper_source(doc) -> str:
 # Edexcel Maths (P3-style) 题目检测
 # 每道题占1页；题目页含 (N) 分值标记；空白答题页跳过
 # ============================================================
+# ============================================================
+# BPhO (British Physics Olympiad) 专用题目检测
+# BPhO Section 1 = 单个大题 Q1，以 (a)(b)(c)... 子题形式出现
+# 每道子题 = 一个 q_num（a=1, b=2, ...）
+# ============================================================
+def detect_bpho_questions(doc):
+    """
+    检测 BPhO Round 1 Section 1 试卷的子题边界。
+
+    支持两种格式：
+    - 旧格式 (2010-11)：  a) Gas is contained...   [字母后直接跟右括号]
+    - 新格式 (2012+)：    (a) The circuit...        [字母被括号包围]
+
+    返回格式：
+    [{q_num: 1, q_label: 'a', page_idx: N, y_start: Y, x_start: X, marks: M}, ...]
+    q_num = ord(label) - ord('a') + 1  (a=1, b=2, ...)
+    """
+    MARKS_PAT = re.compile(r'\[(\d+)\]')
+
+    # ── Step 1：判断格式（优先旧格式 "a) "，因为 2010 两者都有但 a) 是主题） ──
+    # 旧格式：行首 "x) " (小写字母+右括号+空格)，排除 i/v/x 罗马数字
+    old_fmt_labels = set()
+    new_fmt_labels = set()
+    for pg_i in range(doc.page_count):
+        txt = doc[pg_i].get_text()
+        for ln in txt.split('\n'):
+            ln = ln.strip()
+            # 旧格式: "a) xxxxx" — 字母后跟右括号+空格+内容
+            m_old = re.match(r'^([a-hj-np-z])\)\s+\S', ln)  # 排除 i,o (罗马数字/形状)
+            if m_old:
+                old_fmt_labels.add(m_old.group(1).lower())
+            # 新格式: "(a) xxxxx" or "(a)" alone
+            m_new = re.match(r'^\(([a-z])\)', ln, re.IGNORECASE)
+            if m_new:
+                new_fmt_labels.add(m_new.group(1).lower())
+
+    # 旧格式判断：旧格式字母集合（不含罗马数字）数量 > 新格式字母集合
+    use_old_fmt = len(old_fmt_labels) >= 3 and len(old_fmt_labels) >= len(new_fmt_labels)
+
+    if use_old_fmt:
+        LABEL_PAT = re.compile(r'^([a-hj-np-z])\)\s+\S', re.IGNORECASE)
+    else:
+        LABEL_PAT = re.compile(r'^\(([a-z])\)', re.IGNORECASE)
+
+    # ── Step 2：主扫描 ──────────────────────────────────────────────────────
+    questions = []
+    seen_labels = set()
+    q1_found = False
+
+    for pg_i in range(doc.page_count):
+        page = doc[pg_i]
+        ph = page.rect.height
+        page_text = page.get_text()
+
+        # 跳过封面和常量页（注意：如果页面同时含有 (a) 则不跳过）
+        has_sub_q = bool(LABEL_PAT.search(page_text))
+        if not has_sub_q:
+            if 'Important Constants' in page_text:
+                continue
+            if pg_i < 3 and 'Instructions' in page_text:
+                continue
+
+        # Q1 开始标志：含 "Q1" 或直接含 (a)/(a) 题目块
+        if not q1_found:
+            if (re.search(r'\bQ1\b', page_text) or
+                    re.search(r'^Q\s*1', page_text, re.MULTILINE) or
+                    has_sub_q):
+                q1_found = True
+            else:
+                continue
+
+        try:
+            blocks = page.get_text("blocks")
+        except Exception:
+            continue
+
+        for b in blocks:
+            x0, y0, x1, y1, text, bno, btype = b
+            if btype != 0 or y0 > ph - 30:
+                continue
+            text_s = text.strip()
+            if not text_s:
+                continue
+
+            lines = [l.strip() for l in text_s.split('\n') if l.strip()]
+            if not lines:
+                continue
+            first_line = lines[0]
+
+            m = LABEL_PAT.match(first_line)
+            if not m:
+                continue
+
+            label = m.group(1).lower()
+
+            # 新格式下：排除 (i)(ii)(iii) 等罗马数字子问
+            # 判断依据：label=='i' 且 block 文字较短（纯子问编号）或 block 内只有 "(i)"
+            if not use_old_fmt and label == 'i':
+                # 若 'i' 已跳过，但 'h' 和 'j' 都存在，说明 i 是真题目
+                # 简单规则：如果 (h) 已出现且 (j) 将出现，允许 (i) 作为题目标签
+                # 但如果 (i) block 文字很短（≤ 15字符），大概率是子问编号
+                if len(text_s.replace('\n', '').strip()) <= 5:
+                    continue   # 只有 "(i)" 字符，是子问编号
+
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+
+            q_num = ord(label) - ord('a') + 1
+            marks_in_block = MARKS_PAT.findall(text_s)
+            marks = int(marks_in_block[-1]) if marks_in_block else None
+
+            questions.append({
+                'q_num':    q_num,
+                'q_label':  label,
+                'page_idx': pg_i,
+                'y_start':  y0,
+                'x_start':  x0,
+                'marks':    marks,
+            })
+
+    # ── 补充分值：块内无分值时从页面文本中找 [N] ──
+    for q in questions:
+        if q['marks'] is not None:
+            continue
+        pg_text = doc[q['page_idx']].get_text()
+        if use_old_fmt:
+            pat = re.escape(f"{q['q_label']})") + r'.*?\[(\d+)\]'
+        else:
+            pat = re.escape(f"({q['q_label']})") + r'.*?\[(\d+)\]'
+        m2 = re.search(pat, pg_text, re.DOTALL)
+        if m2:
+            q['marks'] = int(m2.group(1))
+
+    return questions
+
+
+def _extract_bpho_year(doc, filename=''):
+    """从BPhO试卷提取考试年份（如 2014-15 → '2014-15'，2011 → '2011'）"""
+    # 先从文件名尝试
+    m = re.search(r'(20\d{2}[-_]?\d{2,4})', filename)
+    if m:
+        yr = m.group(1).replace('_', '-')
+        return yr
+
+    # 从PDF文字提取
+    for pg_i in range(min(3, doc.page_count)):
+        text = doc[pg_i].get_text()
+        # "British Physics Olympiad 2014-15" or "2014-2015"
+        m = re.search(r'(20\d{2}[-–]\d{2,4})', text)
+        if m:
+            return m.group(1)
+        m = re.search(r'(20\d{2})', text)
+        if m:
+            return m.group(1)
+    return ''
+
+
 def detect_edexcel_maths_questions(doc):
     """
     检测 Edexcel IAL Pure/Further/Statistics/Mechanics/Decision Mathematics 试卷的题号边界。
@@ -579,6 +741,10 @@ def detect_paper_type(doc):
       5. 默认 → edexcel（保守，避免漏识别大题）
     """
     source = detect_paper_source(doc)
+
+    # BPhO (British Physics Olympiad) — 直接返回专用类型
+    if source == 'bpho':
+        return 'bpho'
 
     # Edexcel Economics (IAL) — 直接返回专用类型
     if source == 'edexcel_economics':
@@ -2069,12 +2235,13 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
     每项: {'id': 'P3-2', 'title': 'Trigonometry', 'score': 4}
     按 score 降序，只返回 score >= 1 的项（至少返回1项 fallback）。
 
-    syllabus_type: 'cambridge' | 'edexcel_maths'
+    syllabus_type: 'cambridge' | 'edexcel_maths' | 'edexcel_economics' | 'bpho'
     unit_filter:   若指定（如 'P3'），只使用该 unit 的规则（仅对 edexcel_maths 有效）
     marks_hint:    {chapter_id: marks_weight} 分值权重提示，得分乘以权重
 
     Edexcel Maths 模式：使用章节级别规则（_MATHS_CHAPTER_RULES），
     返回一级标题 ID，如 'P3-2'（Trigonometry），不细化到子章节。
+    BPhO 模式：使用 _BPHO_TOPIC_RULES（物理12章），返回带 parent 的二级知识点。
     保证：即使关键词未命中，也会返回分值最高章节作为 fallback。
     """
     text_lower = text.lower()
@@ -2082,6 +2249,9 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
 
     if syllabus_type == 'cambridge':
         rules = _TOPIC_RULES
+    elif syllabus_type == 'bpho':
+        # BPhO：使用物理12章知识点规则
+        rules = _BPHO_TOPIC_RULES
     elif syllabus_type == 'edexcel_economics':
         # Edexcel Economics：使用经济学章节规则
         if unit_filter:
@@ -2123,7 +2293,47 @@ def tag_question_topics(text: str, syllabus_type: str = 'cambridge',
             scores[sid] = score * weight
 
     # 加载考纲标题映射
-    if syllabus_type in ('edexcel_maths', 'edexcel_economics'):
+    if syllabus_type == 'bpho':
+        # ── BPhO 模式：使用内置 _BPHO_TOPIC_TITLES 映射，返回 L1/L2 两级结构 ──
+        if not scores:
+            # fallback：宽松单词匹配
+            fallback_scores: dict[str, int] = {}
+            words = set(re.findall(r'[a-z]{3,}', text_lower))
+            for sid, req_kws, bon_kws in rules:
+                sc = 0
+                for kw in req_kws:
+                    for word in kw.lower().split():
+                        if len(word) >= 4 and word in words:
+                            sc += 1
+                if sc > 0:
+                    fallback_scores[sid] = sc
+            if fallback_scores:
+                best_sid = max(fallback_scores, key=lambda k: fallback_scores[k])
+                scores = {best_sid: fallback_scores[best_sid]}
+            elif rules:
+                # 完全兜底：用第一章 Kinematics
+                scores = {rules[0][0]: 1}
+
+        result = []
+        for sid, sc in sorted(scores.items(), key=lambda x: -x[1]):
+            # sid 格式：'BPhO-N-M'（二级），parent_id 为 'BPhO-N'（一级）
+            parts = sid.split('-')
+            if len(parts) == 3:
+                parent_id = f'BPhO-{parts[1]}'
+            else:
+                parent_id = sid
+            sub_title    = _BPHO_TOPIC_TITLES.get(sid, sid)
+            parent_title = _BPHO_TOPIC_TITLES.get(parent_id, parent_id)
+            result.append({
+                'id':           sid,
+                'title':        sub_title,
+                'parent_id':    parent_id,
+                'parent_title': parent_title,
+                'score':        sc,
+            })
+        return result[:3]
+
+    elif syllabus_type in ('edexcel_maths', 'edexcel_economics'):
         if syllabus_type == 'edexcel_maths':
             syllabus = _load_edexcel_maths_syllabus()
         else:
@@ -2672,6 +2882,338 @@ _ECONOMICS_CHAPTER_RULES = [
               'NGO','Lewis model','Lewis dual sector','debt relief','aid'],
              ['corruption','governance','commodity price','demographic','access to credit']),
 ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BPhO 知识点分类规则表
+# 格式：(topic_id, [required_kws], [bonus_kws])
+# topic_id 格式：'BPhO-N-M'  N=章节号(1-12), M=子话题号(1-4)
+# 对应12个物理章节，每章3-4个二级知识点
+# ══════════════════════════════════════════════════════════════════════════════
+_BPHO_TOPIC_RULES = [
+
+    # ── Ch1: Kinematics (运动学) ────────────────────────────────────────────
+    ('BPhO-1-1',
+     ['velocity', 'acceleration', 'displacement', 'suvat', 'uniform acceleration',
+      'speed', 'distance-time', 'velocity-time', 'v-t graph', 'gradient of', 'area under'],
+     ['constant acceleration', 'deceleration', 'rest', 'initial velocity', 'final velocity',
+      'kinematic equation', 'motion equation']),
+
+    ('BPhO-1-2',
+     ['relative velocity', 'relative motion', 'frame of reference', 'intercept', 'catch up',
+      'overtake', 'reference frame', 'relative speed'],
+     ['observer', 'moving frame', 'pursuit', 'interception']),
+
+    ('BPhO-1-3',
+     ['projectile', 'horizontal component', 'vertical component', 'trajectory',
+      'parabola', 'range', 'angle of projection', 'launch angle',
+      'vector decomposition', 'resolve'],
+     ['maximum height', 'time of flight', 'horizontal distance', 'launched at angle']),
+
+    ('BPhO-1-4',
+     ['calculus', 'differentiate', 'integrate', 'rate of change', 'variable acceleration',
+      'angular velocity', 'angular speed', 'omega', 'linear speed', 'tangential',
+      'v = rω', 'a = rα'],
+     ['non-uniform', 'varying acceleration', 'derivative', 'integral of velocity']),
+
+    # ── Ch2: Dynamics / Newton's Laws (动力学) ─────────────────────────────
+    ('BPhO-2-1',
+     ["newton's first law", "newton's second law", "newton's third law",
+      'net force', 'resultant force', 'F = ma', 'equation of motion',
+      'inertia', 'mass', 'force diagram', 'free body'],
+     ['law of motion', 'unbalanced force', 'balanced force', 'static equilibrium',
+      'dynamic equilibrium']),
+
+    ('BPhO-2-2',
+     ['friction', 'coefficient of friction', 'normal reaction', 'rough surface',
+      'sliding', 'static friction', 'kinetic friction', 'limiting friction',
+      'μ', 'frictional force'],
+     ['smooth surface', 'grip', 'traction', 'braking force', 'skid']),
+
+    ('BPhO-2-3',
+     ['inclined plane', 'slope', 'component of weight', 'angle of incline',
+      'tension', 'connected particles', 'pulley', 'atwood', 'string', 'rope',
+      'normal force on slope'],
+     ['wedge', 'ramp', 'smooth incline', 'rough incline', 'weight component']),
+
+    ('BPhO-2-4',
+     ['drag', 'air resistance', 'terminal velocity', 'resistive force',
+      'stokes', 'viscous', 'viscosity', 'buoyancy', 'upthrust', 'archimedes'],
+     ['fluid resistance', 'streamline', 'laminar', 'turbulent', 'velocity-dependent']),
+
+    # ── Ch3: Work, Energy & Power (功、能量与功率) ──────────────────────────
+    ('BPhO-3-1',
+     ['work done', 'work-energy theorem', 'kinetic energy', 'potential energy',
+      'gravitational potential energy', 'elastic potential energy',
+      'W = Fd', 'KE', 'GPE', 'EPE', '½mv²', 'mgh'],
+     ['work against', 'energy transfer', 'joule', 'stored energy']),
+
+    ('BPhO-3-2',
+     ['conservation of energy', 'energy conservation', 'mechanical energy',
+      'total energy', 'energy dissipated', 'efficiency', 'useful energy',
+      'heat loss', 'wasted energy', 'energy transformation'],
+     ['isolated system', 'no energy loss', 'energy input', 'energy output']),
+
+    ('BPhO-3-3',
+     ['power', 'rate of work', 'watt', 'P = W/t', 'P = Fv',
+      'instantaneous power', 'average power', 'horsepower', 'engine power'],
+     ['output power', 'input power', 'power rating', 'electrical power']),
+
+    # ── Ch4: Momentum & Collisions (动量与碰撞) ─────────────────────────────
+    ('BPhO-4-1',
+     ['momentum', 'conservation of momentum', 'impulse', 'change in momentum',
+      'linear momentum', 'p = mv', 'J = FΔt', 'impulse-momentum theorem',
+      'collision', 'explosion'],
+     ['total momentum', 'before and after', 'recoil', 'rifle and bullet']),
+
+    ('BPhO-4-2',
+     ['elastic collision', 'perfectly elastic', 'kinetic energy conserved',
+      'coefficient of restitution', 'newton\'s law of restitution', 'e ='],
+     ['relative speed', 'approach', 'separation', 'head on', 'glancing']),
+
+    ('BPhO-4-3',
+     ['inelastic collision', 'perfectly inelastic', 'coalesce', 'stick together',
+      'kinetic energy lost', 'energy lost in collision', 'crumple'],
+     ['merge', 'couple', 'common velocity', 'energy dissipated in collision']),
+
+    # ── Ch5: Circular Motion & Gravitation (圆周运动与万有引力) ─────────────
+    ('BPhO-5-1',
+     ['circular motion', 'centripetal force', 'centripetal acceleration',
+      'a = v²/r', 'F = mv²/r', 'angular velocity', 'period', 'frequency',
+      'radian', 'arc length', 'tangential speed', 'uniform circular'],
+     ['banked curve', 'conical pendulum', 'roundabout', 'car on bend']),
+
+    ('BPhO-5-2',
+     ["newton's law of gravitation", 'gravitational force', 'F = GMm/r²',
+      'gravitational field', 'gravitational field strength', 'g = GM/r²',
+      'gravitational potential', 'V = -GM/r', 'escape velocity', 'escape speed'],
+     ['inverse square law', 'gravitational constant', 'G', 'attraction between masses']),
+
+    ('BPhO-5-3',
+     ['orbital', 'orbit', 'satellite', "kepler's third law", 'T² ∝ r³',
+      'geostationary', 'geosynchronous', 'orbital period', 'orbital radius',
+      'circular orbit', 'elliptical orbit'],
+     ['ISS', 'moon orbit', 'planetary motion', 'centripetal = gravitational']),
+
+    # ── Ch6: SHM & Oscillations (简谐运动与振动) ────────────────────────────
+    ('BPhO-6-1',
+     ['simple harmonic motion', 'SHM', 'a = -ω²x', 'restoring force',
+      'amplitude', 'angular frequency', 'displacement', 'x = A cos',
+      'x = A sin', 'period of oscillation', 'frequency of oscillation'],
+     ['equilibrium position', 'oscillation', 'vibration', 'sinusoidal']),
+
+    ('BPhO-6-2',
+     ['simple pendulum', 'T = 2π√(l/g)', 'mass-spring system', 'T = 2π√(m/k)',
+      'spring constant', 'spring stiffness', 'Hooke\'s law', 'k', 'elastic',
+      'pendulum period'],
+     ['bob', 'string length', 'small angle approximation', 'natural frequency']),
+
+    ('BPhO-6-3',
+     ['resonance', 'forced oscillation', 'driving frequency', 'natural frequency',
+      'damping', 'damped oscillation', 'critical damping', 'overdamped',
+      'underdamped', 'Q factor', 'amplitude at resonance'],
+     ['energy loss', 'oscillation decays', 'resonant frequency', 'driver']),
+
+    # ── Ch7: Waves & Optics (波动与光学) ────────────────────────────────────
+    ('BPhO-7-1',
+     ['wave', 'wavelength', 'frequency', 'wave speed', 'v = fλ',
+      'transverse wave', 'longitudinal wave', 'amplitude', 'period',
+      'phase', 'phase difference', 'wavefront', 'intensity'],
+     ['crest', 'trough', 'compression', 'rarefaction', 'wave equation']),
+
+    ('BPhO-7-2',
+     ['reflection', 'refraction', 'Snell\'s law', 'n₁sinθ₁ = n₂sinθ₂',
+      'refractive index', 'total internal reflection', 'critical angle',
+      'lens', 'focal length', 'mirror', 'image', 'object distance',
+      '1/v + 1/u', 'magnification', 'converging', 'diverging'],
+     ['angle of incidence', 'angle of refraction', 'optical fibre', 'prism']),
+
+    ('BPhO-7-3',
+     ['interference', 'diffraction', 'superposition', 'path difference',
+      'constructive interference', 'destructive interference',
+      'double slit', 'diffraction grating', 'fringe', 'nλ = d sinθ',
+      'coherent', 'monochromatic'],
+     ['bright fringe', 'dark fringe', 'fringe spacing', 'grating equation',
+      'standing wave', 'stationary wave', 'node', 'antinode']),
+
+    # ── Ch8: Electricity & Circuits (电学与电路) ─────────────────────────────
+    ('BPhO-8-1',
+     ['current', 'voltage', 'resistance', "ohm's law", 'V = IR',
+      'series circuit', 'parallel circuit', 'resistor', 'conductor',
+      'kirchhoff', 'KVL', 'KCL', 'potential divider', 'voltmeter', 'ammeter',
+      'power dissipated', 'P = I²R', 'P = V²/R'],
+     ['loop equation', 'junction rule', 'battery', 'electric circuit',
+      'total resistance', 'equivalent resistance']),
+
+    ('BPhO-8-2',
+     ['capacitor', 'capacitance', 'C = Q/V', 'charge stored', 'energy stored',
+      'E = ½CV²', 'charging', 'discharging', 'time constant', 'τ = RC',
+      'capacitor in series', 'capacitor in parallel'],
+     ['dielectric', 'plate separation', 'plates', 'farad', 'exponential decay']),
+
+    ('BPhO-8-3',
+     ['EMF', 'electromotive force', 'internal resistance', 'terminal voltage',
+      'ε = V + Ir', 'short circuit', 'variable resistance',
+      'lost volts', 'efficiency of cell', 'battery circuit'],
+     ['cell', 'source of EMF', 'external circuit', 'load resistance', 'ammeter reads']),
+
+    # ── Ch9: Electromagnetism (电磁学) ──────────────────────────────────────
+    ('BPhO-9-1',
+     ['electric field', 'E = F/q', 'electric field strength',
+      'magnetic field', 'magnetic flux density', 'B field', 'tesla',
+      'F = qE', 'uniform field', 'field lines', 'potential difference'],
+     ['coulomb', 'charge', 'electric force', 'field between plates']),
+
+    ('BPhO-9-2',
+     ['electromagnetic induction', 'Faraday\'s law', 'Lenz\'s law',
+      'induced EMF', 'flux', 'magnetic flux', 'Φ = BA',
+      'rate of change of flux', 'transformer', 'mutual inductance',
+      'self inductance', 'solenoid'],
+     ['coil', 'changing field', 'flux linkage', 'NΦ', 'cutting field lines']),
+
+    ('BPhO-9-3',
+     ['Lorentz force', 'F = BIL', 'F = BqV', 'force on conductor',
+      'force on charge', 'motor effect', 'Hall effect',
+      'cyclotron', 'charged particle in field',
+      'radius of circular path', 'r = mv/Bq'],
+     ['velocity selector', 'mass spectrometer', 'cathode ray', 'electron beam']),
+
+    # ── Ch10: Thermal Physics (热学) ────────────────────────────────────────
+    ('BPhO-10-1',
+     ['ideal gas', 'gas law', 'pV = nRT', 'Boyle\'s law', 'Charles\'s law',
+      'pressure law', 'Gay-Lussac', 'mole', 'Avogadro', 'molecular mass',
+      'p₁V₁/T₁', 'p₂V₂/T₂', 'gas pressure', 'gas temperature', 'gas volume'],
+     ['number of moles', 'kelvin', 'absolute temperature', 'gas constant R',
+      'amount of substance', 'STP', 'withdrawn', 'remaining gas']),
+
+    ('BPhO-10-2',
+     ['internal energy', 'first law of thermodynamics', 'ΔU = Q - W',
+      'isothermal', 'adiabatic', 'isobaric', 'isochoric',
+      'heat capacity', 'specific heat capacity', 'Q = mcΔT',
+      'latent heat', 'Q = mL', 'thermodynamics cycle', 'carnot'],
+     ['work done by gas', 'heat absorbed', 'heat rejected', 'thermal efficiency']),
+
+    ('BPhO-10-3',
+     ['conduction', 'convection', 'radiation', 'thermal radiation',
+      'Stefan-Boltzmann', 'P = σAT⁴', 'Newton\'s law of cooling',
+      'thermal conductivity', 'heat flow rate', 'blackbody', 'emissivity',
+      'Wien\'s law', 'peak wavelength'],
+     ['insulation', 'U-value', 'heat loss', 'cooling rate', 'temperature gradient']),
+
+    # ── Ch11: Nuclear & Radioactivity (核物理与放射性) ──────────────────────
+    ('BPhO-11-1',
+     ['radioactive decay', 'alpha', 'beta', 'gamma', 'half-life', 't½',
+      'activity', 'decay constant', 'λ', 'A = λN', 'N = N₀e^(-λt)',
+      'background radiation', 'ionising radiation', 'Geiger', 'count rate'],
+     ['radioactive source', 'decay series', 'daughter nucleus', 'parent nucleus',
+      'radiation dose', 'becquerel']),
+
+    ('BPhO-11-2',
+     ['nuclear reaction', 'fission', 'fusion', 'chain reaction',
+      'nuclear equation', 'proton number', 'nucleon number',
+      'mass number', 'atomic number', 'isotope', 'nuclide',
+      'conservation of nucleon number', 'conservation of charge'],
+     ['moderator', 'control rod', 'reactor', 'critical mass', 'neutron']),
+
+    ('BPhO-11-3',
+     ['binding energy', 'mass defect', 'nuclear mass', 'E = mc²',
+      'mass-energy equivalence', 'unified mass unit', 'u',
+      'binding energy per nucleon', 'nuclear stability curve',
+      'energy released in nuclear', 'Q value'],
+     ['MeV', 'einstein equation', 'atomic mass unit', 'iron peak',
+      'energy from fission', 'energy from fusion']),
+
+    # ── Ch12: Modern Physics (近代物理) ─────────────────────────────────────
+    ('BPhO-12-1',
+     ['photoelectric effect', 'photon', 'E = hf', 'work function', 'threshold frequency',
+      'Planck constant', 'h', 'quantum', 'de Broglie', 'wave-particle duality',
+      'λ = h/p', 'stopping potential', 'photoelectron',
+      'kinetic energy of electron', 'hf = φ + KE_max'],
+     ['photoemission', 'electron volt', 'eV', 'electromagnetic spectrum',
+      'X-ray', 'UV', 'intensity', 'frequency threshold']),
+
+    ('BPhO-12-2',
+     ['atomic spectra', 'energy level', 'emission spectrum', 'absorption spectrum',
+      'ground state', 'excited state', 'ionisation energy', 'photon emission',
+      'Bohr model', 'hydrogen spectrum', 'line spectrum',
+      'energy level diagram', 'transition'],
+     ['Lyman', 'Balmer', 'Paschen', 'series', 'spectral line', 'quantum number']),
+
+    ('BPhO-12-3',
+     ['special relativity', 'time dilation', 'length contraction',
+      'Lorentz factor', 'γ', 'relativistic mass', 'relativistic momentum',
+      'rest mass energy', 'E₀ = m₀c²', 'relativistic kinetic energy',
+      'speed of light', 'invariant'],
+     ['reference frame', 'proper time', 'proper length', 'twin paradox',
+      'muon experiment', 'simultaneity']),
+]
+
+
+# BPhO 知识点 ID → 一级/二级标题映射（用于前端展示）
+_BPHO_TOPIC_TITLES = {
+    # Ch1 Kinematics
+    'BPhO-1':   '1. 运动学 (Kinematics)',
+    'BPhO-1-1': '1.1 匀变速直线运动与图象 (suvat & v-t Graphs)',
+    'BPhO-1-2': '1.2 相对运动与追及问题 (Relative Motion)',
+    'BPhO-1-3': '1.3 抛体运动与矢量分解 (Projectile & Vectors)',
+    'BPhO-1-4': '1.4 变加速与角/线速度 (Calculus & Angular)',
+    # Ch2 Dynamics
+    'BPhO-2':   '2. 动力学 (Dynamics)',
+    'BPhO-2-1': '2.1 牛顿定律 (Newton\'s Laws)',
+    'BPhO-2-2': '2.2 摩擦力 (Friction)',
+    'BPhO-2-3': '2.3 斜面与绳拉问题 (Inclined Planes & Pulleys)',
+    'BPhO-2-4': '2.4 阻力与浮力 (Drag & Buoyancy)',
+    # Ch3 Work/Energy
+    'BPhO-3':   '3. 功与能 (Work & Energy)',
+    'BPhO-3-1': '3.1 功与动能定理 (Work-Energy Theorem)',
+    'BPhO-3-2': '3.2 能量守恒 (Conservation of Energy)',
+    'BPhO-3-3': '3.3 功率 (Power)',
+    # Ch4 Momentum
+    'BPhO-4':   '4. 动量与碰撞 (Momentum & Collisions)',
+    'BPhO-4-1': '4.1 动量守恒与冲量 (Momentum & Impulse)',
+    'BPhO-4-2': '4.2 弹性碰撞 (Elastic Collision)',
+    'BPhO-4-3': '4.3 非弹性碰撞 (Inelastic Collision)',
+    # Ch5 Circular/Gravity
+    'BPhO-5':   '5. 圆周运动与引力 (Circular Motion & Gravity)',
+    'BPhO-5-1': '5.1 匀速圆周运动 (Uniform Circular Motion)',
+    'BPhO-5-2': '5.2 万有引力 (Gravitation)',
+    'BPhO-5-3': '5.3 卫星运动与开普勒 (Orbital Mechanics)',
+    # Ch6 SHM
+    'BPhO-6':   '6. 简谐运动 (SHM & Oscillations)',
+    'BPhO-6-1': '6.1 简谐运动方程 (SHM Equations)',
+    'BPhO-6-2': '6.2 弹簧与摆 (Spring & Pendulum)',
+    'BPhO-6-3': '6.3 共振与阻尼 (Resonance & Damping)',
+    # Ch7 Waves
+    'BPhO-7':   '7. 波动与光学 (Waves & Optics)',
+    'BPhO-7-1': '7.1 波的基本性质 (Wave Properties)',
+    'BPhO-7-2': '7.2 反射、折射与透镜 (Reflection & Refraction)',
+    'BPhO-7-3': '7.3 干涉与衍射 (Interference & Diffraction)',
+    # Ch8 Electricity
+    'BPhO-8':   '8. 电路与电学 (Electricity & Circuits)',
+    'BPhO-8-1': '8.1 电路与欧姆定律 (Circuits & Ohm\'s Law)',
+    'BPhO-8-2': '8.2 电容器 (Capacitors)',
+    'BPhO-8-3': '8.3 电动势与内阻 (EMF & Internal Resistance)',
+    # Ch9 Electromagnetism
+    'BPhO-9':   '9. 电磁学 (Electromagnetism)',
+    'BPhO-9-1': '9.1 电场与磁场 (Electric & Magnetic Fields)',
+    'BPhO-9-2': '9.2 电磁感应 (Electromagnetic Induction)',
+    'BPhO-9-3': '9.3 洛伦兹力 (Lorentz Force)',
+    # Ch10 Thermal
+    'BPhO-10':   '10. 热学 (Thermal Physics)',
+    'BPhO-10-1': '10.1 理想气体 (Ideal Gas Laws)',
+    'BPhO-10-2': '10.2 热力学定律 (Laws of Thermodynamics)',
+    'BPhO-10-3': '10.3 热传递 (Heat Transfer & Radiation)',
+    # Ch11 Nuclear
+    'BPhO-11':   '11. 核物理 (Nuclear Physics)',
+    'BPhO-11-1': '11.1 放射性衰变 (Radioactive Decay)',
+    'BPhO-11-2': '11.2 核反应 (Nuclear Reactions)',
+    'BPhO-11-3': '11.3 质能方程与结合能 (Binding Energy & E=mc²)',
+    # Ch12 Modern Physics
+    'BPhO-12':   '12. 近代物理 (Modern Physics)',
+    'BPhO-12-1': '12.1 光电效应与量子 (Photoelectric & Quantum)',
+    'BPhO-12-2': '12.2 原子能级与光谱 (Atomic Spectra)',
+    'BPhO-12-3': '12.3 相对论 (Special Relativity)',
+}
 
 
 # 经济学试卷代码 → 单元映射
@@ -4067,6 +4609,13 @@ def upload_multi():
             paper_year      = _extract_year_from_filename(file.filename)
             exam_date_label = _extract_exam_date_label(doc, file.filename)
 
+            # BPhO：用专用年份提取覆盖通用提取
+            if source == 'bpho':
+                bpho_year = _extract_bpho_year(doc, file.filename)
+                if bpho_year:
+                    paper_year = bpho_year
+                    exam_date_label = bpho_year
+
             # ── 知识点标注 + 难度评级 ──
             if source == 'cambridge':
                 for q_idx, q in enumerate(questions):
@@ -4167,6 +4716,19 @@ def upload_multi():
                         source=source, maths_unit=maths_unit,
                         unit_code=unit_code
                     )
+            elif source == 'bpho':
+                # BPhO：按子题文本提取 + BPhO 物理知识点标注
+                for q_idx, q in enumerate(questions):
+                    try:
+                        txt = _extract_question_text(doc, questions, q_idx, pt)
+                        q['topics'] = tag_question_topics(txt, 'bpho')
+                    except Exception:
+                        q['topics'] = []
+                    q['difficulty'] = None
+                    # 将 q_label（字母）记录到 exam_date 作为副标题辅助信息
+                    label = q.get('q_label', '')
+                    if label:
+                        q['q_label'] = label
             else:
                 for q in questions:
                     q['topics'] = []
@@ -5314,6 +5876,8 @@ def _detect_questions(doc, paper_type):
         return detect_edexcel_questions(doc)
     elif paper_type == 'edexcel_maths':
         return detect_edexcel_maths_questions(doc)
+    elif paper_type == 'bpho':
+        return detect_bpho_questions(doc)
     else:
         return detect_structured_questions(doc)
 
