@@ -355,59 +355,120 @@
   .page-tab.active{background:#fff;color:var(--blue);box-shadow:0 1px 3px rgba(0,0,0,.12)}
   .page-tab:hover:not(.active){background:var(--g200);color:var(--g800)}
 
-  /* Cloud Library */
-  .cloud-tree-item{border-bottom:1px solid var(--g100);user-select:none}
-  .cloud-tree-item:last-child{border-bottom:none}
-  .cloud-tree-row{display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;border-radius:6px;transition:background .1s}
-  .cloud-tree-row:hover{background:var(--g50)}
-  .cloud-tree-row.active{background:#eff6ff;color:var(--blue)}
-  .cloud-tree-row.active .ctr-cnt{background:#bfdbfe;color:#1d4ed8}
-  .ctr-ico{font-size:14px;flex-shrink:0;width:18px;text-align:center}
-  .ctr-chev{font-size:10px;color:var(--g400);transition:transform .15s;flex-shrink:0;width:12px}
-  .ctr-chev.open{transform:rotate(90deg)}
-  .ctr-label{flex:1;font-size:12px;font-weight:600;color:var(--g800)}
-  .ctr-cnt{font-size:10px;font-weight:700;background:var(--g200);color:var(--g600);padding:1px 7px;border-radius:10px;white-space:nowrap}
-  .cloud-tree-children{padding-left:14px;display:none}
-  .cloud-tree-children.open{display:block}
-  /* level 2: board */
-  .cloud-tree-row.lvl2{padding-left:14px}
-  .cloud-tree-row.lvl2 .ctr-label{font-size:12px;color:#374151}
-  /* level 3: topic1 */
-  .cloud-tree-row.lvl3{padding-left:28px}
-  .cloud-tree-row.lvl3 .ctr-label{font-size:11px;font-weight:500;color:#4b5563}
-  /* level 4: topic1 */
-  .cloud-tree-row.lvl4{padding-left:42px}
-  .cloud-tree-row.lvl4 .ctr-label{font-size:11px;font-weight:500;color:#4b5563}
-  .cloud-tree-row.lvl4.active{background:#eff6ff;color:var(--blue)}
-  .cloud-tree-row.lvl4.active .ctr-label{font-weight:600;color:var(--blue)}
-  /* level 5: topic2 */
-  .cloud-tree-row.lvl5{padding-left:56px}
-  .cloud-tree-row.lvl5 .ctr-label{font-size:11px;font-weight:400;color:#6b7280}
-  .cloud-tree-row.lvl5.active{background:#eff6ff;color:var(--blue)}
-  .cloud-tree-row.lvl5.active .ctr-label{font-weight:600}
+  /* Cloud Library — redesigned */
+  /* ── 顶部栏 ── */
+  .cloud-topbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;background:#fff;border:1px solid var(--g200);border-radius:12px;padding:12px 18px;margin-bottom:14px;box-shadow:var(--sh)}
+  .cloud-topbar-left{display:flex;align-items:center;gap:10px}
+  .cloud-topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .cloud-stat-badge{display:flex;align-items:baseline;gap:4px;background:linear-gradient(135deg,#eff6ff,#e0e7ff);border-radius:8px;padding:5px 12px}
+  .cloud-stat-num{font-size:20px;font-weight:800;color:#4f46e5}
+  .cloud-stat-lbl{font-size:11px;color:var(--g400)}
+  .cloud-danger-btn{padding:5px 12px;border-radius:6px;border:1px solid #fca5a5;background:#fef2f2;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+  .cloud-danger-btn:hover{background:#fee2e2}
 
-  /* Cloud Q Card */
-  .cloud-qcard{background:#fff;border:1.5px solid var(--g200);border-radius:10px;overflow:hidden;cursor:pointer;transition:all .2s;box-shadow:var(--sh);position:relative}
-  .cloud-qcard:hover{border-color:#0ea5e9;box-shadow:0 4px 12px rgba(14,165,233,.2);transform:translateY(-2px)}
-  .cloud-qcard-img{width:100%;height:140px;object-fit:contain;object-position:top;background:var(--g50);display:block;border-bottom:1px solid var(--g200)}
-  .cloud-qcard-body{padding:8px 10px}
-  .cloud-qcard-meta{font-size:10px;color:var(--g400);display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px}
-  .cloud-qcard-tag{padding:1px 6px;border-radius:8px;font-weight:600}
-  .cloud-qcard-topics{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
-  .cloud-qcard-del{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;background:rgba(220,38,38,.85);color:#fff;border:none;cursor:pointer;font-size:11px;display:none;align-items:center;justify-content:center;transition:opacity .15s}
-  .cloud-qcard:hover .cloud-qcard-del{display:flex}
+  /* ── 主体布局 ── */
+  .cloud-main-layout{display:grid;grid-template-columns:280px 1fr;gap:14px;align-items:start}
+  @media(max-width:900px){.cloud-main-layout{grid-template-columns:1fr}}
+
+  /* ── 左侧导航 ── */
+  .cloud-sidebar{display:flex;flex-direction:column;gap:10px;position:sticky;top:70px}
+  .cloud-search-wrap{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--g200);border-radius:8px;padding:6px 10px}
+  .cloud-search-icon{font-size:13px;color:var(--g400)}
+  .cloud-search-input{flex:1;border:none;outline:none;font-size:12px;background:transparent;color:var(--g800)}
+  .cloud-search-input::placeholder{color:var(--g400)}
+
+  .cloud-nav-section{background:#fff;border:1px solid var(--g200);border-radius:10px;overflow:hidden;box-shadow:var(--sh)}
+  .cloud-nav-section-hdr{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:var(--g50);border-bottom:1px solid var(--g200);font-size:11px;font-weight:700;color:var(--g600);text-transform:uppercase;letter-spacing:.05em}
+  .cloud-nav-refresh{background:none;border:none;cursor:pointer;font-size:14px;color:var(--g400);padding:0 2px;line-height:1;transition:color .15s}
+  .cloud-nav-refresh:hover{color:var(--blue)}
+  .cloud-nav-body{padding:4px;max-height:200px;overflow-y:auto}
+  .cloud-nav-empty{text-align:center;padding:14px 8px;color:var(--g400);font-size:11px}
+  .cloud-nav-tree-section .cloud-nav-body{max-height:none}
+  .cloud-tree-body{max-height:calc(100vh - 430px);overflow-y:auto;padding:4px}
+
+  /* ── 目录树节点 ── */
+  .cloud-tree-item{user-select:none}
+  .cloud-tree-row{display:flex;align-items:center;gap:5px;padding:5px 7px;cursor:pointer;border-radius:6px;transition:background .1s;margin:1px 0}
+  .cloud-tree-row:hover{background:var(--g100)}
+  .cloud-tree-row.active{background:#eff6ff!important;border-left:2px solid var(--blue)}
+  .cloud-tree-row.active .ctr-label{color:var(--blue);font-weight:700}
+  .cloud-tree-row.active .ctr-cnt{background:#bfdbfe;color:#1d4ed8}
+  .ctr-ico{font-size:13px;flex-shrink:0;width:16px;text-align:center;opacity:.8}
+  .ctr-chev{font-size:9px;color:var(--g400);transition:transform .15s;flex-shrink:0;width:10px}
+  .ctr-chev.open{transform:rotate(90deg)}
+  .ctr-label{flex:1;font-size:12px;font-weight:600;color:var(--g700,#374151);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ctr-cnt{font-size:10px;font-weight:700;background:var(--g200);color:var(--g600);padding:1px 6px;border-radius:8px;white-space:nowrap;flex-shrink:0}
+  .cloud-tree-children{padding-left:10px;display:none}
+  .cloud-tree-children.open{display:block}
+  .cloud-tree-row.lvl2{padding-left:12px}
+  .cloud-tree-row.lvl2 .ctr-label{font-size:11.5px;font-weight:500}
+  .cloud-tree-row.lvl3{padding-left:22px}
+  .cloud-tree-row.lvl3 .ctr-label{font-size:11px;font-weight:500;color:var(--g600)}
+  .cloud-tree-row.lvl4{padding-left:32px}
+  .cloud-tree-row.lvl4 .ctr-label{font-size:11px;font-weight:400;color:var(--g600)}
+  .cloud-tree-row.lvl4.active .ctr-label{color:var(--blue);font-weight:600}
+  .cloud-tree-row.lvl5{padding-left:42px}
+  .cloud-tree-row.lvl5 .ctr-label{font-size:10.5px;font-weight:400;color:#6b7280}
+  .cloud-tree-row.lvl5.active .ctr-label{color:var(--blue);font-weight:600}
+
+  /* ── 右侧内容区 ── */
+  .cloud-content{background:#fff;border:1px solid var(--g200);border-radius:12px;padding:16px;box-shadow:var(--sh);min-height:500px}
+  .cloud-breadcrumb{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--g100)}
+  .cloud-bc-item{font-size:12px;color:var(--g400);padding:2px 6px;border-radius:5px;transition:all .15s}
+  .cloud-bc-sep{color:var(--g200);font-size:12px}
+  .cloud-bc-item.active{color:var(--blue);font-weight:700;background:#eff6ff}
+  .cloud-bc-item:not(.active){cursor:pointer}
+  .cloud-bc-item:not(.active):hover{color:var(--blue);background:var(--blue-lt)}
+
+  .cloud-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;padding:8px 10px;background:var(--g50);border-radius:8px;border:1px solid var(--g200)}
+  .cloud-toolbar-total{font-size:13px;color:var(--g600);font-weight:700}
+  .cloud-toolbar-filters{margin-left:auto;display:flex;gap:6px;align-items:center}
+  .cloud-filter-sel{font-size:12px;border:1px solid var(--g200);border-radius:6px;padding:4px 8px;background:#fff;outline:none;color:var(--g800)}
+
+  /* ── 题目卡片 ── */
+  .cloud-qgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+  .cloud-qcard{background:#fff;border:1.5px solid var(--g200);border-radius:10px;overflow:hidden;cursor:pointer;transition:all .18s;box-shadow:var(--sh);position:relative}
+  .cloud-qcard:hover{border-color:#0ea5e9;box-shadow:0 6px 16px rgba(14,165,233,.18);transform:translateY(-2px)}
+  .cloud-qcard-img{width:100%;height:130px;object-fit:contain;object-position:top;background:var(--g50);display:block;border-bottom:1px solid var(--g200)}
+  .cloud-qcard-body{padding:7px 9px}
+  .cloud-qcard-meta{font-size:9.5px;color:var(--g400);display:flex;flex-wrap:wrap;gap:2px;margin-bottom:3px}
+  .cloud-qcard-tag{padding:1px 5px;border-radius:6px;font-weight:600}
+  .cloud-qcard-topic{font-size:10px;color:var(--g600);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cloud-qcard-actions{position:absolute;top:0;right:0;display:none;flex-direction:column;gap:2px;padding:5px 4px;background:rgba(255,255,255,.92);border-radius:0 9px 0 8px;border-left:1px solid var(--g200);border-bottom:1px solid var(--g200)}
+  .cloud-qcard:hover .cloud-qcard-actions{display:flex}
+  .cloud-qcard-btn{width:24px;height:24px;border-radius:5px;border:none;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;transition:background .15s}
+  .cloud-qcard-btn.del{background:#fee2e2;color:#dc2626}
+  .cloud-qcard-btn.del:hover{background:#fca5a5}
+  .cloud-qcard-btn.edit{background:#e0f2fe;color:#0369a1}
+  .cloud-qcard-btn.edit:hover{background:#bae6fd}
+  .cloud-qcard-has-ans{position:absolute;bottom:5px;right:5px;width:16px;height:16px;border-radius:50%;background:#10b981;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;title:'有答案'}
+
+  /* ── 空状态 ── */
+  .cloud-empty-state{grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--g400)}
+  .cloud-empty-icon{font-size:48px;margin-bottom:12px}
+  .cloud-empty-title{font-size:15px;font-weight:700;margin-bottom:4px}
+  .cloud-empty-sub{font-size:12px}
+
+  /* ── 分页 ── */
+  .cloud-pagination{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:16px;padding-top:12px;border-top:1px solid var(--g100);flex-wrap:wrap}
+
+  /* ── 编辑弹窗内容 ── */
+  .cloud-edit-img-wrap{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+  .cloud-edit-img-block{border:1.5px dashed var(--g200);border-radius:10px;overflow:hidden;position:relative;cursor:pointer;transition:border-color .15s}
+  .cloud-edit-img-block:hover{border-color:var(--blue);background:var(--blue-lt)}
+  .cloud-edit-img-block img{width:100%;max-height:220px;object-fit:contain;display:block;background:var(--g50)}
+  .cloud-edit-img-label{font-size:11px;font-weight:700;color:var(--g600);padding:6px 10px;background:var(--g50);border-top:1px solid var(--g200);display:flex;align-items:center;justify-content:space-between}
+  .cloud-edit-img-replace{font-size:10px;color:var(--blue);background:var(--blue-lt);border:1px solid var(--blue);border-radius:5px;padding:2px 7px;cursor:pointer;transition:all .15s}
+  .cloud-edit-img-replace:hover{background:var(--blue);color:#fff}
+  .cloud-edit-field{margin-bottom:12px}
+  .cloud-edit-field label{display:block;font-size:11px;font-weight:700;color:var(--g600);margin-bottom:4px}
+  .cloud-edit-field input,.cloud-edit-field select{width:100%;border:1px solid var(--g200);border-radius:7px;padding:7px 10px;font-size:13px;background:#fff;outline:none;transition:border-color .15s}
+  .cloud-edit-field input:focus,.cloud-edit-field select:focus{border-color:var(--blue)}
 
   /* Cloud Board Pills */
-  .cloud-board-btn{padding:7px 6px;border-radius:8px;border:2px solid var(--g200);background:#fff;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;text-align:center;color:var(--g600)}
+  .cloud-board-btn{padding:6px 5px;border-radius:7px;border:2px solid var(--g200);background:#fff;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;text-align:center;color:var(--g600)}
   .cloud-board-btn:hover{border-color:#0ea5e9;color:#0369a1;background:#f0f9ff}
   .cloud-board-btn.active{border-color:#6366f1;color:#4f46e5;background:#eef2ff}
-
-  /* Breadcrumb */
-  .cloud-bc-item{color:var(--g400);font-size:12px}
-  .cloud-bc-sep{color:var(--g200)}
-  .cloud-bc-item.active{color:var(--blue);font-weight:700}
-  .cloud-bc-item:not(.active){cursor:pointer}
-  .cloud-bc-item:not(.active):hover{color:var(--blue)}
 
   @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -627,77 +688,79 @@
 <!-- ═══════════════════════════════════════════════════ -->
 <!-- 云端题库页面 -->
 <!-- ═══════════════════════════════════════════════════ -->
-<div id="pageCloud" style="display:none;max-width:1500px;margin:0 auto;padding:20px">
+<div id="pageCloud" style="display:none;max-width:1500px;margin:0 auto;padding:16px 20px">
 
-  <!-- 云端题库顶部统计栏 -->
-  <div style="background:#fff;border:1px solid var(--g200);border-radius:10px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;box-shadow:var(--sh)">
-    <div style="display:flex;align-items:center;gap:10px">
-      <span style="font-size:28px">☁️</span>
+  <!-- ── 顶部栏：标题 + 统计 + 操作 ── -->
+  <div class="cloud-topbar">
+    <div class="cloud-topbar-left">
+      <span style="font-size:22px">☁️</span>
       <div>
-        <div style="font-size:18px;font-weight:800;color:var(--g800)">云端题库</div>
-        <div style="font-size:12px;color:var(--g400)">题目永久保存，按学科/考试局/知识点四级分类</div>
+        <div style="font-size:16px;font-weight:800;color:var(--g800)">云端题库</div>
+        <div style="font-size:11px;color:var(--g400)">按学科 / 考试局 / 知识点分级管理</div>
       </div>
     </div>
-    <div style="margin-left:auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <div style="text-align:center;padding:8px 16px;background:linear-gradient(135deg,#eff6ff,#e0e7ff);border-radius:10px">
-        <div style="font-size:26px;font-weight:800;color:#4f46e5" id="cloudTotalCnt">—</div>
-        <div style="font-size:11px;color:var(--g400)">云端题目总量</div>
+    <div class="cloud-topbar-right">
+      <div class="cloud-stat-badge">
+        <span class="cloud-stat-num" id="cloudTotalCnt">—</span>
+        <span class="cloud-stat-lbl">道题目</span>
       </div>
-      <button class="btn btn-outline btn-sm" onclick="refreshCloudStats()" id="btnRefreshStats">🔄 刷新统计</button>
-      <button class="btn btn-sm" onclick="openClearAllDialog()"
-              style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;font-size:12px">🗑️ 清空题库</button>
+      <button class="btn btn-outline btn-sm" onclick="refreshCloudStats()" id="btnRefreshStats" title="重新计算统计">🔄 刷新</button>
+      <button class="btn btn-outline btn-sm" id="btnRepairTopics" style="color:#e67e22;border-color:#e67e22" onclick="repairCloudTopics()" title="修复知识点分类">🔧 修复</button>
+      <button class="cloud-danger-btn" onclick="openClearAllDialog()">🗑️ 清空</button>
     </div>
   </div>
 
-  <!-- 主布局：左侧目录树 + 右侧题目列表 -->
-  <div style="display:grid;grid-template-columns:320px 1fr;gap:16px">
+  <!-- ── 主体：左侧导航树 + 右侧内容区 ── -->
+  <div class="cloud-main-layout">
 
-    <!-- 左：目录树面板 -->
-    <div style="display:flex;flex-direction:column;gap:12px">
+    <!-- ═══ 左侧导航面板 ═══ -->
+    <aside class="cloud-sidebar">
 
-      <!-- ══ 题册区块 ══ -->
-      <div style="background:#fff;border:1px solid var(--g200);border-radius:10px;padding:14px 16px;box-shadow:var(--sh)">
-        <div style="font-size:12px;font-weight:700;color:var(--g600);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
-          <span>📚 题册</span>
-          <button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 8px" onclick="loadCloudLibSection()">刷新</button>
-        </div>
-        <div id="cloudLibSection">
-          <div style="text-align:center;padding:16px;color:var(--g400);font-size:12px">点击刷新加载题册</div>
-        </div>
-      </div>
-
-      <!-- ══ 切片题目目录 ══ -->
-      <div style="background:#fff;border:1px solid var(--g200);border-radius:10px;padding:16px;box-shadow:var(--sh)">
-        <div style="font-size:12px;font-weight:700;color:var(--g600);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
-          <span>📂 题库目录</span>
-          <div style="display:flex;gap:4px">
-            <button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 8px" onclick="loadCloudTree()">刷新</button>
-            <button class="btn btn-outline btn-sm" id="btnRepairTopics" style="font-size:10px;padding:2px 8px;color:#e67e22;border-color:#e67e22" onclick="repairCloudTopics()" title="重新推导所有题目的知识点分类，修复错误归档">🔧 修复知识点</button>
-          </div>
-        </div>
-        <!-- 搜索框 -->
-        <input type="text" id="cloudTreeSearch" placeholder="🔍 搜索考试局/知识点..."
-               style="width:100%;border:1px solid var(--g200);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;margin-bottom:10px"
+      <!-- 搜索框 -->
+      <div class="cloud-search-wrap">
+        <span class="cloud-search-icon">🔍</span>
+        <input type="text" id="cloudTreeSearch" class="cloud-search-input"
+               placeholder="搜索考试局 / 知识点..."
                oninput="filterCloudTree(this.value)">
-        <!-- 目录树容器 -->
-        <div id="cloudTree" style="max-height:calc(100vh - 480px);overflow-y:auto"></div>
-      </div>
-    </div>
-
-    <!-- 右：题目列表 -->
-    <div style="background:#fff;border:1px solid var(--g200);border-radius:10px;padding:16px;box-shadow:var(--sh);min-height:400px">
-
-      <!-- 当前路径面包屑 -->
-      <div id="cloudBreadcrumb" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px;font-size:13px">
-        <span style="color:var(--g400)">☁️ 全部题目</span>
       </div>
 
-      <!-- 题目列表工具栏 -->
-      <div id="cloudQToolbar" style="display:none;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-        <span id="cloudQTotal" style="font-size:13px;color:var(--g600);font-weight:600">共 0 题</span>
-        <div style="margin-left:auto;display:flex;gap:8px">
-          <select id="cloudDiffFilter" onchange="cloudFilterChange()"
-                  style="font-size:12px;border:1px solid var(--g200);border-radius:6px;padding:4px 8px;background:#fff">
+      <!-- 题册区块 -->
+      <div class="cloud-nav-section">
+        <div class="cloud-nav-section-hdr">
+          <span>📚 题册</span>
+          <button class="cloud-nav-refresh" onclick="loadCloudLibSection()" title="刷新题册">↻</button>
+        </div>
+        <div id="cloudLibSection" class="cloud-nav-body">
+          <div class="cloud-nav-empty">点击↻加载题册</div>
+        </div>
+      </div>
+
+      <!-- 题库目录树 -->
+      <div class="cloud-nav-section cloud-nav-tree-section">
+        <div class="cloud-nav-section-hdr">
+          <span>📂 题库目录</span>
+          <button class="cloud-nav-refresh" onclick="loadCloudTree()" title="刷新目录">↻</button>
+        </div>
+        <div id="cloudTree" class="cloud-nav-body cloud-tree-body">
+          <div class="cloud-nav-empty">⏳ 加载中...</div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- ═══ 右侧内容区 ═══ -->
+    <main class="cloud-content">
+
+      <!-- 面包屑导航 -->
+      <nav id="cloudBreadcrumb" class="cloud-breadcrumb">
+        <span class="cloud-bc-item active">☁️ 全部题目</span>
+      </nav>
+
+      <!-- 工具栏（题目数 + 筛选器）-->
+      <div id="cloudQToolbar" class="cloud-toolbar" style="display:none">
+        <span id="cloudQTotal" class="cloud-toolbar-total">共 0 题</span>
+        <div class="cloud-toolbar-filters">
+          <select id="cloudDiffFilter" class="cloud-filter-sel" onchange="cloudFilterChange()">
             <option value="">全部难度</option>
             <option value="1">★ 入门</option>
             <option value="2">★★ 基础</option>
@@ -709,17 +772,38 @@
       </div>
 
       <!-- 题目卡片网格 -->
-      <div id="cloudQGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">
-        <!-- 初始提示 -->
-        <div style="grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--g400)" id="cloudEmptyHint">
-          <div style="font-size:48px;margin-bottom:12px">☁️</div>
-          <div style="font-size:16px;font-weight:700;margin-bottom:6px">点击左侧目录查看题目</div>
-          <div style="font-size:12px">或点击「刷新统计」查看云端数据总量</div>
+      <div id="cloudQGrid" class="cloud-qgrid">
+        <div class="cloud-empty-state" id="cloudEmptyHint">
+          <div class="cloud-empty-icon">☁️</div>
+          <div class="cloud-empty-title">点击左侧目录查看题目</div>
+          <div class="cloud-empty-sub">或点击「刷新」查看题库总量</div>
         </div>
       </div>
 
       <!-- 分页 -->
-      <div id="cloudPagination" style="display:none;margin-top:16px;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap"></div>
+      <div id="cloudPagination" class="cloud-pagination" style="display:none"></div>
+    </main>
+  </div>
+</div>
+
+<!-- ═══ 题目编辑/管理弹窗 ═══ -->
+<div class="mo" id="cloudEditMo">
+  <div class="mo-box" style="max-width:680px">
+    <div class="mo-hdr">
+      <h3>✏️ 管理题目</h3>
+      <button class="mo-cls" onclick="closeModal('cloudEditMo')">✕</button>
+    </div>
+    <div class="mo-body" style="padding:20px;max-height:80vh;overflow-y:auto">
+      <div id="cloudEditContent">
+        <!-- 动态填充 -->
+      </div>
+    </div>
+    <div class="mo-ft">
+      <button class="btn btn-outline" onclick="closeModal('cloudEditMo')">关闭</button>
+      <button class="btn" id="btnSaveCloudEdit" onclick="saveCloudEdit()"
+              style="background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;font-weight:700">
+        💾 保存修改
+      </button>
     </div>
   </div>
 </div>
@@ -753,19 +837,21 @@
           <option value="经济 Economics">经济 Economics</option>
           <option value="商业 Business">商业 Business</option>
           <option value="会计 Accounting">会计 Accounting</option>
+          <option value="竞赛物理 BPHO">竞赛物理 BPHO</option>
         </select>
       </div>
 
       <!-- 考试局 -->
       <div style="margin-bottom:12px">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:5px">🏛️ 考试局</label>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px" id="cloudBoardPills">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px" id="cloudBoardPills">
           <button class="cloud-board-btn active" data-board="CAIE" onclick="selectCloudBoard(this)">CAIE</button>
           <button class="cloud-board-btn" data-board="Edexcel" onclick="selectCloudBoard(this)">Edexcel</button>
           <button class="cloud-board-btn" data-board="AQA" onclick="selectCloudBoard(this)">AQA</button>
           <button class="cloud-board-btn" data-board="OCR" onclick="selectCloudBoard(this)">OCR</button>
           <button class="cloud-board-btn" data-board="IB" onclick="selectCloudBoard(this)">IB</button>
           <button class="cloud-board-btn" data-board="AP" onclick="selectCloudBoard(this)">AP</button>
+          <button class="cloud-board-btn" data-board="BPHO" onclick="selectCloudBoard(this)">BPHO</button>
         </div>
       </div>
 
@@ -868,19 +954,21 @@
           <option value="经济 Economics">经济 Economics</option>
           <option value="商业 Business">商业 Business</option>
           <option value="会计 Accounting">会计 Accounting</option>
+          <option value="竞赛物理 BPHO">竞赛物理 BPHO</option>
         </select>
       </div>
 
       <!-- 考试局（单选） -->
       <div style="margin-bottom:14px">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--g600);margin-bottom:6px">🏛️ 考试局（单选）</label>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px" id="ciBoards">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px" id="ciBoards">
           <button class="cloud-board-btn" data-board="CAIE" onclick="ciSelectBoard(this)">CAIE</button>
           <button class="cloud-board-btn" data-board="Edexcel" onclick="ciSelectBoard(this)">Edexcel</button>
           <button class="cloud-board-btn" data-board="AQA" onclick="ciSelectBoard(this)">AQA</button>
           <button class="cloud-board-btn" data-board="OCR" onclick="ciSelectBoard(this)">OCR</button>
           <button class="cloud-board-btn" data-board="IB" onclick="ciSelectBoard(this)">IB</button>
           <button class="cloud-board-btn" data-board="AP" onclick="ciSelectBoard(this)">AP</button>
+          <button class="cloud-board-btn" data-board="BPHO" onclick="ciSelectBoard(this)">BPHO</button>
         </div>
       </div>
 
@@ -5422,15 +5510,17 @@ let _cloudDiffFilter = '';
 // ── 加载云端题库页面时同时触发两个区块 ──
 async function loadCloudTree() {
   const container = document.getElementById('cloudTree');
-  container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--g400)">⏳ 加载中...</div>';
+  container.innerHTML = '<div class="cloud-nav-empty">⏳ 加载中...</div>';
   try {
     const r = await fetch('/api/cloud_library/tree');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     _cloudTreeData = await r.json();
     _cloudTreeLoaded = true;
     renderCloudTree(_cloudTreeData);
     document.getElementById('cloudTotalCnt').textContent = (_cloudTreeData.total ?? 0).toLocaleString();
   } catch(e) {
-    container.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626">加载失败: ' + e.message + '</div>';
+    container.innerHTML = `<div class="cloud-nav-empty" style="color:#dc2626">⚠️ 加载失败<br><small>${e.message}</small><br><button class="btn btn-outline btn-sm" style="margin-top:8px;font-size:11px" onclick="loadCloudTree()">重试</button></div>`;
+    console.warn('loadCloudTree error:', e);
   }
   // 同时刷新题册区块
   loadCloudLibSection();
@@ -5439,7 +5529,7 @@ async function loadCloudTree() {
 // ── 加载题册区块 ──
 async function loadCloudLibSection() {
   const sec = document.getElementById('cloudLibSection');
-  sec.innerHTML = '<div style="text-align:center;padding:12px;color:var(--g400);font-size:12px">⏳ 加载中...</div>';
+  sec.innerHTML = '<div class="cloud-nav-empty">⏳ 加载中...</div>';
   try {
     const r = await fetch('/api/library/list');
     const d = await r.json();
@@ -5452,23 +5542,23 @@ async function loadCloudLibSection() {
       }
     }
     if (!allWbs.length) {
-      sec.innerHTML = '<div style="text-align:center;padding:14px;color:var(--g400);font-size:12px">📭 暂无题册</div>';
+      sec.innerHTML = '<div class="cloud-nav-empty">📭 暂无题册</div>';
       return;
     }
     let html = '';
     for (const wb of allWbs) {
       const isActive = _cloudActiveLibWb && _cloudActiveLibWb.id === wb.id;
-      html += `<div class="cloud-tree-row lvl2 ${isActive ? 'active' : ''}"
-        style="border-radius:6px;margin-bottom:3px;cursor:pointer"
+      html += `<div class="cloud-tree-row ${isActive ? 'active' : ''}"
+        style="margin:1px 0"
         onclick="cloudLibClick('${esc(wb.id)}','${esc(wb.title)}','${esc(wb.board)}','${esc(wb.subject)}')">
         <span class="ctr-ico">📓</span>
-        <span class="ctr-label" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(wb.title)}</span>
+        <span class="ctr-label" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(wb.title)}</span>
         <span class="ctr-cnt">${wb.count}</span>
       </div>`;
     }
-    sec.innerHTML = `<div style="max-height:200px;overflow-y:auto">${html}</div>`;
+    sec.innerHTML = html;
   } catch(e) {
-    sec.innerHTML = '<div style="text-align:center;padding:12px;color:#dc2626;font-size:12px">加载失败: ' + e.message + '</div>';
+    sec.innerHTML = `<div class="cloud-nav-empty" style="color:#dc2626">加载失败<br><small>${e.message}</small></div>`;
   }
 }
 
@@ -5490,22 +5580,23 @@ function cloudLibClick(wbId, wbTitle, board, subject) {
     <span class="cloud-bc-item">📚 题册</span>
     <span class="cloud-bc-sep">›</span>
     <span class="cloud-bc-item active">${esc(wbTitle)}</span>`;
-  // 加载题册内容（通过 library/load API 获取题目）
+  // 加载题册内容
   loadCloudLibWbQuestions(wbId, wbTitle, board, subject);
 }
 
 async function loadCloudLibWbQuestions(wbId, wbTitle, board, subject) {
   const grid = document.getElementById('cloudQGrid');
-  grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--g400)"><div class="spin">⏳</div></div>';
+  grid.innerHTML = '<div class="cloud-empty-state"><div class="cloud-empty-icon">⏳</div><div class="cloud-empty-title">加载中...</div></div>';
   document.getElementById('cloudPagination').style.display = 'none';
   document.getElementById('cloudQToolbar').style.display = 'flex';
 
   try {
     const r = await fetch(`/api/library/load/${encodeURIComponent(wbId)}`);
     const d = await r.json();
-    if (!d.ok) { grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:#dc2626">加载失败: ${d.error || '未知错误'}</div>`; return; }
+    if (!d.ok) { grid.innerHTML = `<div class="cloud-empty-state"><div class="cloud-empty-icon">⚠️</div><div class="cloud-empty-title">加载失败</div><div class="cloud-empty-sub">${d.error || '未知错误'}</div></div>`; return; }
     // 将 library 格式题目映射为云端题目格式
     const questions = (d.questions || []).map(q => ({
+      qid:        q.q_num ? `wb-${wbId}-${q.q_num}` : `wb-${wbId}-${q.seq}`,
       id:         q.q_num || q.seq,
       difficulty: q.difficulty,
       topics:     q.topics || [],
@@ -5518,10 +5609,37 @@ async function loadCloudLibWbQuestions(wbId, wbTitle, board, subject) {
     _cloudAllQuestions = questions;
     _cloudQTotal = questions.length;
     document.getElementById('cloudQTotal').textContent = `共 ${_cloudQTotal} 题`;
-    renderCloudQGrid(questions);
+    // 题册题目用 b64 渲染
+    renderCloudQGridFromLib(questions);
   } catch(e) {
-    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:#dc2626">加载失败: ${e.message}</div>`;
+    grid.innerHTML = `<div class="cloud-empty-state"><div class="cloud-empty-icon">⚠️</div><div class="cloud-empty-title">加载失败</div><div class="cloud-empty-sub">${e.message}</div></div>`;
   }
+}
+
+function renderCloudQGridFromLib(questions) {
+  const grid = document.getElementById('cloudQGrid');
+  if (!questions || questions.length === 0) {
+    grid.innerHTML = '<div class="cloud-empty-state"><div class="cloud-empty-icon">📭</div><div class="cloud-empty-title">题册为空</div></div>';
+    return;
+  }
+  const diffColors = ['','#d1fae5:#065f46','#dbeafe:#1d4ed8','#fef9c3:#713f12','#fed7aa:#9a3412','#fecaca:#991b1b'];
+  const diffLabels = ['','★','★★','★★★','★★★★','★★★★★'];
+  grid.innerHTML = questions.map((q,i) => {
+    const diff = q.difficulty;
+    const diffStyle = diff && diffColors[diff]
+      ? `background:${diffColors[diff].split(':')[0]};color:${diffColors[diff].split(':')[1]}`
+      : 'background:var(--g200);color:var(--g600)';
+    const imgSrc = q.img_b64 ? `data:image/jpeg;base64,${q.img_b64}` : '';
+    return `<div class="cloud-qcard">
+      <img class="cloud-qcard-img" src="${imgSrc}" style="background:var(--g50)">
+      <div class="cloud-qcard-body">
+        <div class="cloud-qcard-meta">
+          <span class="cloud-qcard-tag" style="${diffStyle}">${diff ? diffLabels[diff] : '—'}</span>
+          ${q.exam_date ? `<span class="cloud-qcard-tag" style="background:#fef3c7;color:#92400e">${esc(q.exam_date)}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function renderCloudTree(data, filterText) {
@@ -5531,11 +5649,12 @@ function renderCloudTree(data, filterText) {
   // 新 4 层结构：Board → Paper → Topic1 → Topic2
   // data.subjects 原始结构还是 subject→board→paper→topic1→topic2
   // 合并所有 subject 下相同 board 的数据
-  const boardMap = {}; // boardName -> {count, papers: {paperName -> {count, topics: {t1 -> {count, subtopics: {t2 -> count}}}}}}
+  const boardMap = {}; // boardName -> {count, papers: {paperName -> {count, subject, topics: {t1 -> {count, subtopics: {t2 -> count}}}}}}
   for (const subj of (data.subjects || [])) {
     for (const board of (subj.boards || [])) {
-      if (!boardMap[board.name]) boardMap[board.name] = { count: 0, papers: {} };
+      if (!boardMap[board.name]) boardMap[board.name] = { count: 0, papers: {}, subjects: new Set() };
       boardMap[board.name].count += board.count;
+      boardMap[board.name].subjects.add(subj.name);
       for (const paper of (board.papers || [])) {
         if (!boardMap[board.name].papers[paper.name]) boardMap[board.name].papers[paper.name] = { count: 0, topics: {}, subject: subj.name };
         boardMap[board.name].papers[paper.name].count += paper.count;
@@ -5553,7 +5672,7 @@ function renderCloudTree(data, filterText) {
 
   const boardNames = Object.keys(boardMap);
   if (boardNames.length === 0 || data.total === 0) {
-    container.innerHTML = '<div style="text-align:center;padding:40px 10px;color:var(--g400);font-size:12px">☁️<br><br>云端题库为空<br>请先从导入页面上传题目</div>';
+    container.innerHTML = '<div class="cloud-nav-empty">☁️<br>题库为空<br>请先上传题目</div>';
     return;
   }
 
@@ -5580,7 +5699,7 @@ function renderCloudTree(data, filterText) {
 
     const boardOpen = _cloudActivePath.board === boardName;
     html += `<div class="cloud-tree-item">
-      <div class="cloud-tree-row" onclick="cloudTreeClick('board',undefined,'${esc(boardName)}')">
+      <div class="cloud-tree-row ${boardOpen && !_cloudActivePath.paper ? 'active' : ''}" onclick="cloudTreeClick('board','','${esc(boardName)}')">
         <span class="ctr-chev ${boardOpen ? 'open' : ''}">▶</span>
         <span class="ctr-ico">🏛️</span>
         <span class="ctr-label">${esc(boardName)}</span>
@@ -5593,7 +5712,7 @@ function renderCloudTree(data, filterText) {
       if (!pData.count && !filterText) continue;
       const paperOpen = boardOpen && _cloudActivePath.paper === paperName;
       html += `<div class="cloud-tree-item">
-        <div class="cloud-tree-row lvl2" onclick="cloudTreeClick('paper',undefined,'${esc(boardName)}','${esc(paperName)}')">
+        <div class="cloud-tree-row lvl2 ${paperOpen && !_cloudActivePath.topic1 ? 'active' : ''}" onclick="cloudTreeClick('paper','${esc(pData.subject)}','${esc(boardName)}','${esc(paperName)}')">
           <span class="ctr-chev ${paperOpen ? 'open' : ''}">▶</span>
           <span class="ctr-ico">📄</span>
           <span class="ctr-label">${esc(paperName)}</span>
@@ -5605,7 +5724,7 @@ function renderCloudTree(data, filterText) {
         const t1Data = pData.topics[t1Name];
         const t1Open = paperOpen && _cloudActivePath.topic1 === t1Name;
         html += `<div class="cloud-tree-item">
-          <div class="cloud-tree-row lvl3" onclick="cloudTreeClick('topic1',undefined,'${esc(boardName)}','${esc(paperName)}','${esc(t1Name)}')">
+          <div class="cloud-tree-row lvl3 ${t1Open && !_cloudActivePath.topic2 ? 'active' : ''}" onclick="cloudTreeClick('topic1','${esc(pData.subject)}','${esc(boardName)}','${esc(paperName)}','${esc(t1Name)}')">
             <span class="ctr-chev ${t1Open ? 'open' : ''}">▶</span>
             <span class="ctr-ico">📌</span>
             <span class="ctr-label">${esc(t1Name)}</span>
@@ -5616,7 +5735,6 @@ function renderCloudTree(data, filterText) {
         for (const t2Name of Object.keys(t1Data.subtopics)) {
           const t2Count = t1Data.subtopics[t2Name];
           const t2Active = t1Open && _cloudActivePath.topic2 === t2Name;
-          // 保存 subject 信息用于查询（从 pData.subject）
           html += `<div class="cloud-tree-row lvl4 ${t2Active ? 'active' : ''}"
               onclick="cloudTreeClick('topic2','${esc(pData.subject)}','${esc(boardName)}','${esc(paperName)}','${esc(t1Name)}','${esc(t2Name)}')">
             <span class="ctr-ico">🔖</span>
@@ -5652,7 +5770,7 @@ function esc(s) {
 
 // ── 目录树点击：激活路径并加载题目 ──
 function cloudTreeClick(level, subject, board, paper, topic1, topic2) {
-  _cloudActivePath = {board, paper, topic1, topic2};
+  _cloudActivePath = {subject, board, paper, topic1, topic2};
   _cloudActiveLibWb = null;   // 清除题册激活状态
   _cloudQPage = 1;
   _cloudDiffFilter = '';
@@ -5667,8 +5785,9 @@ function cloudTreeClick(level, subject, board, paper, topic1, topic2) {
   // 更新面包屑
   updateCloudBreadcrumb(level, subject, board, paper, topic1, topic2);
 
-  // 加载题目（用 subject 做查询参数，但不在树中展示）
-  loadCloudQuestions(subject || '', board, paper || '', topic1 || '', topic2 || '', 1);
+  // 加载题目（用 subject 做查询参数）
+  // board 级别和 paper 级别点击时不传 topic1/topic2，让后端返回该层级全部题目
+  loadCloudQuestions(subject || '', board || '', paper || '', topic1 || '', topic2 || '', 1);
 }
 
 function updateCloudBreadcrumb(level, subject, board, paper, topic1, topic2) {
@@ -5676,11 +5795,22 @@ function updateCloudBreadcrumb(level, subject, board, paper, topic1, topic2) {
   let parts = [
     `<span class="cloud-bc-item" onclick="loadCloudAllOverview()">☁️ 全部</span>`
   ];
-  if (board)   parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(1,undefined,'${esc(board)}')">${esc(board)}</span>`);
-  if (paper)   parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(2,'${esc(subject||'')}','${esc(board)}','${esc(paper)}')">${esc(paper)}</span>`);
-  if (topic1)  parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(3,'${esc(subject||'')}','${esc(board)}','${esc(paper)}','${esc(topic1)}')">${esc(topic1)}</span>`);
-  if (topic2)  parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item active">${esc(topic2)}</span>`);
-
+  const isLeaf = (l) => l === level;
+  if (board)  {
+    const active = isLeaf('board') ? 'active' : '';
+    parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item ${active}" onclick="cloudBcClick(1,'','${esc(board)}')">${esc(board)}</span>`);
+  }
+  if (paper)  {
+    const active = isLeaf('paper') ? 'active' : '';
+    parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item ${active}" onclick="cloudBcClick(2,'${esc(subject||'')}','${esc(board)}','${esc(paper)}')">${esc(paper)}</span>`);
+  }
+  if (topic1) {
+    const active = isLeaf('topic1') ? 'active' : '';
+    parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item ${active}" onclick="cloudBcClick(3,'${esc(subject||'')}','${esc(board)}','${esc(paper||'')}','${esc(topic1)}')">${esc(topic1)}</span>`);
+  }
+  if (topic2) {
+    parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item active">${esc(topic2)}</span>`);
+  }
   bc.innerHTML = parts.join('');
 }
 
@@ -5695,10 +5825,8 @@ async function loadCloudAllOverview() {
   _cloudActiveLibWb = null;
   document.getElementById('cloudBreadcrumb').innerHTML =
     '<span class="cloud-bc-item active">☁️ 全部题目</span>';
-  document.getElementById('cloudEmptyHint') &&
-    (document.getElementById('cloudEmptyHint').style.display = '');
   document.getElementById('cloudQGrid').innerHTML =
-    '<div style="grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--g400)" id="cloudEmptyHint"><div style="font-size:48px;margin-bottom:12px">☁️</div><div style="font-size:16px;font-weight:700;margin-bottom:6px">点击左侧目录查看题目</div><div style="font-size:12px">或点击「刷新统计」查看云端数据总量</div></div>';
+    '<div class="cloud-empty-state" id="cloudEmptyHint"><div class="cloud-empty-icon">☁️</div><div class="cloud-empty-title">点击左侧目录查看题目</div><div class="cloud-empty-sub">或点击「刷新」查看题库总量</div></div>';
   document.getElementById('cloudPagination').style.display = 'none';
   document.getElementById('cloudQToolbar').style.display = 'none';
   if (_cloudTreeData) renderCloudTree(_cloudTreeData);
@@ -5707,10 +5835,11 @@ async function loadCloudAllOverview() {
 // ── 加载题目列表 ──
 async function loadCloudQuestions(subject, board, paper, topic1, topic2, page) {
   const grid = document.getElementById('cloudQGrid');
-  grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--g400)"><div class="spin">⏳</div></div>';
+  grid.innerHTML = '<div class="cloud-empty-state"><div class="cloud-empty-icon">⏳</div><div class="cloud-empty-title">加载中...</div></div>';
   document.getElementById('cloudPagination').style.display = 'none';
 
-  const params = new URLSearchParams({ board: board || '', page: page || 1, per_page: 30 });
+  const params = new URLSearchParams({ page: page || 1, per_page: 30 });
+  if (board)   params.set('board', board);
   if (subject) params.set('subject', subject);
   if (paper)   params.set('maths_unit', paper);
   if (topic1)  params.set('topic1', topic1);
@@ -5718,7 +5847,9 @@ async function loadCloudQuestions(subject, board, paper, topic1, topic2, page) {
 
   try {
     const r = await fetch('/api/cloud_library/questions?' + params);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
+    if (d.error) throw new Error(d.error);
     _cloudAllQuestions = d.questions || [];
     _cloudQTotal = d.total || 0;
     _cloudQPage  = d.page  || 1;
@@ -5729,14 +5860,14 @@ async function loadCloudQuestions(subject, board, paper, topic1, topic2, page) {
     renderCloudQGrid(_cloudAllQuestions);
     renderCloudPagination(d.page, d.pages, subject, board, paper, topic1, topic2);
   } catch(e) {
-    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:#dc2626">加载失败: ${e.message}</div>`;
+    grid.innerHTML = `<div class="cloud-empty-state"><div class="cloud-empty-icon">⚠️</div><div class="cloud-empty-title">加载失败</div><div class="cloud-empty-sub">${e.message}</div></div>`;
   }
 }
 
 function renderCloudQGrid(questions) {
   const grid = document.getElementById('cloudQGrid');
   if (!questions || questions.length === 0) {
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--g400)"><div style="font-size:40px;margin-bottom:12px">📭</div><div style="font-size:14px;font-weight:600">此分类暂无题目</div></div>';
+    grid.innerHTML = '<div class="cloud-empty-state"><div class="cloud-empty-icon">📭</div><div class="cloud-empty-title">此分类暂无题目</div><div class="cloud-empty-sub">尝试选择其他分类或知识点</div></div>';
     return;
   }
 
@@ -5747,7 +5878,7 @@ function renderCloudQGrid(questions) {
   }
 
   if (filtered.length === 0) {
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--g400)">当前难度筛选无结果</div>';
+    grid.innerHTML = '<div class="cloud-empty-state"><div class="cloud-empty-icon">🔍</div><div class="cloud-empty-title">当前难度筛选无结果</div></div>';
     return;
   }
 
@@ -5759,30 +5890,30 @@ function renderCloudQGrid(questions) {
     const diffStyle = diff && diffColors[diff]
       ? `background:${diffColors[diff].split(':')[0]};color:${diffColors[diff].split(':')[1]}`
       : 'background:var(--g200);color:var(--g600)';
-    const diffText = diff ? diffLabels[diff] : '未评级';
-    const topicTags = (q.topics || []).slice(0, 2).map(t =>
-      `<span class="cloud-qcard-tag" style="background:#e0f2fe;color:#0369a1;font-size:9px">${esc(t.title || t.id || '')}</span>`
-    ).join('');
-    const dateTag  = q.exam_date   ? `<span class="cloud-qcard-tag" style="background:#fef3c7;color:#92400e">${esc(q.exam_date)}</span>` : '';
-    const boardTag = `<span class="cloud-qcard-tag" style="background:#f3e8ff;color:#7c3aed">${esc(q.board || '')}</span>`;
-    const paperTag = q.maths_unit  ? `<span class="cloud-qcard-tag" style="background:#ecfdf5;color:#065f46;font-weight:600">${esc(q.maths_unit)}</span>` : '';
+    const diffText = diff ? diffLabels[diff] : '—';
+    const dateTag  = q.exam_date ? `<span class="cloud-qcard-tag" style="background:#fef3c7;color:#92400e">${esc(q.exam_date)}</span>` : '';
+    const boardTag = q.board ? `<span class="cloud-qcard-tag" style="background:#f3e8ff;color:#7c3aed">${esc(q.board)}</span>` : '';
+    const paperTag = q.maths_unit ? `<span class="cloud-qcard-tag" style="background:#ecfdf5;color:#065f46;font-weight:700">${esc(q.maths_unit)}</span>` : '';
+    const hasAns   = q.has_answer_image ? '<div class="cloud-qcard-has-ans" title="有答案">✓</div>' : '';
+    const topicText = q.topic1
+      ? `<div class="cloud-qcard-topic">${esc(q.topic1)}${q.topic2 && q.topic2!==q.topic1 ? ' › '+esc(q.topic2) : ''}</div>`
+      : '';
 
-    return `<div class="cloud-qcard" data-qid="${q.qid}">
-      <button class="cloud-qcard-del" onclick="deleteCloudQuestion('${q.qid}','${esc(q.subject||'')}','${esc(q.board||'')}','${esc(q.topic1||'')}','${esc(q.topic2||'')}',event)" title="删除此题">✕</button>
+    return `<div class="cloud-qcard" data-qid="${q.qid}" onclick="cloudQCardClick('${q.qid}',event)">
+      <div class="cloud-qcard-actions">
+        <button class="cloud-qcard-btn edit" onclick="openCloudEditMo('${q.qid}',event)" title="编辑/管理">✏️</button>
+        <button class="cloud-qcard-btn del" onclick="deleteCloudQuestion('${q.qid}','${esc(q.subject||'')}','${esc(q.board||'')}','${esc(q.topic1||'')}','${esc(q.topic2||'')}',event)" title="删除">✕</button>
+      </div>
+      ${hasAns}
       <img class="cloud-qcard-img" src="/api/cloud_library/image/${q.qid}" alt="Q${q.q_num||''}"
            loading="lazy" onerror="this.style.background='#f3f4f6';this.alt='图片加载失败'">
       <div class="cloud-qcard-body">
         <div class="cloud-qcard-meta">
-          ${boardTag}
-          ${paperTag}
+          ${boardTag}${paperTag}
           <span class="cloud-qcard-tag" style="${diffStyle}">${diffText}</span>
           ${dateTag}
         </div>
-        <div style="font-size:10px;color:var(--g600);margin-bottom:3px">
-          ${q.topic1 ? `<span style="font-weight:600">${esc(q.topic1)}</span>` : ''}
-          ${q.topic2 && q.topic2 !== q.topic1 ? ` › <span>${esc(q.topic2)}</span>` : ''}
-        </div>
-        <div class="cloud-qcard-topics">${topicTags}</div>
+        ${topicText}
       </div>
     </div>`;
   }).join('');
@@ -5793,7 +5924,188 @@ function cloudFilterChange() {
   renderCloudQGrid(_cloudAllQuestions);
 }
 
-function renderCloudPagination(page, pages, subject, board, paper, topic1, topic2) {
+// ── 卡片点击（预览大图）──
+function cloudQCardClick(qid, e) {
+  if (e.target.closest('.cloud-qcard-btn')) return; // 忽略操作按钮
+  // 打开大图预览
+  const img = document.querySelector(`.cloud-qcard[data-qid="${qid}"] .cloud-qcard-img`);
+  if (img && img.src) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+    overlay.innerHTML = `<img src="${img.src}" style="max-width:90%;max-height:90%;border-radius:8px;box-shadow:0 20px 60px rgba(0,0,0,.5)">`;
+    overlay.onclick = () => document.body.removeChild(overlay);
+    document.body.appendChild(overlay);
+  }
+}
+
+// ── 题目管理弹窗 ──
+let _cloudEditQid = null;
+let _cloudEditQ   = null;
+
+async function openCloudEditMo(qid, e) {
+  if (e) e.stopPropagation();
+  _cloudEditQid = qid;
+  // 找到这道题的数据
+  _cloudEditQ = _cloudAllQuestions.find(q => q.qid === qid) || null;
+  if (!_cloudEditQ) { toast('找不到题目数据', 'err'); return; }
+
+  const q = _cloudEditQ;
+  const diffLabels = {1:'★ 入门',2:'★★ 基础',3:'★★★ 中等',4:'★★★★ 较难',5:'★★★★★ 挑战'};
+  const diffOpts = [0,1,2,3,4,5].map(d =>
+    `<option value="${d}" ${(q.difficulty||0)==d?'selected':''}>${d===0?'— 未评级 —':diffLabels[d]}</option>`
+  ).join('');
+
+  const subjectOpts = ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology',
+    '高数 Further Maths','经济 Economics','商业 Business','会计 Accounting','竞赛物理 BPHO']
+    .map(s => `<option value="${s}" ${q.subject===s?'selected':''}>${s}</option>`).join('');
+
+  const boardOpts = ['CAIE','Edexcel','AQA','OCR','IB','AP','BPHO']
+    .map(b => `<option value="${b}" ${q.board===b?'selected':''}>${b}</option>`).join('');
+
+  const imgSrc = `/api/cloud_library/image/${qid}?t=${Date.now()}`;
+  const ansSrc = q.has_answer_image ? `/api/cloud_library/answer/${qid}?t=${Date.now()}` : '';
+
+  document.getElementById('cloudEditContent').innerHTML = `
+    <!-- 图片管理 -->
+    <div class="cloud-edit-img-wrap">
+      <div>
+        <div class="cloud-edit-img-block" id="editQImgBlock">
+          <img src="${imgSrc}" id="editQImg" onerror="this.src='';this.style.minHeight='80px'">
+          <div class="cloud-edit-img-label">
+            <span>📝 题目图片</span>
+            <label class="cloud-edit-img-replace" style="cursor:pointer">
+              🔄 替换
+              <input type="file" accept="image/*" style="display:none" onchange="previewReplaceImg(this,'editQImg','q')">
+            </label>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="cloud-edit-img-block" id="editAnsImgBlock">
+          <img src="${ansSrc||''}" id="editAnsImg" style="${ansSrc?'':'min-height:80px'}" onerror="this.src='';this.style.minHeight='80px'">
+          <div class="cloud-edit-img-label">
+            <span>📋 答案图片</span>
+            <label class="cloud-edit-img-replace" style="cursor:pointer">
+              ${ansSrc ? '🔄 替换' : '➕ 上传'}
+              <input type="file" accept="image/*" style="display:none" onchange="previewReplaceImg(this,'editAnsImg','ans')">
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 元数据编辑 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="cloud-edit-field">
+        <label>📚 学科</label>
+        <select id="editSubject">${subjectOpts}</select>
+      </div>
+      <div class="cloud-edit-field">
+        <label>🏛️ 考试局</label>
+        <select id="editBoard">${boardOpts}</select>
+      </div>
+      <div class="cloud-edit-field">
+        <label>📌 知识点一级</label>
+        <input type="text" id="editTopic1" value="${esc(q.topic1||'')}" placeholder="如 Mechanics">
+      </div>
+      <div class="cloud-edit-field">
+        <label>🔖 知识点二级</label>
+        <input type="text" id="editTopic2" value="${esc(q.topic2||'')}" placeholder="如 Kinematics">
+      </div>
+      <div class="cloud-edit-field">
+        <label>📄 Paper 分类</label>
+        <input type="text" id="editPaper" value="${esc(q.maths_unit||'')}" placeholder="如 P1, M1">
+      </div>
+      <div class="cloud-edit-field">
+        <label>⭐ 难度</label>
+        <select id="editDifficulty">${diffOpts}</select>
+      </div>
+    </div>
+    <input type="hidden" id="editPendingQImg" value="">
+    <input type="hidden" id="editPendingAnsImg" value="">
+  `;
+  document.getElementById('cloudEditMo').classList.add('show');
+}
+
+// 预览替换图片（前端本地预览，不立即上传）
+function previewReplaceImg(input, imgId, type) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const b64 = e.target.result.split(',')[1];
+    document.getElementById(imgId).src = e.target.result;
+    if (type === 'q')   document.getElementById('editPendingQImg').value = b64;
+    if (type === 'ans') document.getElementById('editPendingAnsImg').value = b64;
+  };
+  reader.readAsDataURL(file);
+}
+
+// 保存题目编辑
+async function saveCloudEdit() {
+  const btn = document.getElementById('btnSaveCloudEdit');
+  btn.disabled = true; btn.textContent = '⏳ 保存中...';
+  const qid = _cloudEditQid;
+  const q   = _cloudEditQ;
+  try {
+    const pendingQ   = document.getElementById('editPendingQImg').value;
+    const pendingAns = document.getElementById('editPendingAnsImg').value;
+
+    // 替换题目图片
+    if (pendingQ) {
+      const r1 = await fetch(`/api/cloud_library/replace_image/${qid}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({img_b64: pendingQ})
+      });
+      if (!(await r1.json()).ok) throw new Error('题目图片替换失败');
+    }
+
+    // 替换答案图片
+    if (pendingAns) {
+      const r2 = await fetch(`/api/cloud_library/replace_answer/${qid}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({img_b64: pendingAns})
+      });
+      if (!(await r2.json()).ok) throw new Error('答案图片替换失败');
+    }
+
+    // 更新元数据
+    const topic1 = document.getElementById('editTopic1').value.trim();
+    const topic2 = document.getElementById('editTopic2').value.trim();
+    const diff   = parseInt(document.getElementById('editDifficulty').value) || null;
+    const subj   = document.getElementById('editSubject').value;
+    const board  = document.getElementById('editBoard').value;
+    const paper  = document.getElementById('editPaper').value.trim();
+
+    const r3 = await fetch(`/api/cloud_library/update_question/${qid}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        topic1, topic2,
+        difficulty: diff,
+        subject: q.subject || '',
+        board:   q.board   || '',
+        new_subject: subj,
+        new_board: board,
+        maths_unit: paper
+      })
+    });
+    const d3 = await r3.json();
+    if (!d3.ok) throw new Error(d3.error || '元数据更新失败');
+
+    toast('题目已更新', 'ok');
+    closeModal('cloudEditMo');
+
+    // 刷新当前视图
+    const ap = _cloudActivePath;
+    loadCloudQuestions(ap.subject||'', ap.board||'', ap.paper||'', ap.topic1||'', ap.topic2||'', _cloudQPage);
+    setTimeout(loadCloudStats, 300);
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '💾 保存修改';
+  }
+}
+
+
   const pg = document.getElementById('cloudPagination');
   if (pages <= 1) { pg.style.display = 'none'; return; }
   pg.style.display = 'flex';
@@ -5803,11 +6115,11 @@ function renderCloudPagination(page, pages, subject, board, paper, topic1, topic
   const start = Math.max(1, page - 2);
   const end   = Math.min(pages, page + 2);
   for (let p = start; p <= end; p++) {
-    html += `<button class="btn btn-sm ${p===page?'btn-primary':'btn-outline'}"
+    html += `<button class="btn btn-sm ${p===page?'':'btn-outline'}" style="${p===page?'background:#4f46e5;color:#fff;':''}"
       onclick="loadCloudQuestions('${esc(subject)}','${esc(board)}','${esc(paper||'')}','${esc(topic1||'')}','${esc(topic2||'')}',${p})">${p}</button>`;
   }
   if (page < pages) html += `<button class="btn btn-outline btn-sm" onclick="loadCloudQuestions('${esc(subject)}','${esc(board)}','${esc(paper||'')}','${esc(topic1||'')}','${esc(topic2||'')}',${page+1})">▶</button>`;
-  html += `<span style="font-size:12px;color:var(--g400)">共 ${pages} 页</span>`;
+  html += `<span style="font-size:11px;color:var(--g400)">共 ${pages} 页</span>`;
   pg.innerHTML = html;
 }
 

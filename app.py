@@ -9597,8 +9597,8 @@ def load_workbook():
 # ── 学科配置 ──
 _CLOUD_SUBJECTS = ['数学 Maths', '物理 Physics', '化学 Chemistry',
                    '生物 Biology', '高数 Further Maths', '经济 Economics',
-                   '商业 Business', '会计 Accounting']
-_CLOUD_BOARDS   = ['CAIE', 'Edexcel', 'AQA', 'OCR', 'IB', 'AP']
+                   '商业 Business', '会计 Accounting', '竞赛物理 BPHO']
+_CLOUD_BOARDS   = ['CAIE', 'Edexcel', 'AQA', 'OCR', 'IB', 'AP', 'BPHO']
 
 # 知识点树：从现有 syllabus JSON 中加载（cambridge / edexcel_maths），
 # 运行时根据 board+subject 动态确定使用哪套知识点
@@ -9658,22 +9658,65 @@ def _cloud_stats_key() -> str:
 
 def _list_cloud_questions(subject: str, board: str,
                           topic1: str = '', topic2: str = '') -> list:
-    """列出指定路径下所有题目元数据（JSON文件）的 key 列表。"""
-    prefix = _cloud_prefix(subject, board, topic1, topic2)
+    """列出指定路径下所有题目元数据（JSON文件）的 key 列表。
+    修复：当 topic1/topic2 存在时，需要穿透 maths_unit 层级进行搜索，
+    因为实际存储路径为 cloud_db/{subject}/{board}/{maths_unit}/{topic1}/{topic2}/。
+    策略：先获取 board 级别的全部 keys，再用元数据字段过滤。
+    """
     if storage.is_r2_mode():
-        prefix_key = prefix + '/'
-        all_keys   = storage.list_prefix(prefix_key)
-        return [k for k in all_keys if k.endswith('.json') and not k.endswith('_meta.json')]
-    else:
-        results = []
-        if not os.path.isdir(prefix):
+        if topic1 or topic2:
+            # 需要穿透 maths_unit 层：先拿 board 下所有 json
+            base_prefix = _cloud_prefix(subject, board) + '/'
+            all_keys = storage.list_prefix(base_prefix)
+            candidates = [k for k in all_keys if k.endswith('.json') and not k.endswith('_meta.json')]
+            # 再按元数据过滤
+            results = []
+            for key in candidates:
+                q = _load_cloud_question(key)
+                if not q:
+                    continue
+                if topic1 and q.get('topic1', '') != topic1:
+                    continue
+                if topic2 and q.get('topic2', '') != topic2:
+                    continue
+                results.append(key)
             return results
+        else:
+            prefix = _cloud_prefix(subject, board, topic1, topic2)
+            prefix_key = prefix + '/'
+            all_keys   = storage.list_prefix(prefix_key)
+            return [k for k in all_keys if k.endswith('.json') and not k.endswith('_meta.json')]
+    else:
         import glob as _glob
-        pattern = os.path.join(prefix, '**', '*.json')
-        for fp in _glob.glob(pattern, recursive=True):
-            if not os.path.basename(fp).startswith('_'):
+        if topic1 or topic2:
+            # 穿透 maths_unit 层：从 board 目录扫全部
+            base_prefix = _cloud_prefix(subject, board)
+            results = []
+            if not os.path.isdir(base_prefix):
+                return results
+            pattern = os.path.join(base_prefix, '**', '*.json')
+            for fp in _glob.glob(pattern, recursive=True):
+                if os.path.basename(fp).startswith('_'):
+                    continue
+                q = _load_cloud_question(fp)
+                if not q:
+                    continue
+                if topic1 and q.get('topic1', '') != topic1:
+                    continue
+                if topic2 and q.get('topic2', '') != topic2:
+                    continue
                 results.append(fp)
-        return results
+            return results
+        else:
+            prefix = _cloud_prefix(subject, board, topic1, topic2)
+            results = []
+            if not os.path.isdir(prefix):
+                return results
+            pattern = os.path.join(prefix, '**', '*.json')
+            for fp in _glob.glob(pattern, recursive=True):
+                if not os.path.basename(fp).startswith('_'):
+                    results.append(fp)
+            return results
 
 
 def _load_cloud_question(key: str) -> dict | None:
@@ -10012,26 +10055,23 @@ def cloud_library_questions():
     """
     subject    = request.args.get('subject', '')
     board      = request.args.get('board', '')
-    maths_unit = request.args.get('maths_unit', '')  # Task2: paper 层过滤
+    maths_unit = request.args.get('maths_unit', '')  # paper 层过滤
     topic1     = request.args.get('topic1', '')
     topic2     = request.args.get('topic2', '')
     page       = max(1, int(request.args.get('page', 1)))
     per_page   = min(100, int(request.args.get('per_page', 30)))
 
-    if not board:
-        return jsonify({'error': '必须提供 board'}), 400
-
     # 若未指定 subject，则遍历所有 subject 合并结果
-    if subject:
-        subjects_to_query = [subject]
-    else:
-        subjects_to_query = _CLOUD_SUBJECTS  # 遍历全部 subject
+    subjects_to_query = [subject] if subject else _CLOUD_SUBJECTS
+    # 若未指定 board，则遍历所有 board
+    boards_to_query = [board] if board else _CLOUD_BOARDS
 
     keys = []
     for subj in subjects_to_query:
-        keys.extend(_list_cloud_questions(subj, board, topic1, topic2))
+        for brd in boards_to_query:
+            keys.extend(_list_cloud_questions(subj, brd, topic1, topic2))
 
-    # Task2: 如果指定了 maths_unit，则按 maths_unit 过滤
+    # 如果指定了 maths_unit，则按 maths_unit 过滤（元数据字段）
     if maths_unit:
         filtered_keys = []
         for key in keys:
@@ -10051,6 +10091,10 @@ def cloud_library_questions():
         if q:
             # 附上图片 URL（供前端展示）
             q['img_url'] = f'/api/cloud_library/image/{q.get("qid", "")}'
+            # 附上答案图片URL
+            qid = q.get('qid', '')
+            if qid and q.get('has_answer_image'):
+                q['ans_url'] = f'/api/cloud_library/answer/{qid}'
             questions.append(q)
 
     return jsonify({
@@ -10105,7 +10149,229 @@ def cloud_library_delete_question(qid):
     return jsonify({'ok': True})
 
 
-# ── API: 清空整个云端题库（危险操作，需要确认参数）──
+# ── API: 获取题目答案图片 ──
+@app.route('/api/cloud_library/answer/<qid>', methods=['GET'])
+def cloud_library_answer_image(qid):
+    """返回云端题库中指定题目的答案图片（JPEG）。"""
+    qid = re.sub(r'[^A-Za-z0-9\-_]', '', qid)
+    ans_key = _cloud_ans_img_key(qid)
+    if storage.is_r2_mode():
+        data = storage.load_bytes(ans_key)
+        if not data:
+            return jsonify({'error': '答案图片不存在'}), 404
+        return send_file(io.BytesIO(data), mimetype='image/jpeg')
+    else:
+        if not os.path.isfile(ans_key):
+            return jsonify({'error': '答案图片不存在'}), 404
+        return send_file(ans_key, mimetype='image/jpeg')
+
+
+# ── API: 更新云端题目元数据（知识点/难度等）──
+@app.route('/api/cloud_library/update_question/<qid>', methods=['POST'])
+def cloud_library_update_question(qid):
+    """
+    更新云端题目的元数据（knowledge points, difficulty 等）。
+    请求体：{
+      topic1: str (可选),
+      topic2: str (可选),
+      difficulty: int (可选),
+      subject: str (可选, 旧值用于定位文件),
+      board: str (可选, 旧值用于定位文件)
+    }
+    """
+    qid = re.sub(r'[^A-Za-z0-9\-_]', '', qid)
+    data = request.json or {}
+
+    # 先找到这道题（遍历所有路径找 qid 匹配的 JSON）
+    found_key = None
+    found_q   = None
+
+    old_subject = data.get('subject', '')
+    old_board   = data.get('board', '')
+
+    subjs = [old_subject] if old_subject else _CLOUD_SUBJECTS
+    brds  = [old_board]   if old_board   else _CLOUD_BOARDS
+
+    for subj in subjs:
+        for brd in brds:
+            keys = _list_cloud_questions(subj, brd, '', '')
+            for key in keys:
+                # 从 key 路径中提取 qid（文件名去掉 .json）
+                fname = key.replace('\\', '/').rstrip('/')
+                fname = fname.rsplit('/', 1)[-1] if '/' in fname else fname
+                if fname == f'{qid}.json':
+                    found_key = key
+                    found_q   = _load_cloud_question(key)
+                    break
+            if found_key:
+                break
+        if found_key:
+            break
+
+    if not found_q:
+        return jsonify({'error': f'未找到题目 {qid}'}), 404
+
+    # 更新字段
+    if 'topic1' in data and data['topic1']:
+        found_q['topic1'] = data['topic1'].strip()
+    if 'topic2' in data:
+        found_q['topic2'] = data['topic2'].strip()
+    if 'difficulty' in data and data['difficulty'] is not None:
+        found_q['difficulty'] = int(data['difficulty'])
+    if 'maths_unit' in data:
+        found_q['maths_unit'] = data['maths_unit'].strip()
+
+    # 检查是否需要移动到新路径（topic1/topic2/subject/board 变化）
+    new_subject    = data.get('new_subject', found_q.get('subject', ''))
+    new_board      = data.get('new_board', found_q.get('board', ''))
+    new_topic1     = found_q.get('topic1', '未分类')
+    new_topic2     = found_q.get('topic2', '')
+    new_maths_unit = found_q.get('maths_unit', '')
+
+    found_q['subject'] = new_subject
+    found_q['board']   = new_board
+
+    # 计算新 key
+    new_key = _cloud_prefix(new_subject, new_board, new_topic1, new_topic2,
+                             qid=qid, maths_unit=new_maths_unit)
+    if not new_key.endswith('.json'):
+        sep = '/' if storage.is_r2_mode() else os.sep
+        new_key = new_key + sep + f'{qid}.json'
+
+    # 保存到新位置
+    _save_cloud_question(new_key, found_q)
+
+    # 若位置变了，删除旧文件
+    if found_key != new_key:
+        if storage.is_r2_mode():
+            try: storage.delete_object(found_key)
+            except Exception: pass
+        else:
+            try: os.remove(found_key)
+            except Exception: pass
+
+    _invalidate_stats()
+    return jsonify({'ok': True, 'qid': qid})
+
+
+# ── API: 替换题目图片 ──
+@app.route('/api/cloud_library/replace_image/<qid>', methods=['POST'])
+def cloud_library_replace_image(qid):
+    """
+    替换云端题目的题目图片（上传新的图片文件或 base64）。
+    请求体支持：
+      - multipart/form-data: 文件字段 'image'
+      - application/json: {'img_b64': '...'}
+    """
+    import base64 as _b64
+    qid = re.sub(r'[^A-Za-z0-9\-_]', '', qid)
+
+    img_bytes = None
+    if request.content_type and 'multipart' in request.content_type:
+        f = request.files.get('image')
+        if not f:
+            return jsonify({'error': '未提供图片'}), 400
+        img_bytes = f.read()
+    else:
+        body = request.json or {}
+        b64 = body.get('img_b64', '')
+        if not b64:
+            return jsonify({'error': '未提供图片数据'}), 400
+        try:
+            img_bytes = _b64.b64decode(b64)
+        except Exception:
+            return jsonify({'error': 'base64 解码失败'}), 400
+
+    # 转换为 JPEG
+    try:
+        from PIL import Image as _PIL
+        im = _PIL.open(io.BytesIO(img_bytes))
+        buf = io.BytesIO()
+        im.convert('RGB').save(buf, format='JPEG', quality=88)
+        img_bytes = buf.getvalue()
+    except Exception as e:
+        return jsonify({'error': f'图片处理失败: {e}'}), 400
+
+    # 保存
+    img_key = _cloud_img_key(qid)
+    try:
+        if storage.is_r2_mode():
+            storage.store_bytes(img_key, img_bytes)
+        else:
+            os.makedirs(os.path.dirname(img_key), exist_ok=True)
+            with open(img_key, 'wb') as f:
+                f.write(img_bytes)
+        return jsonify({'ok': True, 'qid': qid})
+    except Exception as e:
+        return jsonify({'error': f'保存失败: {e}'}), 500
+
+
+# ── API: 替换题目答案图片 ──
+@app.route('/api/cloud_library/replace_answer/<qid>', methods=['POST'])
+def cloud_library_replace_answer(qid):
+    """
+    替换云端题目的答案图片。
+    请求体支持：
+      - multipart/form-data: 文件字段 'image'
+      - application/json: {'img_b64': '...'}
+    同时更新元数据中的 has_answer_image 字段。
+    """
+    import base64 as _b64
+    qid = re.sub(r'[^A-Za-z0-9\-_]', '', qid)
+
+    img_bytes = None
+    if request.content_type and 'multipart' in request.content_type:
+        f = request.files.get('image')
+        if not f:
+            return jsonify({'error': '未提供图片'}), 400
+        img_bytes = f.read()
+    else:
+        body = request.json or {}
+        b64 = body.get('img_b64', '')
+        if not b64:
+            return jsonify({'error': '未提供图片数据'}), 400
+        try:
+            img_bytes = _b64.b64decode(b64)
+        except Exception:
+            return jsonify({'error': 'base64 解码失败'}), 400
+
+    # 转换为 JPEG
+    try:
+        from PIL import Image as _PIL
+        im = _PIL.open(io.BytesIO(img_bytes))
+        buf = io.BytesIO()
+        im.convert('RGB').save(buf, format='JPEG', quality=88)
+        img_bytes = buf.getvalue()
+    except Exception as e:
+        return jsonify({'error': f'图片处理失败: {e}'}), 400
+
+    # 保存答案图片
+    ans_key = _cloud_ans_img_key(qid)
+    try:
+        if storage.is_r2_mode():
+            storage.store_bytes(ans_key, img_bytes)
+        else:
+            os.makedirs(os.path.dirname(ans_key), exist_ok=True)
+            with open(ans_key, 'wb') as f:
+                f.write(img_bytes)
+    except Exception as e:
+        return jsonify({'error': f'保存失败: {e}'}), 500
+
+    # 更新元数据 has_answer_image 标记
+    for subj in _CLOUD_SUBJECTS:
+        for brd in _CLOUD_BOARDS:
+            keys = _list_cloud_questions(subj, brd, '', '')
+            for key in keys:
+                fname = key.replace('\\', '/').rstrip('/')
+                fname = fname.rsplit('/', 1)[-1] if '/' in fname else fname
+                if fname == f'{qid}.json':
+                    q = _load_cloud_question(key)
+                    if q:
+                        q['has_answer_image'] = True
+                        _save_cloud_question(key, q)
+                    return jsonify({'ok': True, 'qid': qid})
+
+    return jsonify({'ok': True, 'qid': qid, 'note': '元数据未找到，但图片已保存'})
 @app.route('/api/cloud_library/clear_all', methods=['POST'])
 def cloud_library_clear_all():
     """
