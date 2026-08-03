@@ -6317,91 +6317,155 @@ _DIFF_NAME_MAP = {
 
 def _detect_exported_pdf_header(page):
     """
-    检测页面是否有本工具导出的深蓝色头栏，并提取题号、难度、知识点ID。
+    检测页面是否有本工具导出的头栏，并提取题号、难度、知识点ID。
 
-    检测策略（全新版本）：
-    1. 找页面上第一张图片的 y0 坐标
-       - img.y0 > 60：说明图片上方有头栏 → 进行文字提取
-       - img.y0 <= 60：无头栏（exported without q_meta），返回 None
-    2. 用 get_text('text', clip=header_rect) 提取头栏区域的 ASCII 文本
-       （新版导出用 insert_text 写入ASCII文字，可正常提取）
-    3. 解析格式："Q05  |  Medium  |  *P3-4  Differentiation"
-       - Q(\\d+) → 题号
-       - Starter/Basic/Medium/Hard/Expert → 难度
-       - P\\d+-\\d+ → 知识点章节 ID
+    支持两种导出格式：
+    A. 新版（深蓝色色带格式）：
+       - 大题目图片 y0 > 60，图片上方有头栏
+       - 格式："Q05  |  Medium  |  *P3-4  Differentiation"
+    B. 题库册格式（带Logo）：
+       - 右上角有小Logo图片（y0≈39，宽度<400）
+       - 题目大图 y0≈71（排在Logo后面）
+       - 头栏文字格式："· 1 ·  Starter  P4-1.1 Proof by contradiction  June 2020"
 
     返回 (q_num, difficulty, topic_id, topic_title_hint) 或 None。
-    topic_title_hint 是从头栏文本中解析出的章节标题，作为辅助信息。
     """
     MARGIN = 36
-    BAND_H = _EXPORT_HEADER_HEIGHT_PT
 
-    # ── Step 1：找第一张图片的 y0 ──
+    # ── 收集所有图片的位置和尺寸 ──
     img_list = page.get_images(full=False)
     if not img_list:
         return None
 
-    first_img_y0 = None
+    # 收集所有图片的(xref, y0, y1, width, height)
+    img_infos = []
+    doc = page.parent
     for xref, *_ in img_list:
         rects = page.get_image_rects(xref)
         if rects:
+            try:
+                info = doc.extract_image(xref)
+                img_w = info.get('width', 9999)
+                img_h = info.get('height', 9999)
+            except Exception:
+                img_w, img_h = 9999, 9999
             for r in rects:
-                if first_img_y0 is None or r.y0 < first_img_y0:
-                    first_img_y0 = r.y0
-            break
+                img_infos.append((xref, r.y0, r.y1, img_w, img_h, r))
 
-    if first_img_y0 is None:
+    if not img_infos:
         return None
 
-    # img.y0 ≤ 60 说明无头栏（图片紧贴页面顶部 margin）
-    if first_img_y0 <= 60:
-        return None
+    # 按 y0 排序
+    img_infos.sort(key=lambda x: x[1])
 
-    # ── Step 2：提取头栏文字（头栏位于图片上方） ──
-    # 头栏 y 范围：从 MARGIN 到 img.y0 稍上方
-    header_top = MARGIN - 5
-    header_bot = first_img_y0 + 2   # 留一点 padding
-    header_rect = fitz.Rect(0, header_top, page.rect.width, header_bot)
-    raw_text = page.get_text('text', clip=header_rect).strip()
+    # ── 判断格式 ──
+    # 格式B特征：第一张图是小Logo（宽度<400且高度<200且y0<70）
+    #           第二张图是大题目图（y0>60）
+    first_y0    = img_infos[0][1]
+    first_w     = img_infos[0][3]
+    first_h     = img_infos[0][4]
+    is_logo_fmt = (first_y0 <= 70 and first_w < 400 and first_h < 300)
 
-    if not raw_text:
-        # fallback：用 rawdict 颜色法（兼容旧格式）
-        return _detect_header_legacy(page, header_rect)
+    if is_logo_fmt:
+        # ── 格式B：题库册格式（带Logo）──
+        # 找第二张（非Logo）大图的 y0 作为内容起点
+        content_y0 = None
+        for xref, y0, y1, w, h, rect in img_infos[1:]:
+            if w > 400 or h > 200:  # 题目图应该比较大
+                content_y0 = y0
+                break
+        if content_y0 is None and len(img_infos) >= 2:
+            content_y0 = img_infos[1][1]
 
-    # ── Step 3：解析头栏文本 ──
-    # 典型格式："Q05  |  Medium  |  *P3-4  Differentiation"
-    # 也可能带星号（is_core）："Q05  |  ★ Medium  |  *P3-4  Differentiation"
+        # 提取页眉文字（在页面顶部到内容图片之间）
+        header_top = MARGIN - 8
+        header_bot = (content_y0 + 5) if content_y0 else 75
+        header_rect = fitz.Rect(0, header_top, page.rect.width, header_bot)
+        raw_text = page.get_text('text', clip=header_rect).strip()
 
-    # 提取题号
-    q_num_match = re.search(r'\bQ\s*(\d+)\b', raw_text, re.IGNORECASE)
-    if not q_num_match:
-        # 尝试更宽松的数字匹配（兼容旧格式）
-        q_num_match = re.search(r'\b(\d+)\b', raw_text)
-    if not q_num_match:
-        return None
-    q_num = int(q_num_match.group(1))
+        if not raw_text:
+            return None
 
-    # 提取难度
-    difficulty = None
-    text_lower = raw_text.lower()
-    for dname, dval in _DIFF_NAME_MAP.items():
-        if dname in text_lower:
-            difficulty = dval
-            break
+        # 解析格式B的题号：· N · 格式
+        q_num_match = re.search(r'·\s*(\d+)\s*·', raw_text)
+        if not q_num_match:
+            # fallback：Q(数字) 格式
+            q_num_match = re.search(r'\bQ\s*(\d+)\b', raw_text, re.IGNORECASE)
+        if not q_num_match:
+            return None
+        q_num = int(q_num_match.group(1))
 
-    # 提取知识点 ID（格式：P3-4 或 *P3-4）
-    topic_id_match = re.search(r'\*?([A-Z]\d+-\d+)', raw_text)
-    topic_id = topic_id_match.group(1) if topic_id_match else None
+        # 提取难度
+        difficulty = None
+        text_lower = raw_text.lower()
+        for dname, dval in _DIFF_NAME_MAP.items():
+            if dname in text_lower:
+                difficulty = dval
+                break
 
-    # 提取知识点标题（| 后面的文字，去掉ID前缀）
-    topic_title_hint = None
-    if topic_id:
-        # 从 "P3-4  Differentiation" 或 "*P3-4  Differentiation" 中提取标题
-        title_match = re.search(r'\*?' + re.escape(topic_id) + r'\s+(.+)', raw_text)
-        if title_match:
-            topic_title_hint = title_match.group(1).strip()
+        # 提取知识点 ID（格式：P4-1.1 → 用连字符+点号形式，兼容两段式和三段式）
+        # 先尝试完整格式 P4-1.1（三段）
+        topic_id_match = re.search(r'·?\*?([A-Z]\d+-\d+(?:\.\d+)?)', raw_text)
+        topic_id = topic_id_match.group(1) if topic_id_match else None
+        # 归一化：P4-1.1 → P4-1（只保留两段，与系统内部 ID 一致）
+        if topic_id and re.match(r'^[A-Z]\d+-\d+\.\d+$', topic_id):
+            topic_id = re.sub(r'\.\d+$', '', topic_id)
 
-    return q_num, difficulty, topic_id, topic_title_hint
+        # 提取知识点标题（topic_id 之后的文字）
+        topic_title_hint = None
+        raw_topic_match = re.search(r'·?\*?[A-Z]\d+-\d+(?:\.\d+)?\s+(.+?)(?:\s+\d{4}|\s*$)',
+                                    raw_text, re.DOTALL)
+        if raw_topic_match:
+            topic_title_hint = raw_topic_match.group(1).strip()
+            # 清理多余的 / +2 等辅助标注
+            topic_title_hint = re.sub(r'\s*/\s*|\s*\+\d+\s*', ' ', topic_title_hint).strip()
+
+        return q_num, difficulty, topic_id, topic_title_hint
+
+    else:
+        # ── 格式A：原版深蓝色色带格式 ──
+        first_img_y0 = img_infos[0][1]
+
+        # img.y0 ≤ 60 说明无头栏（图片紧贴页面顶部 margin）
+        if first_img_y0 <= 60:
+            return None
+
+        # ── Step 2：提取头栏文字（头栏位于图片上方） ──
+        header_top = MARGIN - 5
+        header_bot = first_img_y0 + 2
+        header_rect = fitz.Rect(0, header_top, page.rect.width, header_bot)
+        raw_text = page.get_text('text', clip=header_rect).strip()
+
+        if not raw_text:
+            # fallback：用 rawdict 颜色法（兼容旧格式）
+            return _detect_header_legacy(page, header_rect)
+
+        # ── Step 3：解析头栏文本 ──
+        # 典型格式："Q05  |  Medium  |  *P3-4  Differentiation"
+        q_num_match = re.search(r'\bQ\s*(\d+)\b', raw_text, re.IGNORECASE)
+        if not q_num_match:
+            q_num_match = re.search(r'\b(\d+)\b', raw_text)
+        if not q_num_match:
+            return None
+        q_num = int(q_num_match.group(1))
+
+        difficulty = None
+        text_lower = raw_text.lower()
+        for dname, dval in _DIFF_NAME_MAP.items():
+            if dname in text_lower:
+                difficulty = dval
+                break
+
+        topic_id_match = re.search(r'\*?([A-Z]\d+-\d+)', raw_text)
+        topic_id = topic_id_match.group(1) if topic_id_match else None
+
+        topic_title_hint = None
+        if topic_id:
+            title_match = re.search(r'\*?' + re.escape(topic_id) + r'\s+(.+)', raw_text)
+            if title_match:
+                topic_title_hint = title_match.group(1).strip()
+
+        return q_num, difficulty, topic_id, topic_title_hint
 
 
 def _detect_header_legacy(page, header_rect):
@@ -6488,6 +6552,44 @@ def _auto_detect_syllabus_type(topic_id):
         if re.match(r'^[A-Z]\d+-\d+', topic_id):
             return 'edexcel_maths'
     return 'unknown'
+
+
+def _find_content_img_y0(page, fallback=76):
+    """
+    找页面上题目内容图片的起始 y 坐标（跳过页眉区域的 Logo 小图）。
+
+    逻辑：
+    - 收集所有图片，按 y0 排序
+    - 如果第一张是小图（宽度<400 且 高度<300，即 Logo），跳过它
+    - 返回第一张"大图"的 y0；若找不到则返回 fallback
+    """
+    doc = page.parent
+    img_infos = []
+    for xref, *_ in page.get_images(full=False):
+        rects = page.get_image_rects(xref)
+        if not rects:
+            continue
+        try:
+            info = doc.extract_image(xref)
+            w, h = info.get('width', 9999), info.get('height', 9999)
+        except Exception:
+            w, h = 9999, 9999
+        for r in rects:
+            img_infos.append((r.y0, w, h))
+
+    if not img_infos:
+        return fallback
+
+    img_infos.sort(key=lambda x: x[0])
+
+    for y0, w, h in img_infos:
+        # 跳过 Logo 类小图（y0<70, 宽<400, 高<300）
+        if y0 <= 70 and w < 400 and h < 300:
+            continue
+        return y0
+
+    # 全是小图的极端情况，返回最后一张的 y0
+    return img_infos[-1][0]
 
 
 def _stitch_pixmaps_vertical(pixmaps):
@@ -6617,19 +6719,9 @@ def import_exported_pdf():
                 PW = pg_obj.rect.width
                 PH = pg_obj.rect.height
 
-                # 找本页图片的真实起始 y（精确裁剪）
-                img_list_pg = pg_obj.get_images(full=False)
-                content_y0 = None
-                if img_list_pg:
-                    for xref, *_ in img_list_pg:
-                        rects = pg_obj.get_image_rects(xref)
-                        if rects:
-                            content_y0 = rects[0].y0
-                            break
-
-                # fallback：如果找不到图片rect，根据 img_y0 > 60 推断
-                if content_y0 is None:
-                    content_y0 = MARGIN + _EXPORT_HEADER_HEIGHT_PT + 14  # ~76
+                # 找本页内容图片的真实起始 y（跳过 Logo 小图）
+                content_y0 = _find_content_img_y0(pg_obj,
+                             fallback=MARGIN + _EXPORT_HEADER_HEIGHT_PT + 14)
 
                 # 裁剪 rect：从图片顶端到页底 margin
                 img_rect = fitz.Rect(MARGIN, content_y0, PW - MARGIN, PH - MARGIN)
@@ -8712,7 +8804,6 @@ def load_workbook():
 
         # ── 提取题目图片（跳过封面页）──
         MARGIN  = 36
-        BAND_H  = _EXPORT_HEADER_HEIGHT_PT
         mat     = fitz.Matrix(2.0, 2.0)
 
         page_info = []
@@ -8724,27 +8815,46 @@ def load_workbook():
             if result is None:
                 if page_info:
                     page_info.append({
-                        'q_num':    page_info[-1]['q_num'],
-                        'page_obj': page,
+                        'q_num':      page_info[-1]['q_num'],
+                        'difficulty': page_info[-1]['difficulty'],
+                        'topic_id':   page_info[-1]['topic_id'],
+                        'topic_hint': page_info[-1]['topic_hint'],
+                        'page_obj':   page,
                     })
             else:
-                q_num, _, _ = result
-                page_info.append({'q_num': q_num, 'page_obj': page})
+                q_num, difficulty, topic_id, topic_hint = result
+                page_info.append({
+                    'q_num':      q_num,
+                    'difficulty': difficulty,
+                    'topic_id':   topic_id,
+                    'topic_hint': topic_hint,
+                    'page_obj':   page,
+                })
 
         from collections import OrderedDict
         q_groups = OrderedDict()
         for pi in page_info:
             qn = pi['q_num']
-            q_groups.setdefault(qn, []).append(pi['page_obj'])
+            if qn not in q_groups:
+                q_groups[qn] = {
+                    'difficulty': pi['difficulty'],
+                    'topic_id':   pi['topic_id'],
+                    'topic_hint': pi['topic_hint'],
+                    'pages':      [],
+                }
+            q_groups[qn]['pages'].append(pi['page_obj'])
 
         edx_syllabus = _load_edexcel_maths_syllabus()
         questions = []
-        for q_num, pages in q_groups.items():
+        for q_num, gdata in q_groups.items():
             pixmaps = []
-            for pg in pages:
+            for pg in gdata['pages']:
                 PW = pg.rect.width
                 PH = pg.rect.height
-                img_rect = fitz.Rect(MARGIN, MARGIN + BAND_H + 12, PW - MARGIN, PH - MARGIN)
+                # 动态找内容图片起始 y（跳过 Logo 小图），而不是使用固定偏移
+                content_y0 = _find_content_img_y0(pg,
+                             fallback=MARGIN + _EXPORT_HEADER_HEIGHT_PT + 12)
+                img_rect = fitz.Rect(MARGIN, content_y0, PW - MARGIN, PH - MARGIN)
                 pix = pg.get_pixmap(matrix=mat, clip=img_rect)
                 pixmaps.append(pix)
 
@@ -8760,10 +8870,22 @@ def load_workbook():
             img_bytes = buf.getvalue()
             img_w, img_h = merged_pil.size
 
-            # 优先使用元数据中的 difficulty/topics
+            # 优先使用封面元数据中的 difficulty/topics，否则用页眉解析的数据
             saved_meta = q_meta_map.get(q_num, {})
             difficulty = saved_meta.get('difficulty')
             topics     = saved_meta.get('topics', [])
+
+            # 如果封面元数据没有，尝试从页眉解析数据中补充
+            if difficulty is None:
+                difficulty = gdata.get('difficulty')
+            if not topics:
+                topic_id   = gdata.get('topic_id')
+                topic_hint = gdata.get('topic_hint', '')
+                if topic_id:
+                    topic_info = _lookup_topic_in_syllabus(
+                        _load_edexcel_maths_syllabus(), topic_id, topic_hint)
+                    if topic_info:
+                        topics = [{'id': topic_id, 'title': topic_info['title']}]
 
             questions.append({
                 'q_num':         q_num,
