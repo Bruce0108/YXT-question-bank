@@ -3813,6 +3813,34 @@ def get_edexcel_maths_syllabus():
     return jsonify(data)
 
 
+@app.route('/api/syllabus/bpho', methods=['GET'])
+def get_bpho_syllabus():
+    """
+    返回 BPhO (British Physics Olympiad) 12章物理知识库目录。
+    格式与 edexcel_maths 保持一致：{topics:[{id, title, subtopics:[{id, title}]}]}
+    """
+    topics = []
+    # 按章节号排序：BPhO-1 … BPhO-12
+    ch_ids = sorted(
+        {k for k in _BPHO_TOPIC_TITLES if re.match(r'^BPhO-\d+$', k)},
+        key=lambda x: int(x.split('-')[1])
+    )
+    for ch_id in ch_ids:
+        ch_title = _BPHO_TOPIC_TITLES.get(ch_id, ch_id)
+        ch_num   = ch_id.split('-')[1]
+        # 子知识点：BPhO-N-1, BPhO-N-2, …
+        sub_ids = sorted(
+            {k for k in _BPHO_TOPIC_TITLES if re.match(rf'^BPhO-{ch_num}-\d+$', k)},
+            key=lambda x: int(x.split('-')[2])
+        )
+        subtopics = [
+            {'id': sid, 'title': _BPHO_TOPIC_TITLES[sid]}
+            for sid in sub_ids
+        ]
+        topics.append({'id': ch_id, 'title': ch_title, 'subtopics': subtopics})
+    return jsonify({'syllabus': 'bpho', 'topics': topics})
+
+
 @app.route('/api/syllabus/edexcel_economics', methods=['GET'])
 def get_edexcel_economics_syllabus():
     """

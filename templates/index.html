@@ -1130,6 +1130,7 @@ let uploadToken = 0;
 let syllabus    = null;    // CIE 9702 知识库
 let mathsSyllabus = null;  // Edexcel Maths 知识库
 let econSyllabus  = null;  // Edexcel Economics 知识库
+let bphoSyllabus  = null;  // BPhO 物理知识库
 let sfLevel     = 'all';   // syllabus filter level
 let thumbQ = [], thumbIng = 0;
 const MAX_CO = 3;
@@ -1255,6 +1256,27 @@ function _isEconGroup(g) {
   return false;
 }
 
+// ── 判断某个 group 是否属于 BPhO ──
+function _isBphoGroup(g) {
+  if (g.source === 'bpho') return true;
+  if (g.paper_type === 'bpho') return true;
+  // cloud/workbook: topics id 以 BPhO- 开头
+  if (g.source === 'cloud' || g.source === 'workbook') {
+    if (Array.isArray(g.questions) && g.questions.some(q => {
+      if (!q.topics || !q.topics.length) return false;
+      const id = String(q.topics[0].id || q.topics[0].parent_id || '');
+      return /^BPhO-/.test(id);
+    })) return true;
+    const gIdx = groups.indexOf(g);
+    if (gIdx >= 0 && allQuestions.some(q => {
+      if (q.gIdx !== gIdx || !Array.isArray(q.topics) || !q.topics.length) return false;
+      const id = String(q.topics[0].id || q.topics[0].parent_id || '');
+      return /^BPhO-/.test(id);
+    })) return true;
+  }
+  return false;
+}
+
 // ── 从题目列表的 topics.id 前缀推导涉及的 unit 集合 ──
 // topics id 格式：P3-1.1 / P3-1 / WMA13-1 / 4PME0_01-1 等
 // unit 取第一个 '-' 前的部分（如 P3、WMA13）
@@ -1328,6 +1350,13 @@ function _loadAllSyllabi() {
       fetch('/api/syllabus/edexcel_economics')
         .then(r=>r.json()).then(d=>{econSyllabus=d; renderSyllabusCard();}).catch(()=>{});
     }
+  }
+
+  // BPhO 物理考纲
+  const bphoGroups = groups.filter(g => _isBphoGroup(g));
+  if (bphoGroups.length > 0 && !bphoSyllabus) {
+    fetch('/api/syllabus/bpho')
+      .then(r=>r.json()).then(d=>{bphoSyllabus=d; renderSyllabusCard();}).catch(()=>{});
   }
 }
 
@@ -1671,10 +1700,11 @@ function renderSyllabusCard() {
   // cloud/workbook groups with maths_unit OR topics count as edexcel_maths for syllabus display
   const hasMaths       = groups.some(g => _isMathsGroup(g));
   const hasEcon        = groups.some(g => _isEconGroup(g));
+  const hasBpho        = groups.some(g => _isBphoGroup(g));
   const card = document.getElementById('syllabusCard');
 
-  // 显示条件：有 Cambridge 试卷 或 有 Edexcel Maths 试卷 或 有 Edexcel Economics 试卷
-  const shouldShow = hasCambridge || hasMaths || hasEcon;
+  // 显示条件：有 Cambridge / Edexcel Maths / Edexcel Economics / BPhO 试卷
+  const shouldShow = hasCambridge || hasMaths || hasEcon || hasBpho;
   card.style.display = shouldShow ? '' : 'none';
   if (!shouldShow) return;
 
@@ -1683,11 +1713,12 @@ function renderSyllabusCard() {
   if (hasCambridge) types.push('cambridge');
   if (hasMaths) types.push('edexcel_maths');
   if (hasEcon) types.push('edexcel_economics');
+  if (hasBpho) types.push('bpho');
 
   if (types.length === 1) {
     window._activeSyllabusType = types[0];
   } else if (!window._activeSyllabusType || !types.includes(window._activeSyllabusType)) {
-    // 优先经济学，然后数学，最后Cambridge
+    // 优先经济学，然后数学，然后BPhO，最后Cambridge
     window._activeSyllabusType = types[0];
   }
 
@@ -1728,6 +1759,8 @@ function renderSyllabusCard() {
     } else {
       subtitle.textContent = '(Edexcel IAL Economics)';
     }
+  } else if (stype === 'bpho') {
+    subtitle.textContent = '(British Physics Olympiad)';
   } else {
     subtitle.textContent = '(9702 CIE 2025-27)';
   }
@@ -1753,6 +1786,7 @@ function renderSyllabusCard() {
       {type:'cambridge', label:'📐 CIE 9702 物理', show: hasCambridge},
       {type:'edexcel_maths', label:'📊 Edexcel 纯数', show: hasMaths},
       {type:'edexcel_economics', label:'📈 Edexcel 经济', show: hasEcon},
+      {type:'bpho', label:'🏆 BPhO 物理', show: hasBpho},
     ];
     btnDefs.forEach(({type, label, show}) => {
       if (!show) return;
@@ -1773,6 +1807,8 @@ function renderSyllabusCard() {
   } else if (stype === 'cambridge' && !syllabus) {
     _loadAllSyllabi();
   } else if (stype === 'edexcel_economics' && !econSyllabus) {
+    _loadAllSyllabi();
+  } else if (stype === 'bpho' && !bphoSyllabus) {
     _loadAllSyllabi();
   }
 
@@ -2459,6 +2495,7 @@ function renderTopicTree() {
   let curSyllabus;
   if (stype === 'edexcel_maths') curSyllabus = mathsSyllabus;
   else if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else if (stype === 'bpho') curSyllabus = bphoSyllabus;
   else curSyllabus = syllabus;
   const tree = document.getElementById('topicTree');
 
@@ -2469,6 +2506,72 @@ function renderTopicTree() {
 
   const q = document.getElementById('sfSearch').value.toLowerCase();
   tree.innerHTML = '';
+
+  // ── BPhO：两级树（12章 + 子知识点），带题目数量统计 ──
+  if (stype === 'bpho') {
+    // 统计每个 topic/subtopic 对应的题目数
+    const topicCount = {};
+    allQuestions.forEach(q2 => {
+      const g = groups[q2.gIdx];
+      if (!g || !_isBphoGroup(g)) return;
+      (q2.topics || []).forEach(t => {
+        const tid = String(t.id);
+        topicCount[tid] = (topicCount[tid] || 0) + 1;
+        if (t.parent_id) {
+          const pid = String(t.parent_id);
+          topicCount[pid] = (topicCount[pid] || 0) + 1;
+        }
+      });
+    });
+
+    curSyllabus.topics.forEach(topic => {
+      if (q && !topic.title.toLowerCase().includes(q) &&
+          !String(topic.id).toLowerCase().includes(q) &&
+          !(topic.subtopics||[]).some(s => s.title.toLowerCase().includes(q))) return;
+
+      const topicId  = topic.id;
+      const tidSafe  = String(topicId).replace(/[^a-z0-9_-]/gi,'_');
+      const subtopics = topic.subtopics || [];
+      const chCnt    = topicCount[topicId] || 0;
+
+      const item = document.createElement('div');
+      item.className = 'topic-item';
+
+      const hdr = document.createElement('div');
+      hdr.className = 'topic-hdr';
+      hdr.style.cursor = subtopics.length ? 'pointer' : 'default';
+      hdr.innerHTML = `
+        <input type="checkbox" id="tc-${tidSafe}" data-raw-id="${topicId}"
+               onchange="onMathsChapterCheck('${topicId}','${tidSafe}',this.checked)">
+        <span class="topic-hdr-text" onclick="toggleSub('${tidSafe}')">${topic.title}</span>
+        ${chCnt > 0 ? `<span class="topic-hdr-cnt" style="background:#e0e7ff;color:#4338ca;font-size:10px;font-weight:600;padding:1px 5px;border-radius:8px;flex-shrink:0">${chCnt}</span>` : ''}
+        ${subtopics.length ? `<span class="topic-chevron" id="chev-${tidSafe}" onclick="toggleSub('${tidSafe}')">▶</span>` : ''}`;
+      item.appendChild(hdr);
+
+      if (subtopics.length) {
+        const subList = document.createElement('div');
+        subList.className = 'sub-list';
+        subList.id = `sub-${tidSafe}`;
+        subtopics.forEach(sub => {
+          if (q && !sub.title.toLowerCase().includes(q) && !topic.title.toLowerCase().includes(q)) return;
+          const sidSafe = String(sub.id).replace(/[^a-z0-9._-]/gi,'_');
+          const subCnt  = topicCount[String(sub.id)] || 0;
+          const si = document.createElement('div');
+          si.className = 'sub-item';
+          si.innerHTML = `
+            <input type="checkbox" id="sc-${sidSafe}" data-raw-id="${sub.id}" data-parent="${tidSafe}"
+                   onchange="onSubCheck('${sub.id}','${tidSafe}',this.checked)">
+            <span class="sub-id">${sub.id}</span>
+            <span class="sub-item-text">${sub.title}</span>
+            ${subCnt > 0 ? `<span class="sub-cnt">${subCnt}</span>` : ''}`;
+          subList.appendChild(si);
+        });
+        item.appendChild(subList);
+      }
+      tree.appendChild(item);
+    });
+    return;
+  }
 
   // ── Edexcel Maths / Economics：两级树（章节 + 子知识点），带题目数量统计 ──
   if (stype === 'edexcel_maths' || stype === 'edexcel_economics') {
@@ -2629,7 +2732,10 @@ function toggleSub(id) {
 function onMathsChapterCheck(chapterId, tidSafe, checked) {
   // 同步勾选/取消所有子知识点
   const stype = window._activeSyllabusType || 'edexcel_maths';
-  const curSyllabus = stype === 'edexcel_economics' ? econSyllabus : mathsSyllabus;
+  let curSyllabus;
+  if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else if (stype === 'bpho') curSyllabus = bphoSyllabus;
+  else curSyllabus = mathsSyllabus;
   if (!curSyllabus) return;
   const topic = curSyllabus.topics.find(t => String(t.id) === chapterId);
   if (!topic) return;
@@ -2648,6 +2754,7 @@ function onTopicCheck(topicId, checked) {
   let curSyllabus;
   if (stype === 'edexcel_maths') curSyllabus = mathsSyllabus;
   else if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else if (stype === 'bpho') curSyllabus = bphoSyllabus;
   else curSyllabus = syllabus;
   if (!curSyllabus) return;
   const topic = curSyllabus.topics.find(t => String(t.id) === String(topicId).replace(/_/g,'-'));
@@ -2664,6 +2771,7 @@ function onSubCheck(subId, topicId, checked) {
   let curSyllabus;
   if (stype === 'edexcel_maths') curSyllabus = mathsSyllabus;
   else if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else if (stype === 'bpho') curSyllabus = bphoSyllabus;
   else curSyllabus = syllabus;
   if (!curSyllabus) return;
   const topic = curSyllabus.topics.find(t => String(t.id) === String(topicId).replace(/_/g,'-'));
@@ -3382,15 +3490,19 @@ function openEditMeta(uid, _gIdxLegacy, _qNumLegacy, focusField, e) {
 
   const grp = groups[gIdx] || {};
   // ── 科目判断：统一使用与主页侧栏相同的智能判断函数，避免 source='workbook' 时误判 ──
-  // _isEconGroup / _isMathsGroup 会检查 paper_type / econ_unit / topics id 前缀，
+  // _isEconGroup / _isMathsGroup / _isBphoGroup 会检查 paper_type / topics id 前缀，
   // 与主页知识点筛选树保持完全一致。
   const isCambridge = (grp.source === 'cambridge') || (q.source === 'cambridge');
-  const isEconomy   = !isCambridge && _isEconGroup(grp);
+  const isBpho      = !isCambridge && _isBphoGroup(grp);
+  const isEconomy   = !isCambridge && !isBpho && _isEconGroup(grp);
 
   let apiUrl;
   if (isCambridge) {
     // Cambridge 9702 物理：使用 /api/syllabus（9702知识点，与筛选侧栏一致）
     apiUrl = '/api/syllabus';
+  } else if (isBpho) {
+    // BPhO 物理：使用 /api/syllabus/bpho（12章知识点）
+    apiUrl = '/api/syllabus/bpho';
   } else if (isEconomy) {
     // Edexcel Economics：根据 econ_unit 过滤（与筛选侧栏 econSyllabus 一致）
     // econ_unit 优先取 group 字段，其次取 question 字段，再从 topics id 前缀推导
@@ -5884,6 +5996,7 @@ function _syncFilterTopicsToCloudSave() {
   let curSyllabus;
   if (stype === 'edexcel_maths') curSyllabus = mathsSyllabus;
   else if (stype === 'edexcel_economics') curSyllabus = econSyllabus;
+  else if (stype === 'bpho') curSyllabus = bphoSyllabus;
   else curSyllabus = syllabus;
 
   // 构建 id→title 映射（chapter级 + subtopic级）
