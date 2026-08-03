@@ -3111,6 +3111,7 @@ function _buildExportPayload(questions) {
   const ordered_items = questions.map(q => ({
     gIdx:       q.gIdx,
     q_num:      q.q_num,
+    _seq:       q._seq != null ? q._seq : null,   // 传递全局唯一序号，用于 workbook 定位
     session_id: q._append_session_id != null ? q._append_session_id : sessionId,
     file_idx:   q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx,
   }));
@@ -3138,9 +3139,13 @@ async function dlOne(qNum, gIdx, e) {
 async function dlAll() {
   if (!allQuestions.length) { toast('请先上传PDF','err'); return; }
 
-  const { sel_by_group, ordered_items } = _buildExportPayload(allQuestions);
+  // 按当前筛选+排序后的顺序导出（而非 allQuestions 原始顺序）
+  const visibles = getVisibleQuestions();
+  if (!visibles.length) { toast('当前筛选无可见题目','err'); return; }
 
-  showLd(`正在打包全部 ${allQuestions.length} 道题目…`);
+  const { sel_by_group, ordered_items } = _buildExportPayload(visibles);
+
+  showLd(`正在打包 ${visibles.length} 道题目（按当前排序）…`);
   try {
     const startRes = await fetch('/api/export_pdf', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -4820,18 +4825,19 @@ async function _onAppendFilesSelected(input) {
 
 
 function _applyLoadedWorkbook(d) {
-  // ── 构建一个新的 group（workbook 类型）并追加到当前 groups ──
-  const isAppend = allQuestions.length > 0;
-  const newGIdx  = isAppend ? groups.length : 0;
+  // ── 读取新题册：无论当前是否有旧数据，都强制清空重置 ──
+  // （追加场景通过 appendPdfToCurrentSession 走独立流程，不经过此函数）
+  allQuestions = [];
+  groups       = [];
+  selNums      = new Set();
+  filteredNums = null;
+  // 同时清除 sessionStorage，防止下次加载时自动恢复旧数据导致题目翻倍
+  try { sessionStorage.removeItem('tiku_session'); } catch(_) {}
 
-  if (!isAppend) {
-    allQuestions = [];
-    groups       = [];
-    selNums      = new Set();
-  }
+  const newGIdx = 0;
 
   // 使用后端返回的 session_id（已注册到 _multi_sessions，支持 PDF 导出）
-  if (!isAppend) sessionId = d.session_id || ('lib_' + d.id);
+  sessionId = d.session_id || ('lib_' + d.id);
 
   // 构建 group
   const g = {
@@ -4878,7 +4884,7 @@ function _applyLoadedWorkbook(d) {
   }
 
   groups.push(g);
-  if (!isAppend) activeGIdx = 0;
+  activeGIdx = 0;
 
   // 恢复排序
   const savedSort = d.sort_order || 'default';

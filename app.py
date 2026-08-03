@@ -5855,13 +5855,23 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
         for ginfo in groups_info:
             group_map[ginfo['g_idx']] = ginfo
 
-        def _export_cloud_questions(out_doc, questions, q_nums, dpi,
+        def _export_cloud_questions(out_doc, questions, q_items, dpi,
                                      PW, PH, M, HH, GAP, FS, seq_start=0):
-            """云端题目（无实体PDF）：直接将 img_bytes_b64 渲染到输出页。"""
+            """云端/workbook题目（无实体PDF）：直接将 img_bytes_b64 渲染到输出页。
+            q_items: [(q_num, _wb_seq_or_None), ...] — 使用 _wb_seq 精确定位 workbook 题目。
+            """
             import base64 as _b64_inner
             AVAIL_W = PW - 2 * M
-            for done, q_num in enumerate(q_nums):
-                q_obj = next((q for q in questions if q['q_num'] == q_num), None)
+            # 向后兼容：若传入的是旧格式 [q_num, ...]（纯列表），转为 [(q_num, None), ...]
+            if q_items and not isinstance(q_items[0], tuple):
+                q_items = [(qn, None) for qn in q_items]
+
+            for done, (q_num, wb_seq) in enumerate(q_items):
+                # 优先用 _wb_seq 定位（workbook 多道同 q_num 题目的唯一 key）
+                if wb_seq is not None:
+                    q_obj = next((q for q in questions if q.get('_wb_seq') == wb_seq), None)
+                if wb_seq is None or q_obj is None:
+                    q_obj = next((q for q in questions if q['q_num'] == q_num), None)
                 if not q_obj:
                     continue
                 b64 = q_obj.get('img_bytes_b64', '')
@@ -5917,16 +5927,18 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
             # 简单可靠方案：全局按 ordered_items 顺序，以组为段依次处理
             # （同组相邻题目保持连续；跨组切换时自然分段）
 
-            # 构建每个 gIdx 的有序 q_nums（保持 ordered_items 中的顺序）
-            ordered_by_group = {}  # g_idx -> [q_num, ...]（按 ordered_items 顺序）
+            # 构建每个 gIdx 的有序 items（保持 ordered_items 中的顺序）
+            # item 格式: {q_num, _seq(optional)} ; _seq 用于 workbook 精确定位
+            ordered_by_group = {}  # g_idx -> [(q_num, _seq_or_None), ...]（按 ordered_items 顺序）
             for item in ordered_items:
                 gi = item.get('gIdx', 0)
                 qn = item.get('q_num')
+                _seq = item.get('_seq', None)   # workbook 唯一序号
                 if qn is None:
                     continue
                 if gi not in ordered_by_group:
                     ordered_by_group[gi] = []
-                ordered_by_group[gi].append(qn)
+                ordered_by_group[gi].append((qn, _seq))
 
             # 按 ordered_items 中 gIdx 的首次出现顺序处理各组
             seen_gi = []
@@ -5941,17 +5953,19 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                 ginfo     = group_map[gi]
                 questions = ginfo['questions']
                 paper_type = ginfo['paper_type']
-                q_nums_ordered = ordered_by_group.get(gi, [])
-                if not q_nums_ordered:
+                q_items_ordered = ordered_by_group.get(gi, [])
+                if not q_items_ordered:
                     continue
+                # 为兼容 _export_two_per_page/_export_one_per_page，抽取 q_nums（可能重复）
+                q_nums_ordered = [qn for qn, _ in q_items_ordered]
 
                 done_before = done_total
                 def cb(p, _done=done_before):
                     upd(_done + p)
 
                 if gi not in src_docs:
-                    # ── 云端题目（无实体PDF）：直接从 img_bytes_b64 渲染 ──
-                    _export_cloud_questions(out_doc, questions, q_nums_ordered, dpi,
+                    # ── workbook/云端题目（无实体PDF）：用 _seq 精确定位 ──
+                    _export_cloud_questions(out_doc, questions, q_items_ordered, dpi,
                                             PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
                                             seq_start=done_total)
                 elif layout == 'two_per_page':
@@ -8195,6 +8209,7 @@ def _register_workbook_session(wb_id: str, manifest: dict, questions_out: list) 
     for i, q in enumerate(questions_out):
         virt_questions.append({
             'q_num':         q.get('q_num', i + 1),
+            '_wb_seq':       i,                          # 唯一序号，用于 export 时精确定位
             'page_idx':      0,
             'difficulty':    q.get('difficulty'),
             'topics':        q.get('topics', []),
