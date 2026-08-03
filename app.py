@@ -7958,7 +7958,32 @@ def library_save():
     if session_id:
         sess = _get_session(session_id)
 
-    wb_id      = str(uuid.uuid4())[:8]
+    # ── 覆盖模式：若前端传入 wb_id，先删除旧目录再用同一 wb_id 重写 ──
+    overwrite_wb_id = data.get('wb_id', '').strip()
+    if overwrite_wb_id:
+        # 删除旧题册目录（本地模式）或 R2 前缀（R2 模式）
+        # 旧 board/subject 可能与新的不同，需要遍历查找
+        if not storage.is_r2_mode():
+            lib_root = _LIBRARY_DIR
+            for old_board in (os.listdir(lib_root) if os.path.isdir(lib_root) else []):
+                board_dir = os.path.join(lib_root, old_board)
+                if not os.path.isdir(board_dir):
+                    continue
+                for old_subj in os.listdir(board_dir):
+                    subj_dir = os.path.join(board_dir, old_subj)
+                    old_wb_dir = os.path.join(subj_dir, overwrite_wb_id)
+                    if os.path.isdir(old_wb_dir):
+                        import shutil as _shutil
+                        _shutil.rmtree(old_wb_dir, ignore_errors=True)
+        else:
+            # R2 模式：删除旧前缀
+            for old_board in _EXAM_BOARDS:
+                old_prefix = _lib_key_prefix(old_board, subject, overwrite_wb_id)
+                storage.delete_prefix(old_prefix + '/')
+        wb_id = overwrite_wb_id
+    else:
+        wb_id = str(uuid.uuid4())[:8]
+
     wb_prefix  = _lib_key_prefix(board, subject, wb_id)   # R2 key 前缀 或 本地目录
     # 本地模式需要创建目录
     if not storage.is_r2_mode():
@@ -8202,11 +8227,47 @@ def library_load(wb_id):
     """
     读取图书馆中的一个题册，返回题目列表（含图片 base64）。
     前端通过 GET /api/library/load/<wb_id>?board=Edexcel&subject=数学Maths
+    board/subject 可选：若不提供，则自动搜索 library 目录查找匹配 wb_id 的题册。
     """
     import base64 as _b64
     board   = request.args.get('board', '')
     subject = request.args.get('subject', '')
-    wb_prefix = _lib_key_prefix(board, subject, wb_id)
+
+    # ── 自动搜索：若 board/subject 为空，扫描本地目录或 R2 找 wb_id ──
+    if not board or not subject:
+        if not storage.is_r2_mode():
+            found_prefix = None
+            lib_root = _LIBRARY_DIR
+            if os.path.isdir(lib_root):
+                for b in os.listdir(lib_root):
+                    bd = os.path.join(lib_root, b)
+                    if not os.path.isdir(bd): continue
+                    for s in os.listdir(bd):
+                        sd = os.path.join(bd, s, wb_id)
+                        if os.path.isdir(sd):
+                            found_prefix = sd
+                            break
+                    if found_prefix: break
+            if found_prefix:
+                wb_prefix = found_prefix
+            else:
+                return jsonify({'error': '题册不存在'}), 404
+        else:
+            # R2 模式：遍历已知 board/subject 组合查找
+            found_prefix = None
+            for b in _EXAM_BOARDS:
+                for s in _SUBJECTS_MAP.get(b, []):
+                    pf = _lib_key_prefix(b, s, wb_id)
+                    if storage.load_json(f'{pf}/manifest.json') is not None:
+                        found_prefix = pf
+                        break
+                if found_prefix: break
+            if found_prefix:
+                wb_prefix = found_prefix
+            else:
+                return jsonify({'error': '题册不存在'}), 404
+    else:
+        wb_prefix = _lib_key_prefix(board, subject, wb_id)
 
     if storage.is_r2_mode():
         manifest = storage.load_json(f'{wb_prefix}/manifest.json')
@@ -9168,10 +9229,18 @@ def cloud_library_questions():
     page       = max(1, int(request.args.get('page', 1)))
     per_page   = min(100, int(request.args.get('per_page', 30)))
 
-    if not subject or not board:
-        return jsonify({'error': '必须提供 subject 和 board'}), 400
+    if not board:
+        return jsonify({'error': '必须提供 board'}), 400
 
-    keys = _list_cloud_questions(subject, board, topic1, topic2)
+    # 若未指定 subject，则遍历所有 subject 合并结果
+    if subject:
+        subjects_to_query = [subject]
+    else:
+        subjects_to_query = _CLOUD_SUBJECTS  # 遍历全部 subject
+
+    keys = []
+    for subj in subjects_to_query:
+        keys.extend(_list_cloud_questions(subj, board, topic1, topic2))
 
     # Task2: 如果指定了 maths_unit，则按 maths_unit 过滤
     if maths_unit:

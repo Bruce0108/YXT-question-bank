@@ -378,7 +378,8 @@
   /* level 4: topic1 */
   .cloud-tree-row.lvl4{padding-left:42px}
   .cloud-tree-row.lvl4 .ctr-label{font-size:11px;font-weight:500;color:#4b5563}
-  .cloud-tree-row.lvl4.active .ctr-label{font-weight:600}
+  .cloud-tree-row.lvl4.active{background:#eff6ff;color:var(--blue)}
+  .cloud-tree-row.lvl4.active .ctr-label{font-weight:600;color:var(--blue)}
   /* level 5: topic2 */
   .cloud-tree-row.lvl5{padding-left:56px}
   .cloud-tree-row.lvl5 .ctr-label{font-size:11px;font-weight:400;color:#6b7280}
@@ -651,8 +652,21 @@
   <!-- 主布局：左侧目录树 + 右侧题目列表 -->
   <div style="display:grid;grid-template-columns:320px 1fr;gap:16px">
 
-    <!-- 左：四级目录树 -->
+    <!-- 左：目录树面板 -->
     <div style="display:flex;flex-direction:column;gap:12px">
+
+      <!-- ══ 题册区块 ══ -->
+      <div style="background:#fff;border:1px solid var(--g200);border-radius:10px;padding:14px 16px;box-shadow:var(--sh)">
+        <div style="font-size:12px;font-weight:700;color:var(--g600);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+          <span>📚 题册</span>
+          <button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 8px" onclick="loadCloudLibSection()">刷新</button>
+        </div>
+        <div id="cloudLibSection">
+          <div style="text-align:center;padding:16px;color:var(--g400);font-size:12px">点击刷新加载题册</div>
+        </div>
+      </div>
+
+      <!-- ══ 切片题目目录 ══ -->
       <div style="background:#fff;border:1px solid var(--g200);border-radius:10px;padding:16px;box-shadow:var(--sh)">
         <div style="font-size:12px;font-weight:700;color:var(--g600);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
           <span>📂 题库目录</span>
@@ -662,11 +676,11 @@
           </div>
         </div>
         <!-- 搜索框 -->
-        <input type="text" id="cloudTreeSearch" placeholder="🔍 搜索学科/考试局/知识点..."
+        <input type="text" id="cloudTreeSearch" placeholder="🔍 搜索考试局/知识点..."
                style="width:100%;border:1px solid var(--g200);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;margin-bottom:10px"
                oninput="filterCloudTree(this.value)">
         <!-- 目录树容器 -->
-        <div id="cloudTree" style="max-height:calc(100vh - 320px);overflow-y:auto"></div>
+        <div id="cloudTree" style="max-height:calc(100vh - 480px);overflow-y:auto"></div>
       </div>
     </div>
 
@@ -4024,6 +4038,15 @@ async function openSaveLibDialog() {
   const visibles = getVisibleQuestions();
   if (!visibles.length) { toast('没有可见题目', 'err'); return; }
 
+  // 重置覆盖选择区域状态
+  document.getElementById('libSaveOverwriteSelectWrap').style.display = 'none';
+  document.getElementById('libSaveOverwriteToggle').textContent = '选择题册';
+  document.getElementById('libSaveOverwriteHint').textContent = '不选择则保存为新题册';
+  document.getElementById('libSaveOverwriteSel').value = '';
+  document.getElementById('libSaveOverwriteSel').style.display = 'none';
+  document.getElementById('libSaveOverwriteLoading').style.display = 'block';
+  _libSaveOverwriteTarget = null;
+
   // 拉取考试局/学科列表
   try {
     const r = await fetch('/api/library/boards');
@@ -4083,6 +4106,9 @@ async function openSaveLibDialog() {
   document.getElementById('libSaveSortHint').textContent = _sortLabel(sortOrder, true);
 
   document.getElementById('libSaveModal').style.display = 'flex';
+
+  // 异步加载现有题册列表（后台）
+  _loadExistingLibsForOverwrite();
 }
 
 function _onSaveBoardChange() {
@@ -4095,11 +4121,99 @@ function _onSaveBoardChange() {
   if (mathOpt) sel.value = mathOpt;
 }
 
+// 覆盖题册相关全局变量和辅助函数
+let _libSaveOverwriteTarget = null;  // {id, title, board, subject}
+let _libSaveAllLibs = [];            // 所有题册列表缓存
+
+async function _loadExistingLibsForOverwrite() {
+  const loading = document.getElementById('libSaveOverwriteLoading');
+  const sel     = document.getElementById('libSaveOverwriteSel');
+  try {
+    const r = await fetch('/api/library/list');
+    const d = await r.json();
+    _libSaveAllLibs = [];
+    // 展开 tree -> 扁平列表
+    for (const board of (d.tree || [])) {
+      for (const subj of (board.subjects || [])) {
+        for (const wb of (subj.workbooks || [])) {
+          _libSaveAllLibs.push({
+            id: wb.id, title: wb.title,
+            board: board.board, subject: subj.subject,
+            count: wb.count, created_at: wb.created_at
+          });
+        }
+      }
+    }
+    // 填充 select
+    sel.innerHTML = '<option value="">-- 不覆盖，保存为新题册 --</option>';
+    for (const wb of _libSaveAllLibs) {
+      const opt = document.createElement('option');
+      opt.value = wb.id;
+      opt.textContent = `${wb.title}（${wb.board} · ${wb.subject} · ${wb.count}题）`;
+      sel.appendChild(opt);
+    }
+    loading.style.display = 'none';
+    sel.style.display = 'block';
+  } catch(e) {
+    loading.textContent = '⚠️ 加载失败：' + e.message;
+  }
+}
+
+function _toggleOverwriteSelect() {
+  const wrap = document.getElementById('libSaveOverwriteSelectWrap');
+  const btn  = document.getElementById('libSaveOverwriteToggle');
+  if (wrap.style.display === 'none') {
+    wrap.style.display = 'block';
+    btn.textContent = '收起';
+  } else {
+    wrap.style.display = 'none';
+    btn.textContent = '选择题册';
+    // 收起时清除选择
+    document.getElementById('libSaveOverwriteSel').value = '';
+    _libSaveOverwriteTarget = null;
+    document.getElementById('libSaveOverwriteHint').textContent = '不选择则保存为新题册';
+  }
+}
+
+function _onOverwriteSelChange() {
+  const sel = document.getElementById('libSaveOverwriteSel');
+  const wbId = sel.value;
+  const hint = document.getElementById('libSaveOverwriteHint');
+  if (!wbId) {
+    _libSaveOverwriteTarget = null;
+    hint.textContent = '不选择则保存为新题册';
+    return;
+  }
+  const found = _libSaveAllLibs.find(w => w.id === wbId);
+  if (found) {
+    _libSaveOverwriteTarget = found;
+    hint.innerHTML = `⚠️ 将覆盖：<strong>${found.title}</strong>（${found.board} · ${found.subject} · ${found.count}题）`;
+    // 自动填充名称/考试局/学科
+    document.getElementById('libSaveTitle').value = found.title;
+    const boardSel = document.getElementById('libSaveBoard');
+    if ([...boardSel.options].some(o => o.value === found.board)) {
+      boardSel.value = found.board;
+      _onSaveBoardChange();
+    }
+    const subjSel = document.getElementById('libSaveSubject');
+    if ([...subjSel.options].some(o => o.value === found.subject)) {
+      subjSel.value = found.subject;
+    }
+  }
+}
+
 async function confirmSaveLib() {
   const title   = document.getElementById('libSaveTitle').value.trim() || '未命名题册';
   const board   = document.getElementById('libSaveBoard').value;
   const subject = document.getElementById('libSaveSubject').value;
   if (!board || !subject) { toast('请选择考试局和学科', 'err'); return; }
+
+  // ── 覆盖确认 ──
+  if (_libSaveOverwriteTarget) {
+    const tgt = _libSaveOverwriteTarget;
+    const ok = confirm(`确认覆盖题册《${tgt.title}》（${tgt.board} · ${tgt.subject} · ${tgt.count}题）？\n\n此操作不可撤销，原题册将被彻底替换。`);
+    if (!ok) return;
+  }
 
   closeSaveLibDialog();
   const visibles = getVisibleQuestions();
@@ -4186,6 +4300,7 @@ async function confirmSaveLib() {
       maths_unit:    activeG.maths_unit  || '',
       econ_unit:     activeG.econ_unit   || '',
       syllabus_type: activeG.paper_type  || 'edexcel_maths',
+      wb_id:         _libSaveOverwriteTarget ? _libSaveOverwriteTarget.id : '',
       questions:     questionsPayload,
     });
     const payloadBytes = new Blob([payload]).size;
@@ -4968,6 +5083,26 @@ async function loadWorkbook(file) {
     </div>
     <!-- Body -->
     <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
+      <!-- 覆盖已有题册区 -->
+      <div id="libSaveOverwriteBox" style="background:#fef3c7;border:1.5px solid #fcd34d;border-radius:8px;padding:12px 14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <label style="font-size:12px;font-weight:700;color:#92400e;display:flex;align-items:center;gap:6px">
+            <span>🔄</span> 覆盖已有题册（可选）
+          </label>
+          <button onclick="_toggleOverwriteSelect()" id="libSaveOverwriteToggle"
+            style="font-size:11px;padding:2px 8px;border-radius:5px;border:1px solid #f59e0b;background:#fff;color:#92400e;cursor:pointer">
+            选择题册
+          </button>
+        </div>
+        <div id="libSaveOverwriteSelectWrap" style="display:none">
+          <div id="libSaveOverwriteLoading" style="font-size:12px;color:#92400e;padding:4px 0">⏳ 加载题册列表...</div>
+          <select id="libSaveOverwriteSel" style="width:100%;border:1.5px solid #f59e0b;border-radius:6px;padding:7px 10px;font-size:12px;outline:none;background:#fffbeb;display:none"
+            onchange="_onOverwriteSelChange()">
+            <option value="">-- 不覆盖，保存为新题册 --</option>
+          </select>
+        </div>
+        <div id="libSaveOverwriteHint" style="font-size:11px;color:#78350f;margin-top:4px">不选择则保存为新题册</div>
+      </div>
       <!-- 题册名称 -->
       <div>
         <label style="font-size:12px;font-weight:700;color:#374151;margin-bottom:5px;display:block">📝 题册名称</label>
@@ -5177,12 +5312,14 @@ async function refreshCloudStats() {
 
 // ── 目录树数据 ──
 let _cloudTreeData = null;
-let _cloudActivePath = {}; // {subject, board, paper, topic1, topic2}
+let _cloudActivePath = {}; // {board, paper, topic1, topic2}  (去掉 subject 层)
+let _cloudActiveLibWb = null; // 当前激活的题册 {id, title}
 let _cloudQPage = 1;
 let _cloudQTotal = 0;
 let _cloudAllQuestions = []; // 本次加载的全部题目
 let _cloudDiffFilter = '';
 
+// ── 加载云端题库页面时同时触发两个区块 ──
 async function loadCloudTree() {
   const container = document.getElementById('cloudTree');
   container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--g400)">⏳ 加载中...</div>';
@@ -5195,82 +5332,199 @@ async function loadCloudTree() {
   } catch(e) {
     container.innerHTML = '<div style="text-align:center;padding:30px;color:#dc2626">加载失败: ' + e.message + '</div>';
   }
+  // 同时刷新题册区块
+  loadCloudLibSection();
+}
+
+// ── 加载题册区块 ──
+async function loadCloudLibSection() {
+  const sec = document.getElementById('cloudLibSection');
+  sec.innerHTML = '<div style="text-align:center;padding:12px;color:var(--g400);font-size:12px">⏳ 加载中...</div>';
+  try {
+    const r = await fetch('/api/library/list');
+    const d = await r.json();
+    const allWbs = [];
+    for (const board of (d.tree || [])) {
+      for (const subj of (board.subjects || [])) {
+        for (const wb of (subj.workbooks || [])) {
+          allWbs.push({ id: wb.id, title: wb.title, board: board.board, subject: subj.subject, count: wb.count });
+        }
+      }
+    }
+    if (!allWbs.length) {
+      sec.innerHTML = '<div style="text-align:center;padding:14px;color:var(--g400);font-size:12px">📭 暂无题册</div>';
+      return;
+    }
+    let html = '';
+    for (const wb of allWbs) {
+      const isActive = _cloudActiveLibWb && _cloudActiveLibWb.id === wb.id;
+      html += `<div class="cloud-tree-row lvl2 ${isActive ? 'active' : ''}"
+        style="border-radius:6px;margin-bottom:3px;cursor:pointer"
+        onclick="cloudLibClick('${esc(wb.id)}','${esc(wb.title)}','${esc(wb.board)}','${esc(wb.subject)}')">
+        <span class="ctr-ico">📓</span>
+        <span class="ctr-label" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(wb.title)}</span>
+        <span class="ctr-cnt">${wb.count}</span>
+      </div>`;
+    }
+    sec.innerHTML = `<div style="max-height:200px;overflow-y:auto">${html}</div>`;
+  } catch(e) {
+    sec.innerHTML = '<div style="text-align:center;padding:12px;color:#dc2626;font-size:12px">加载失败: ' + e.message + '</div>';
+  }
+}
+
+// ── 点击题册区块中的题册 ──
+function cloudLibClick(wbId, wbTitle, board, subject) {
+  _cloudActiveLibWb = { id: wbId, title: wbTitle, board, subject };
+  _cloudActivePath = {};   // 清空切片树的激活状态
+  _cloudQPage = 1;
+  _cloudDiffFilter = '';
+  document.getElementById('cloudDiffFilter').value = '';
+  // 重渲题册区块（更新高亮）
+  loadCloudLibSection();
+  // 重渲目录树（清除激活）
+  if (_cloudTreeData) renderCloudTree(_cloudTreeData, document.getElementById('cloudTreeSearch').value);
+  // 更新面包屑
+  const bc = document.getElementById('cloudBreadcrumb');
+  bc.innerHTML = `<span class="cloud-bc-item" onclick="loadCloudAllOverview()">☁️ 全部</span>
+    <span class="cloud-bc-sep">›</span>
+    <span class="cloud-bc-item">📚 题册</span>
+    <span class="cloud-bc-sep">›</span>
+    <span class="cloud-bc-item active">${esc(wbTitle)}</span>`;
+  // 加载题册内容（通过 library/load API 获取题目）
+  loadCloudLibWbQuestions(wbId, wbTitle, board, subject);
+}
+
+async function loadCloudLibWbQuestions(wbId, wbTitle, board, subject) {
+  const grid = document.getElementById('cloudQGrid');
+  grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--g400)"><div class="spin">⏳</div></div>';
+  document.getElementById('cloudPagination').style.display = 'none';
+  document.getElementById('cloudQToolbar').style.display = 'flex';
+
+  try {
+    const r = await fetch(`/api/library/load/${encodeURIComponent(wbId)}`);
+    const d = await r.json();
+    if (!d.ok) { grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:#dc2626">加载失败: ${d.error || '未知错误'}</div>`; return; }
+    // 将 library 格式题目映射为云端题目格式
+    const questions = (d.questions || []).map(q => ({
+      id:         q.q_num || q.seq,
+      difficulty: q.difficulty,
+      topics:     q.topics || [],
+      exam_date:  q.exam_date || '',
+      source:     q.source || 'workbook',
+      img_b64:    q.img_bytes_b64 || '',
+      img_w:      q.img_w || 0,
+      img_h:      q.img_h || 0,
+    }));
+    _cloudAllQuestions = questions;
+    _cloudQTotal = questions.length;
+    document.getElementById('cloudQTotal').textContent = `共 ${_cloudQTotal} 题`;
+    renderCloudQGrid(questions);
+  } catch(e) {
+    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:#dc2626">加载失败: ${e.message}</div>`;
+  }
 }
 
 function renderCloudTree(data, filterText) {
   const container = document.getElementById('cloudTree');
   if (!data) { container.innerHTML = ''; return; }
 
-  const subjects = data.subjects || [];
-  if (subjects.length === 0 || data.total === 0) {
+  // 新 4 层结构：Board → Paper → Topic1 → Topic2
+  // data.subjects 原始结构还是 subject→board→paper→topic1→topic2
+  // 合并所有 subject 下相同 board 的数据
+  const boardMap = {}; // boardName -> {count, papers: {paperName -> {count, topics: {t1 -> {count, subtopics: {t2 -> count}}}}}}
+  for (const subj of (data.subjects || [])) {
+    for (const board of (subj.boards || [])) {
+      if (!boardMap[board.name]) boardMap[board.name] = { count: 0, papers: {} };
+      boardMap[board.name].count += board.count;
+      for (const paper of (board.papers || [])) {
+        if (!boardMap[board.name].papers[paper.name]) boardMap[board.name].papers[paper.name] = { count: 0, topics: {}, subject: subj.name };
+        boardMap[board.name].papers[paper.name].count += paper.count;
+        for (const t1 of (paper.topics || [])) {
+          if (!boardMap[board.name].papers[paper.name].topics[t1.name]) boardMap[board.name].papers[paper.name].topics[t1.name] = { count: 0, subtopics: {} };
+          boardMap[board.name].papers[paper.name].topics[t1.name].count += t1.count;
+          for (const t2 of (t1.subtopics || [])) {
+            const subs = boardMap[board.name].papers[paper.name].topics[t1.name].subtopics;
+            subs[t2.name] = (subs[t2.name] || 0) + t2.count;
+          }
+        }
+      }
+    }
+  }
+
+  const boardNames = Object.keys(boardMap);
+  if (boardNames.length === 0 || data.total === 0) {
     container.innerHTML = '<div style="text-align:center;padding:40px 10px;color:var(--g400);font-size:12px">☁️<br><br>云端题库为空<br>请先从导入页面上传题目</div>';
     return;
   }
 
   let html = '';
-  for (const subj of subjects) {
-    if (filterText && !subj.name.toLowerCase().includes(filterText.toLowerCase())) {
-      // 检查子节点
-      const hasMatch = checkTreeMatch(subj, filterText);
+  for (const boardName of boardNames) {
+    const bData = boardMap[boardName];
+    if (filterText && !boardName.toLowerCase().includes(filterText.toLowerCase())) {
+      // 简单过滤：若 board 名不包含搜索词，检查子节点
+      let hasMatch = false;
+      for (const pName of Object.keys(bData.papers)) {
+        if (pName.toLowerCase().includes(filterText.toLowerCase())) { hasMatch = true; break; }
+        const pData = bData.papers[pName];
+        for (const t1 of Object.keys(pData.topics)) {
+          if (t1.toLowerCase().includes(filterText.toLowerCase())) { hasMatch = true; break; }
+          for (const t2 of Object.keys(pData.topics[t1].subtopics)) {
+            if (t2.toLowerCase().includes(filterText.toLowerCase())) { hasMatch = true; break; }
+          }
+          if (hasMatch) break;
+        }
+        if (hasMatch) break;
+      }
       if (!hasMatch) continue;
     }
-    const subjOpen = _cloudActivePath.subject === subj.name;
+
+    const boardOpen = _cloudActivePath.board === boardName;
     html += `<div class="cloud-tree-item">
-      <div class="cloud-tree-row" onclick="cloudTreeClick('subject','${esc(subj.name)}')">
-        <span class="ctr-chev ${subjOpen ? 'open' : ''}">▶</span>
-        <span class="ctr-ico">📚</span>
-        <span class="ctr-label">${esc(subj.name)}</span>
-        <span class="ctr-cnt">${subj.count}</span>
+      <div class="cloud-tree-row" onclick="cloudTreeClick('board',undefined,'${esc(boardName)}')">
+        <span class="ctr-chev ${boardOpen ? 'open' : ''}">▶</span>
+        <span class="ctr-ico">🏛️</span>
+        <span class="ctr-label">${esc(boardName)}</span>
+        <span class="ctr-cnt">${bData.count}</span>
       </div>
-      <div class="cloud-tree-children ${subjOpen ? 'open' : ''}">`;
+      <div class="cloud-tree-children ${boardOpen ? 'open' : ''}">`;
 
-    for (const board of (subj.boards || [])) {
-      if (!board.count && !filterText) continue;
-      const boardOpen = subjOpen && _cloudActivePath.board === board.name;
+    for (const paperName of Object.keys(bData.papers)) {
+      const pData = bData.papers[paperName];
+      if (!pData.count && !filterText) continue;
+      const paperOpen = boardOpen && _cloudActivePath.paper === paperName;
       html += `<div class="cloud-tree-item">
-        <div class="cloud-tree-row lvl2" onclick="cloudTreeClick('board','${esc(subj.name)}','${esc(board.name)}')">
-          <span class="ctr-chev ${boardOpen ? 'open' : ''}">▶</span>
-          <span class="ctr-ico">🏛️</span>
-          <span class="ctr-label">${esc(board.name)}</span>
-          <span class="ctr-cnt">${board.count}</span>
+        <div class="cloud-tree-row lvl2" onclick="cloudTreeClick('paper',undefined,'${esc(boardName)}','${esc(paperName)}')">
+          <span class="ctr-chev ${paperOpen ? 'open' : ''}">▶</span>
+          <span class="ctr-ico">📄</span>
+          <span class="ctr-label">${esc(paperName)}</span>
+          <span class="ctr-cnt">${pData.count}</span>
         </div>
-        <div class="cloud-tree-children ${boardOpen ? 'open' : ''}">`;
+        <div class="cloud-tree-children ${paperOpen ? 'open' : ''}">`;
 
-      for (const paper of (board.papers || [])) {
-        if (!paper.count && !filterText) continue;
-        const paperOpen = boardOpen && _cloudActivePath.paper === paper.name;
+      for (const t1Name of Object.keys(pData.topics)) {
+        const t1Data = pData.topics[t1Name];
+        const t1Open = paperOpen && _cloudActivePath.topic1 === t1Name;
         html += `<div class="cloud-tree-item">
-          <div class="cloud-tree-row lvl3" onclick="cloudTreeClick('paper','${esc(subj.name)}','${esc(board.name)}','${esc(paper.name)}')">
-            <span class="ctr-chev ${paperOpen ? 'open' : ''}">▶</span>
-            <span class="ctr-ico">📄</span>
-            <span class="ctr-label">${esc(paper.name)}</span>
-            <span class="ctr-cnt">${paper.count}</span>
+          <div class="cloud-tree-row lvl3" onclick="cloudTreeClick('topic1',undefined,'${esc(boardName)}','${esc(paperName)}','${esc(t1Name)}')">
+            <span class="ctr-chev ${t1Open ? 'open' : ''}">▶</span>
+            <span class="ctr-ico">📌</span>
+            <span class="ctr-label">${esc(t1Name)}</span>
+            <span class="ctr-cnt">${t1Data.count}</span>
           </div>
-          <div class="cloud-tree-children ${paperOpen ? 'open' : ''}">`;
+          <div class="cloud-tree-children ${t1Open ? 'open' : ''}">`;
 
-        for (const t1 of (paper.topics || [])) {
-          const t1Open = paperOpen && _cloudActivePath.topic1 === t1.name;
-          html += `<div class="cloud-tree-item">
-            <div class="cloud-tree-row lvl4" onclick="cloudTreeClick('topic1','${esc(subj.name)}','${esc(board.name)}','${esc(paper.name)}','${esc(t1.name)}')">
-              <span class="ctr-chev ${t1Open ? 'open' : ''}">▶</span>
-              <span class="ctr-ico">📌</span>
-              <span class="ctr-label">${esc(t1.name)}</span>
-              <span class="ctr-cnt">${t1.count}</span>
-            </div>
-            <div class="cloud-tree-children ${t1Open ? 'open' : ''}">`;
-
-          for (const t2 of (t1.subtopics || [])) {
-            const t2Active = t1Open && _cloudActivePath.topic2 === t2.name;
-            html += `<div class="cloud-tree-row lvl5 ${t2Active ? 'active' : ''}"
-                onclick="cloudTreeClick('topic2','${esc(subj.name)}','${esc(board.name)}','${esc(paper.name)}','${esc(t1.name)}','${esc(t2.name)}')">
-              <span class="ctr-ico">🔖</span>
-              <span class="ctr-label">${esc(t2.name)}</span>
-              <span class="ctr-cnt">${t2.count}</span>
-            </div>`;
-          }
-
-          html += `</div></div>`;
+        for (const t2Name of Object.keys(t1Data.subtopics)) {
+          const t2Count = t1Data.subtopics[t2Name];
+          const t2Active = t1Open && _cloudActivePath.topic2 === t2Name;
+          // 保存 subject 信息用于查询（从 pData.subject）
+          html += `<div class="cloud-tree-row lvl4 ${t2Active ? 'active' : ''}"
+              onclick="cloudTreeClick('topic2','${esc(pData.subject)}','${esc(boardName)}','${esc(paperName)}','${esc(t1Name)}','${esc(t2Name)}')">
+            <span class="ctr-ico">🔖</span>
+            <span class="ctr-label">${esc(t2Name)}</span>
+            <span class="ctr-cnt">${t2Count}</span>
+          </div>`;
         }
+
         html += `</div></div>`;
       }
       html += `</div></div>`;
@@ -5298,30 +5552,33 @@ function esc(s) {
 
 // ── 目录树点击：激活路径并加载题目 ──
 function cloudTreeClick(level, subject, board, paper, topic1, topic2) {
-  _cloudActivePath = {subject, board, paper, topic1, topic2};
+  _cloudActivePath = {board, paper, topic1, topic2};
+  _cloudActiveLibWb = null;   // 清除题册激活状态
   _cloudQPage = 1;
   _cloudDiffFilter = '';
   document.getElementById('cloudDiffFilter').value = '';
 
   // 重新渲染目录树以更新激活状态
   if (_cloudTreeData) renderCloudTree(_cloudTreeData, document.getElementById('cloudTreeSearch').value);
+  // 重渲题册区块（清除高亮）
+  const sec = document.getElementById('cloudLibSection');
+  if (sec) sec.querySelectorAll('.cloud-tree-row.active').forEach(el => el.classList.remove('active'));
 
   // 更新面包屑
   updateCloudBreadcrumb(level, subject, board, paper, topic1, topic2);
 
-  // 加载题目
-  loadCloudQuestions(subject, board, paper || '', topic1 || '', topic2 || '', 1);
+  // 加载题目（用 subject 做查询参数，但不在树中展示）
+  loadCloudQuestions(subject || '', board, paper || '', topic1 || '', topic2 || '', 1);
 }
 
 function updateCloudBreadcrumb(level, subject, board, paper, topic1, topic2) {
   const bc = document.getElementById('cloudBreadcrumb');
   let parts = [
-    `<span class="cloud-bc-item" onclick="cloudBcClick(0)">☁️ 全部</span>`
+    `<span class="cloud-bc-item" onclick="loadCloudAllOverview()">☁️ 全部</span>`
   ];
-  if (subject) parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(1,'${esc(subject)}')">${esc(subject)}</span>`);
-  if (board)   parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(2,'${esc(subject)}','${esc(board)}')">${esc(board)}</span>`);
-  if (paper)   parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(3,'${esc(subject)}','${esc(board)}','${esc(paper)}')">${esc(paper)}</span>`);
-  if (topic1)  parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(4,'${esc(subject)}','${esc(board)}','${esc(paper)}','${esc(topic1)}')">${esc(topic1)}</span>`);
+  if (board)   parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(1,undefined,'${esc(board)}')">${esc(board)}</span>`);
+  if (paper)   parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(2,'${esc(subject||'')}','${esc(board)}','${esc(paper)}')">${esc(paper)}</span>`);
+  if (topic1)  parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item" onclick="cloudBcClick(3,'${esc(subject||'')}','${esc(board)}','${esc(paper)}','${esc(topic1)}')">${esc(topic1)}</span>`);
   if (topic2)  parts.push(`<span class="cloud-bc-sep">›</span><span class="cloud-bc-item active">${esc(topic2)}</span>`);
 
   bc.innerHTML = parts.join('');
@@ -5329,14 +5586,13 @@ function updateCloudBreadcrumb(level, subject, board, paper, topic1, topic2) {
 
 function cloudBcClick(level, subject, board, paper, topic1) {
   if (level === 0) { loadCloudAllOverview(); return; }
-  cloudTreeClick(
-    ['', 'subject','board','paper','topic1','topic2'][level] || 'subject',
-    subject, board, paper, topic1
-  );
+  const levelNames = ['', 'board', 'paper', 'topic1', 'topic2'];
+  cloudTreeClick(levelNames[level] || 'board', subject, board, paper, topic1);
 }
 
 async function loadCloudAllOverview() {
   _cloudActivePath = {};
+  _cloudActiveLibWb = null;
   document.getElementById('cloudBreadcrumb').innerHTML =
     '<span class="cloud-bc-item active">☁️ 全部题目</span>';
   document.getElementById('cloudEmptyHint') &&
@@ -5354,12 +5610,11 @@ async function loadCloudQuestions(subject, board, paper, topic1, topic2, page) {
   grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--g400)"><div class="spin">⏳</div></div>';
   document.getElementById('cloudPagination').style.display = 'none';
 
-  const params = new URLSearchParams({
-    subject, board, page: page || 1, per_page: 30
-  });
-  if (paper)  params.set('maths_unit', paper);
-  if (topic1) params.set('topic1', topic1);
-  if (topic2) params.set('topic2', topic2);
+  const params = new URLSearchParams({ board: board || '', page: page || 1, per_page: 30 });
+  if (subject) params.set('subject', subject);
+  if (paper)   params.set('maths_unit', paper);
+  if (topic1)  params.set('topic1', topic1);
+  if (topic2)  params.set('topic2', topic2);
 
   try {
     const r = await fetch('/api/cloud_library/questions?' + params);
