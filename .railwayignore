@@ -1,0 +1,11 @@
+package.json
+package-lock.json
+node_modules/
+src/
+public/
+wrangler.jsonc
+vite.config.ts
+tsconfig.json
+ecosystem.config.cjs
+dist/
+.wrangler/
