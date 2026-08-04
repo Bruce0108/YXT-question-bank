@@ -1,4 +1,4 @@
-# 使用官方 Python 镜像（和 Sandbox 一致）
+# 使用官方 Python 镜像
 FROM python:3.13-slim
 
 # 安装系统依赖（PyMuPDF 需要）
@@ -23,8 +23,5 @@ COPY . .
 # 创建临时目录
 RUN mkdir -p /tmp/pdf_uploads
 
-# 暴露端口（Railway 会自动注入 $PORT）
-EXPOSE 8080
-
-# 启动命令
-CMD gunicorn app:app --workers 1 --threads 8 --bind 0.0.0.0:${PORT:-8080} --timeout 300 --worker-class gthread
+# 用 shell 形式的 CMD，确保 $PORT 环境变量能被正确展开
+CMD ["sh", "-c", "gunicorn app:app --workers 1 --threads 8 --bind 0.0.0.0:${PORT:-8080} --timeout 300 --worker-class gthread"]
