@@ -23,5 +23,5 @@ COPY . .
 # 创建临时目录
 RUN mkdir -p /tmp/pdf_uploads
 
-# 用 shell 形式的 CMD，确保 $PORT 环境变量能被正确展开
-CMD ["sh", "-c", "gunicorn app:app --workers 1 --threads 8 --bind 0.0.0.0:${PORT:-8080} --timeout 300 --worker-class gthread"]
+# Railway 会通过环境变量注入 PORT，用 exec 形式确保信号传递正常
+ENTRYPOINT ["/bin/sh", "-c", "exec gunicorn app:app --workers 1 --threads 8 --bind 0.0.0.0:${PORT:-8080} --timeout 300 --worker-class gthread"]
