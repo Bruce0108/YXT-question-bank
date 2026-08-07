@@ -10292,7 +10292,7 @@ def cloud_library_replace_image(qid):
     except Exception as e:
         return jsonify({'error': f'图片处理失败: {e}'}), 400
 
-    # 保存
+    # 保存到 R2 / 本地
     img_key = _cloud_img_key(qid)
     try:
         if storage.is_r2_mode():
@@ -10301,9 +10301,21 @@ def cloud_library_replace_image(qid):
             os.makedirs(os.path.dirname(img_key), exist_ok=True)
             with open(img_key, 'wb') as f:
                 f.write(img_bytes)
-        return jsonify({'ok': True, 'qid': qid})
     except Exception as e:
         return jsonify({'error': f'保存失败: {e}'}), 500
+
+    # ── 同步更新内存中所有 session 里对应题目的 img_bytes_b64 ──
+    # 避免导出PDF时仍使用替换前的旧图片
+    import base64 as _b64_sync
+    new_b64 = _b64_sync.b64encode(img_bytes).decode()
+    with _multi_sessions_lock:
+        for sess_groups in _multi_sessions.values():
+            for group in sess_groups:
+                for q_obj in group.get('questions', []):
+                    if q_obj.get('_cloud_qid') == qid:
+                        q_obj['img_bytes_b64'] = new_b64
+
+    return jsonify({'ok': True, 'qid': qid})
 
 
 # ── API: 替换题目答案图片 ──
@@ -10345,7 +10357,7 @@ def cloud_library_replace_answer(qid):
     except Exception as e:
         return jsonify({'error': f'图片处理失败: {e}'}), 400
 
-    # 保存答案图片
+    # 保存答案图片到 R2 / 本地
     ans_key = _cloud_ans_img_key(qid)
     try:
         if storage.is_r2_mode():
@@ -10356,6 +10368,17 @@ def cloud_library_replace_answer(qid):
                 f.write(img_bytes)
     except Exception as e:
         return jsonify({'error': f'保存失败: {e}'}), 500
+
+    # ── 同步更新内存中所有 session 里对应题目的 answer_b64 ──
+    import base64 as _b64_sync_ans
+    new_ans_b64 = _b64_sync_ans.b64encode(img_bytes).decode()
+    with _multi_sessions_lock:
+        for sess_groups in _multi_sessions.values():
+            for group in sess_groups:
+                for q_obj in group.get('questions', []):
+                    if q_obj.get('_cloud_qid') == qid:
+                        q_obj['answer_b64'] = new_ans_b64
+                        q_obj['has_answer_image'] = True
 
     # 更新元数据 has_answer_image 标记
     for subj in _CLOUD_SUBJECTS:
