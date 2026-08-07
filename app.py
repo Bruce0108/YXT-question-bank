@@ -6780,6 +6780,37 @@ def export_pdf():
         if total_q == 0:
             return jsonify({'error': '未选择题目'}), 400
 
+        # ── 关键修复：将前端手动替换的图片覆盖到 groups_info 的 questions 里 ──
+        # 前端在 _buildExportPayload 中对有 _img_replaced / _answer_replaced 的题目
+        # 会在 ordered_items[i] 附带 img_bytes_b64_override / answer_b64_override，
+        # 后端必须在这里把覆盖数据写入 questions，否则导出时仍读旧图。
+        if ordered_items:
+            # 构建 g_idx -> questions 快速索引
+            gi_to_questions = {gi['g_idx']: gi['questions'] for gi in groups_info}
+            for oi in ordered_items:
+                img_override = oi.get('img_bytes_b64_override')
+                ans_override = oi.get('answer_b64_override')
+                if not img_override and not ans_override:
+                    continue  # 该题无替换，跳过
+                gi   = oi.get('gIdx', 0)
+                qn   = oi.get('q_num')
+                _seq = oi.get('_seq')
+                qs   = gi_to_questions.get(gi, [])
+                # 优先用 _wb_seq 精确定位，fallback 到 q_num
+                q_obj = None
+                if _seq is not None:
+                    q_obj = next((q for q in qs if q.get('_wb_seq') == _seq), None)
+                if q_obj is None:
+                    q_obj = next((q for q in qs if q.get('q_num') == qn), None)
+                if q_obj is None:
+                    continue
+                if img_override:
+                    q_obj['img_bytes_b64'] = img_override
+                    if oi.get('img_w'): q_obj['img_w'] = oi['img_w']
+                    if oi.get('img_h'): q_obj['img_h'] = oi['img_h']
+                if ans_override:
+                    q_obj['answer_b64'] = ans_override
+
         _save_task(task_id, {
             'status': 'running', 'progress': 0,
             'total': total_q, 'out_path': out_path,

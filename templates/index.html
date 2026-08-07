@@ -3286,13 +3286,26 @@ function _buildExportPayload(questions) {
     bySessionGroup[key].q_nums.push(q.q_num);
   });
   const sel_by_group = Object.values(bySessionGroup);
-  const ordered_items = questions.map(q => ({
-    gIdx:       q.gIdx,
-    q_num:      q.q_num,
-    _seq:       q._seq != null ? q._seq : null,   // 传递全局唯一序号，用于 workbook 定位
-    session_id: q._append_session_id != null ? q._append_session_id : sessionId,
-    file_idx:   q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx,
-  }));
+  const ordered_items = questions.map(q => {
+    const item = {
+      gIdx:       q.gIdx,
+      q_num:      q.q_num,
+      _seq:       q._seq != null ? q._seq : null,   // 传递全局唯一序号，用于 workbook 定位
+      session_id: q._append_session_id != null ? q._append_session_id : sessionId,
+      file_idx:   q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx,
+    };
+    // ── 关键修复：用户手动替换了题目/答案图片时，把新图片随 payload 一起传给后端 ──
+    // 否则后端从 session 里取的仍是旧图，导出 PDF 显示替换前的图片
+    if (q._img_replaced && q._img_b64) {
+      item.img_bytes_b64_override = q._img_b64;
+      item.img_w = q._img_w || 0;
+      item.img_h = q._img_h || 0;
+    }
+    if (q._answer_replaced && (q.answer_b64 || q._answer_b64)) {
+      item.answer_b64_override = q.answer_b64 || q._answer_b64;
+    }
+    return item;
+  });
   return { sel_by_group, ordered_items };
 }
 
@@ -3741,6 +3754,7 @@ function replaceAnswerImage(file) {
     // 更新内存中的答案图片（兼容两种字段名）
     q.answer_b64 = b64;
     q._answer_b64 = b64;
+    q._answer_replaced = true;  // ← 标记答案已手动替换，导出时随 payload 传给后端
     // 刷新弹框答案预览区
     const ansImg       = document.getElementById('editAnsImg');
     const ansWrap      = document.getElementById('editAnsWrap');
