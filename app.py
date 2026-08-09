@@ -6034,7 +6034,7 @@ def ai_solution():
     }
 
     # 自动降级模型列表
-    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+    models = ["gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro"]
     last_error = ""
 
     for model in models:
@@ -6064,7 +6064,7 @@ def ai_solution():
             last_error = f'{model} HTTP {e.code}: {err_body[:200]}'
             if e.code == 429:
                 # 配额超限，换下一个模型，稍等一下
-                _time.sleep(1)
+                _time.sleep(2)
                 continue
             # 其他HTTP错误也尝试下一个
             continue
