@@ -8668,8 +8668,8 @@ def library_list():
         manifest_tasks = []
         for board in _EXAM_BOARDS:
             for subject in _SUBJECTS_MAP.get(board, []):
-                safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
-                safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
+                safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', board).strip()
+                safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', subject).strip()
                 prefix = f'library/{safe_board}/{safe_subject}/'
                 keys   = storage.list_prefix(prefix)
                 seen_wb = set()
@@ -8707,8 +8707,8 @@ def library_list():
             subjects_list = []
             for subject in _SUBJECTS_MAP.get(board, []):
                 workbooks = []
-                safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
-                safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
+                safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', board).strip()
+                safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', subject).strip()
                 subj_path = os.path.join(_LIBRARY_DIR, safe_board, safe_subject)
                 if os.path.isdir(subj_path):
                     for wb_id in sorted(os.listdir(subj_path)):
