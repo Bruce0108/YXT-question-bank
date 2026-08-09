@@ -8597,7 +8597,7 @@ if not storage.is_r2_mode():
 else:
     _LIBRARY_DIR = None  # R2 模式不使用本地 library 目录
 
-_EXAM_BOARDS  = ['Edexcel', 'CAIE', 'AQA']
+_EXAM_BOARDS  = ['Edexcel', 'CAIE', 'AQA', '竞赛 Competition']
 _SUBJECTS_MAP = {
     'Edexcel': ['数学 Maths',    '高数 Further Maths', '物理 Physics',
                 '化学 Chemistry','生物 Biology',        '经济 Economics',
@@ -8608,6 +8608,8 @@ _SUBJECTS_MAP = {
     'AQA':     ['数学 Maths',    '高数 Further Maths', '物理 Physics',
                 '化学 Chemistry','生物 Biology',        '经济 Economics',
                 '商业 Business', '会计 Accounting'],
+    '竞赛 Competition': ['物理竞赛 Physics (BPhO)', '数学竞赛 Maths (BMO)',
+                         '化学竞赛 Chemistry', '生物竞赛 Biology', '其他 Other'],
 }
 def _lib_key_prefix(board: str, subject: str, wb_id: str = '') -> str:
     """返回图书馆存储 key 前缀（R2 key 或本地目录路径）。"""
@@ -8637,42 +8639,74 @@ def library_list():
     """
     返回所有已保存的题册树形列表。
     结构: {tree: [{board, subjects: [{subject, workbooks: [{id, title, count, created_at, sort_order, ...}]}]}]}
-    支持本地模式和 R2 模式。
+    支持本地模式和 R2 模式。R2 模式使用并发请求加速。
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+
+    def _load_manifest_r2(args):
+        """并发任务：加载单个 manifest.json，返回 (board, subject, wb_info) 或 None"""
+        board, subject, prefix, wb_id = args
+        mfest_key = f'{prefix}{wb_id}/manifest.json'
+        m = storage.load_json(mfest_key)
+        if not m:
+            return None
+        return (board, subject, {
+            'id':           wb_id,
+            'title':        m.get('title', wb_id),
+            'count':        m.get('count', 0),
+            'created_at':   m.get('created_at', ''),
+            'sort_order':   m.get('sort_order', 'default'),
+            'maths_unit':   m.get('maths_unit', ''),
+            'syllabus_type':m.get('syllabus_type', ''),
+            'exam_date':    m.get('exam_date', ''),
+        })
+
     tree = []
-    for board in _EXAM_BOARDS:
-        subjects_list = []
-        for subject in _SUBJECTS_MAP.get(board, []):
-            workbooks = []
-            if storage.is_r2_mode():
-                # R2 模式：扫描 library/{board}/{subject}/ 下的 manifest.json
+    if storage.is_r2_mode():
+        # ── R2 模式：先并发扫描所有 prefix，再并发读取所有 manifest ──
+        # Step1：收集所有 (board, subject, prefix, wb_id) 任务
+        manifest_tasks = []
+        for board in _EXAM_BOARDS:
+            for subject in _SUBJECTS_MAP.get(board, []):
                 safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
                 safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
                 prefix = f'library/{safe_board}/{safe_subject}/'
                 keys   = storage.list_prefix(prefix)
-                # 提取所有 wb_id（manifest.json 的父目录）
                 seen_wb = set()
                 for k in keys:
                     parts = k.split('/')
                     if len(parts) >= 5 and parts[-1] == 'manifest.json':
-                        wb_id = parts[3]  # library/board/subject/wb_id/manifest.json
+                        wb_id = parts[3]
                         if wb_id not in seen_wb:
                             seen_wb.add(wb_id)
-                            mfest_key = f'{prefix}{wb_id}/manifest.json'
-                            m = storage.load_json(mfest_key)
-                            if m:
-                                workbooks.append({
-                                    'id':           wb_id,
-                                    'title':        m.get('title', wb_id),
-                                    'count':        m.get('count', 0),
-                                    'created_at':   m.get('created_at', ''),
-                                    'sort_order':   m.get('sort_order', 'default'),
-                                    'maths_unit':   m.get('maths_unit', ''),
-                                    'syllabus_type':m.get('syllabus_type', ''),
-                                    'exam_date':    m.get('exam_date', ''),
-                                })
-            else:
-                # 本地模式：遍历本地目录
+                            manifest_tasks.append((board, subject, prefix, wb_id))
+
+        # Step2：并发读取所有 manifest（最多16线程）
+        results_map = {}  # (board, subject) -> [wb_info, ...]
+        if manifest_tasks:
+            with ThreadPoolExecutor(max_workers=16) as _ex:
+                futures = {_ex.submit(_load_manifest_r2, t): t for t in manifest_tasks}
+                for fut in _as_completed(futures):
+                    res = fut.result()
+                    if res:
+                        b, s, wb_info = res
+                        results_map.setdefault((b, s), []).append(wb_info)
+
+        # Step3：按固定顺序组装树（保持board/subject顺序）
+        for board in _EXAM_BOARDS:
+            subjects_list = []
+            for subject in _SUBJECTS_MAP.get(board, []):
+                workbooks = results_map.get((board, subject), [])
+                workbooks.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+                subjects_list.append({'subject': subject, 'workbooks': workbooks})
+            tree.append({'board': board, 'subjects': subjects_list})
+
+    else:
+        # ── 本地模式：遍历本地目录 ──
+        for board in _EXAM_BOARDS:
+            subjects_list = []
+            for subject in _SUBJECTS_MAP.get(board, []):
+                workbooks = []
                 safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
                 safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
                 subj_path = os.path.join(_LIBRARY_DIR, safe_board, safe_subject)
@@ -8696,10 +8730,10 @@ def library_list():
                             })
                         except Exception:
                             pass
-            # 按创建时间降序
-            workbooks.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-            subjects_list.append({'subject': subject, 'workbooks': workbooks})
-        tree.append({'board': board, 'subjects': subjects_list})
+                workbooks.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+                subjects_list.append({'subject': subject, 'workbooks': workbooks})
+            tree.append({'board': board, 'subjects': subjects_list})
+
     return jsonify({'tree': tree})
 
 
@@ -8792,32 +8826,31 @@ def library_save():
             file_idx = int(q.get('file_idx', q.get('gIdx', 0)))
             file_idx_map[file_idx].append((i, q))
 
-    # ── 步骤1：处理已有 b64 的题目（直接写图片文件）──
+    # ── 步骤1：处理已有 b64 的题目（直接写图片文件）── 并发上传加速
+    from concurrent.futures import ThreadPoolExecutor as _SaveTPE, as_completed as _save_ac
     img_results = {}   # list_pos -> (img_file, img_w, img_h, ans_file)
-    for i, q in enumerate(questions):
-        if not q_has_b64.get(i):
-            continue
-        b64 = q.get('img_bytes_b64', '')
+
+    def _encode_and_store(args):
+        """将 base64 图片转 JPEG 并写入存储，返回 (i, img_fname, w, h, ans_fname)"""
+        i, q = args
         img_fname = f'q_{i+1:03d}.jpg'
+        ans_fname = ''
         try:
-            raw = _b64.b64decode(b64)
-            # 转成 JPEG（PNG 也存成 jpg）
+            raw = _b64.b64decode(q.get('img_bytes_b64', ''))
             from PIL import Image as _PIL
             _im = _PIL.open(io.BytesIO(raw))
             buf = io.BytesIO()
             _im.convert('RGB').save(buf, format='JPEG', quality=88)
-            # 统一用 storage 写入
             if storage.is_r2_mode():
                 storage.store_bytes(f'{wb_prefix}/{img_fname}', buf.getvalue())
             else:
-                img_path = os.path.join(wb_prefix, img_fname)
-                with open(img_path, 'wb') as f:
+                with open(os.path.join(wb_prefix, img_fname), 'wb') as f:
                     f.write(buf.getvalue())
-            img_results[i] = (img_fname, _im.width, _im.height, '')
+            w, h = _im.width, _im.height
         except Exception:
-            img_results[i] = ('', 0, 0, '')
+            return (i, '', 0, 0, '')
 
-        # Task1: 保存答案图片
+        # 答案图片
         ans_b64 = q.get('answer_b64', '')
         if ans_b64:
             ans_fname = f'q_{i+1:03d}_ans.jpg'
@@ -8832,15 +8865,22 @@ def library_save():
                 else:
                     with open(os.path.join(wb_prefix, ans_fname), 'wb') as f:
                         f.write(abuf.getvalue())
-                if i in img_results:
-                    img_results[i] = (img_results[i][0], img_results[i][1], img_results[i][2], ans_fname)
             except Exception:
-                pass
+                ans_fname = ''
+        return (i, img_fname, w, h, ans_fname)
 
-    # ── 步骤2：从 PDF session 裁图（模式A）──
+    b64_tasks = [(i, q) for i, q in enumerate(questions) if q_has_b64.get(i)]
+    if b64_tasks:
+        with _SaveTPE(max_workers=16) as _ex:
+            for fut in _save_ac([_ex.submit(_encode_and_store, t) for t in b64_tasks]):
+                i, img_f, w, h, ans_f = fut.result()
+                img_results[i] = (img_f, w, h, ans_f)
+
+    # ── 步骤2：从 PDF session 裁图（模式A）── 裁图串行，R2上传并发
+    _r2_upload_queue = []   # [(key, data)] 待并发上传
+
     for file_idx, items in file_idx_map.items():
         if not sess or file_idx >= len(sess):
-            # session 不可用，这些题目无法获取图片，记录失败
             for (i, q) in items:
                 img_results[i] = ('', 0, 0, '')
             continue
@@ -8870,20 +8910,19 @@ def library_save():
                         dpi=300, paper_type=paper_type
                     )
                     img_file = f'q_{i+1:03d}.jpg'
-                    # PNG -> JPEG
                     from PIL import Image as _PIL
                     _im = _PIL.open(io.BytesIO(img_bytes))
                     buf = io.BytesIO()
                     _im.convert('RGB').save(buf, format='JPEG', quality=88)
-                    # 统一用 storage 写入
-                    if storage.is_r2_mode():
-                        storage.store_bytes(f'{wb_prefix}/{img_file}', buf.getvalue())
-                    else:
-                        img_path = os.path.join(wb_prefix, img_file)
-                        with open(img_path, 'wb') as f:
-                            f.write(buf.getvalue())
+                    jpeg_data = buf.getvalue()
 
-                    # Task1: 保存答案图片（从 questions_meta 中取 answer_b64）
+                    if storage.is_r2_mode():
+                        _r2_upload_queue.append((f'{wb_prefix}/{img_file}', jpeg_data))
+                    else:
+                        with open(os.path.join(wb_prefix, img_file), 'wb') as f:
+                            f.write(jpeg_data)
+
+                    # 答案图片
                     ans_fname = ''
                     q_meta_obj = questions_meta[q_idx]
                     ans_b64 = q_meta_obj.get('answer_b64', '') or q.get('answer_b64', '')
@@ -8895,21 +8934,29 @@ def library_save():
                             _aim = _PIL3.open(io.BytesIO(ans_raw))
                             abuf = io.BytesIO()
                             _aim.convert('RGB').save(abuf, format='JPEG', quality=88)
+                            ans_data = abuf.getvalue()
                             if storage.is_r2_mode():
-                                storage.store_bytes(f'{wb_prefix}/{ans_fname}', abuf.getvalue())
+                                _r2_upload_queue.append((f'{wb_prefix}/{ans_fname}', ans_data))
                             else:
                                 with open(os.path.join(wb_prefix, ans_fname), 'wb') as f:
-                                    f.write(abuf.getvalue())
+                                    f.write(ans_data)
                         except Exception:
                             ans_fname = ''
 
                     img_results[i] = (img_file, w, h, ans_fname)
-                except Exception as ce:
+                except Exception:
                     img_results[i] = ('', 0, 0, '')
             doc.close()
-        except Exception as e:
+        except Exception:
             for (i, q) in items:
                 img_results[i] = ('', 0, 0, '')
+
+    # R2 模式：并发上传所有裁图结果
+    if storage.is_r2_mode() and _r2_upload_queue:
+        def _r2_upload(kv):
+            storage.store_bytes(kv[0], kv[1])
+        with _SaveTPE(max_workers=16) as _ex:
+            list(_ex.map(_r2_upload, _r2_upload_queue))
 
     # ── 步骤3：构建 manifest ──
     for i, q in enumerate(questions):
@@ -9063,21 +9110,36 @@ def library_load(wb_id):
         manifest = storage.load_json(f'{wb_prefix}/manifest.json')
         if manifest is None:
             return jsonify({'error': '题册不存在'}), 404
-        questions_out = []
-        for q in manifest.get('questions', []):
-            img_file = q.get('img_file', '')
-            b64 = ''
+
+        # ── 并发下载所有图片（大幅提速，199题从串行~200次R2请求→并发完成）──
+        from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
+        import base64 as _b64
+
+        q_list = manifest.get('questions', [])
+
+        def _fetch_img(args):
+            idx, img_file, ans_file = args
+            result = {'idx': idx, 'b64': '', 'ans_b64': ''}
             if img_file:
                 raw = storage.load_bytes(f'{wb_prefix}/{img_file}')
                 if raw:
-                    b64 = _b64.b64encode(raw).decode('ascii')
-            # Task1: 读取答案图片
-            ans_b64 = ''
-            ans_file = q.get('ans_file', '')
+                    result['b64'] = _b64.b64encode(raw).decode('ascii')
             if ans_file:
                 raw_ans = storage.load_bytes(f'{wb_prefix}/{ans_file}')
                 if raw_ans:
-                    ans_b64 = _b64.b64encode(raw_ans).decode('ascii')
+                    result['ans_b64'] = _b64.b64encode(raw_ans).decode('ascii')
+            return result
+
+        tasks = [(i, q.get('img_file',''), q.get('ans_file','')) for i, q in enumerate(q_list)]
+        img_map = {}  # idx -> {b64, ans_b64}
+        with _TPE(max_workers=20) as _ex:
+            for fut in _ac([_ex.submit(_fetch_img, t) for t in tasks]):
+                r = fut.result()
+                img_map[r['idx']] = r
+
+        questions_out = []
+        for i, q in enumerate(q_list):
+            imgs = img_map.get(i, {'b64': '', 'ans_b64': ''})
             questions_out.append({
                 'seq':           q.get('seq', 0),
                 'q_num':         q.get('q_num', 0),
@@ -9085,10 +9147,10 @@ def library_load(wb_id):
                 'topics':        q.get('topics', []),
                 'exam_date':     q.get('exam_date', ''),
                 'source':        q.get('source', ''),
-                'img_bytes_b64': b64,
+                'img_bytes_b64': imgs['b64'],
                 'img_w':         q.get('img_w', 0),
                 'img_h':         q.get('img_h', 0),
-                'answer_b64':    ans_b64,   # Task1
+                'answer_b64':    imgs['ans_b64'],
             })
     else:
         mfest = os.path.join(wb_prefix, 'manifest.json')

@@ -4257,7 +4257,7 @@ async function openSaveLibDialog() {
     _libSubjects = d.subjects|| {};
   } catch(e) {
     // 降级处理：使用内置默认列表，不阻断用户操作
-    _libBoards   = ['Edexcel','CAIE','AQA','OCR','IB','AP'];
+    _libBoards   = ['Edexcel','CAIE','AQA','OCR','IB','AP','竞赛 Competition'];
     _libSubjects = {
       'Edexcel': ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
       'CAIE':    ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
@@ -4265,6 +4265,7 @@ async function openSaveLibDialog() {
       'OCR':     ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
       'IB':      ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
       'AP':      ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
+      '竞赛 Competition': ['物理竞赛 Physics (BPhO)','数学竞赛 Maths (BMO)','化学竞赛 Chemistry','生物竞赛 Biology','其他 Other'],
     };
     console.warn('library/boards 加载失败，使用默认列表：', e.message);
   }
@@ -4592,7 +4593,7 @@ function renderLibTree(tree) {
     const hasAny = boardNode.subjects.some(s => s.workbooks.length > 0);
     html += `<div class="lib-board-section">
       <div class="lib-board-hdr" onclick="toggleLibBoard('${board}')">
-        <span class="lib-board-icon">${board==='Edexcel'?'🔷':board==='CAIE'?'🔶':'🔹'}</span>
+        <span class="lib-board-icon">${board==='Edexcel'?'🔷':board==='CAIE'?'🔶':board==='竞赛 Competition'?'🏆':'🔹'}</span>
         <span class="lib-board-name">${board}</span>
         <span class="lib-toggle-icon" id="lib-bico-${board}">▼</span>
       </div>
