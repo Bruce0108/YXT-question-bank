@@ -8613,8 +8613,8 @@ _SUBJECTS_MAP = {
 }
 def _lib_key_prefix(board: str, subject: str, wb_id: str = '') -> str:
     """返回图书馆存储 key 前缀（R2 key 或本地目录路径）。"""
-    safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
-    safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
+    safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', board).strip()
+    safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', subject).strip()
     if storage.is_r2_mode():
         if wb_id:
             return f'library/{safe_board}/{safe_subject}/{wb_id}'
