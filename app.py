@@ -5985,19 +5985,19 @@ def get_answer():
 @app.route('/api/ai_solution', methods=['POST'])
 def ai_solution():
     """
-    调用 OpenAI GPT-4o Vision 对题目图片进行解析，返回详细解题过程。
+    调用 Google Gemini Vision 对题目图片进行解析，返回详细解题过程。
     POST body JSON: {img_b64: "...", q_num: 1, context: "BPhO 2022 Q1"}
     返回: {ok: true, solution: "...markdown text..."}
-    需要环境变量: OPENAI_API_KEY
+    需要环境变量: GEMINI_API_KEY
     """
     import os as _os
     import json as _json
     import urllib.request as _urllib_req
     import urllib.error  as _urllib_err
 
-    OPENAI_API_KEY = _os.environ.get('OPENAI_API_KEY', '')
-    if not OPENAI_API_KEY:
-        return jsonify({'ok': False, 'error': '未配置 OPENAI_API_KEY，请在 Railway Variables 中添加'}), 400
+    GEMINI_API_KEY = _os.environ.get('GEMINI_API_KEY', '')
+    if not GEMINI_API_KEY:
+        return jsonify({'ok': False, 'error': '未配置 GEMINI_API_KEY，请在 Railway Variables 中添加'}), 400
 
     data = request.get_json(force=True, silent=True) or {}
     img_b64  = data.get('img_b64', '')
@@ -6008,70 +6008,56 @@ def ai_solution():
     if not img_b64:
         return jsonify({'ok': False, 'error': '缺少题目图片'}), 400
 
-    # 构建消息内容
-    content_parts = [
-        {
-            "type": "text",
-            "text": (
-                f"你是一位专业的英国物理竞赛（BPhO）辅导老师。请对以下题目给出**详细的解题过程和答案**。\n\n"
-                f"题目背景：{context}，第 {q_num} 题\n\n"
-                f"要求：\n"
-                f"1. 用**中文**解释每个步骤，关键公式用LaTeX格式（$...$）\n"
-                f"2. 列出所用物理定律/公式，并说明适用条件\n"
-                f"3. 分步骤清晰推导，标注每步的物理意义\n"
-                f"4. 给出最终答案，注意单位\n"
-                f"5. 如有多问(i)(ii)(iii)等，逐一解答\n"
-                f"6. 最后给出解题要点总结（1-3条）"
-            )
-        },
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{img_b64}",
-                "detail": "high"
-            }
-        }
+    prompt_text = (
+        f"你是一位专业的英国物理竞赛（BPhO）辅导老师。请对以下题目给出详细的解题过程和答案。\n\n"
+        f"题目背景：{context}，第 {q_num} 题\n\n"
+        f"要求：\n"
+        f"1. 用中文解释每个步骤，关键公式用LaTeX格式（用$$包裹行间公式，$包裹行内公式）\n"
+        f"2. 列出所用物理定律/公式，并说明适用条件\n"
+        f"3. 分步骤清晰推导，标注每步的物理意义\n"
+        f"4. 给出最终答案，注意单位\n"
+        f"5. 如有多问(i)(ii)(iii)等，逐一解答\n"
+        f"6. 最后给出解题要点总结（1-3条）"
+    )
+
+    parts = [
+        {"text": prompt_text},
+        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
     ]
 
-    # 如果有 Mark Scheme，也一起发给AI作参考
     if ans_b64:
-        content_parts.append({
-            "type": "text",
-            "text": "以下是官方 Mark Scheme（答案评分标准），请结合此参考你的解析："
-        })
-        content_parts.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{ans_b64}",
-                "detail": "high"
-            }
-        })
+        parts.append({"text": "以下是官方 Mark Scheme（答案评分标准），请结合此参考你的解析："})
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": ans_b64}})
 
     payload = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": content_parts}],
-        "max_tokens": 2000,
-        "temperature": 0.3
+        "contents": [{"parts": parts}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048}
     }
+
+    model = "gemini-2.0-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
 
     try:
         req_data = _json.dumps(payload).encode('utf-8')
         req = _urllib_req.Request(
-            'https://api.openai.com/v1/chat/completions',
-            data=req_data,
-            headers={
-                'Authorization': f'Bearer {OPENAI_API_KEY}',
-                'Content-Type': 'application/json'
-            },
+            url, data=req_data,
+            headers={'Content-Type': 'application/json'},
             method='POST'
         )
         with _urllib_req.urlopen(req, timeout=60) as resp:
             result = _json.loads(resp.read().decode('utf-8'))
-        solution = result['choices'][0]['message']['content']
+
+        candidates = result.get('candidates', [])
+        if not candidates:
+            return jsonify({'ok': False, 'error': 'Gemini 未返回结果，请重试'}), 500
+        solution = candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+        if not solution:
+            return jsonify({'ok': False, 'error': 'Gemini 返回内容为空'}), 500
         return jsonify({'ok': True, 'solution': solution})
+
     except _urllib_err.HTTPError as e:
         err_body = e.read().decode('utf-8', errors='replace')
-        return jsonify({'ok': False, 'error': f'OpenAI API 错误 {e.code}: {err_body[:300]}'}), 500
+        return jsonify({'ok': False, 'error': f'Gemini API 错误 {e.code}: {err_body[:300]}'}), 500
     except Exception as e:
         return jsonify({'ok': False, 'error': f'请求失败: {str(e)}'}), 500
 
