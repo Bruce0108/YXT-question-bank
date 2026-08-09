@@ -2110,6 +2110,9 @@ function renderGrid() {
 
   const hasManyGroups = !isChapterSort && Object.keys(srcGroups).length > 1;
 
+  // 全局显示序号计数器：无论分组/排序，题卡上Q1始终从1开始递增，不重复
+  let _globalDisplayIdx = 0;
+
   Object.values(srcGroups).forEach(sg => {
     // 统一视图时paper_type取第一题的
     const pt = sg.unified ? (sg.qs[0]?.paper_type || 'edexcel_maths') : sg.paper_type;
@@ -2136,6 +2139,9 @@ function renderGrid() {
     wrap.appendChild(section);
 
     sg.qs.forEach((q, idx) => {
+      // 全局显示序号：始终从1开始递增，无论排序/分组，不重复
+      _globalDisplayIdx++;
+      const _dispNum = _globalDisplayIdx;
       // uid 用 _seq（全局唯一序号）确保唯一，避免 workbook 题目同 gIdx 下 q_num 重复
       const uid = q._seq != null ? `s${q._seq}` : `${q.gIdx}_${q.q_num}`;
       let pgInfo = q.page_idx != null ? `P${q.page_idx+1}` : '';
@@ -2182,7 +2188,7 @@ function renderGrid() {
       // 答案区域（仅当题目有 answer_b64 时显示）
       // 采用「按需加载」策略：卡片初始化只写占位容器，
       // 点击「👁 答案」时通过 /api/get_answer 拉取完整多页数据后一次性渲染。
-      const hasAnswer = !!(q.answer_b64);
+      const hasAnswer = !!(q.answer_b64) || !!(q.has_answer);
       // 提前算出多页数量（用于 loading 提示）
       const _ansPageCount = (q.answer_pages && Array.isArray(q.answer_pages)) ? q.answer_pages.length : 1;
       const answerHtml = hasAnswer ? `
@@ -2207,7 +2213,7 @@ function renderGrid() {
         </div>` : '';
       card.innerHTML = `
         <div class="qc-hdr">
-          <span class="q-badge${st?' st':''}">${st?'第':'Q'}${q.q_num}${st?'题':''}</span>
+          <span class="q-badge${st?' st':''}" title="原始题号: Q${q.q_num}">${st?'第':'Q'}${_dispNum}${st?'题':''}</span>
           ${examDateHtml}
           ${hasAnswer ? '<span class="ms-badge" title="已关联 Mark Scheme 答案">MS</span>' : ''}
           <span class="qpg">${pgInfo}</span>
@@ -2234,6 +2240,9 @@ function renderGrid() {
                 onclick="toggleAnswer('${uid}',event)">👁 答案</button>`
             : ''
           }
+          <button class="btn btn-sm" id="aibtn-${uid}"
+            style="background:#fdf4ff;color:#7c3aed;border:1px solid #e9d5ff"
+            onclick="openAiSolution('${uid}',${q.q_num},${q.gIdx},event)">🤖 解析</button>
           <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1" onclick="openEditMeta('${uid}',null,null,null,event)">✏️ 编辑</button>
           <button class="btn btn-primary btn-sm${(_hasSourceInMem && hasAnswer) ? ' btn-dl-full' : ''}"
                   onclick="dlOne(${q.q_num},${q.gIdx},event)">⬇️ 下载</button>
@@ -2257,9 +2266,104 @@ function renderGrid() {
   updateSelUI();
 }
 
+// ─────────────────────── AI 解析功能 ───────────────────────
+let _aiMoUid = null;
+
+function openAiSolution(uid, qNum, gIdx, e) {
+  if (e) e.stopPropagation();
+  _aiMoUid = uid;
+  const qObj = _uidToQ(uid);
+  const mo = document.getElementById('aiSolutionModal');
+  if (!mo) return;
+  // 重置内容
+  document.getElementById('aiSolContent').innerHTML = '<div style="text-align:center;padding:40px;color:#888">⏳ 正在生成解析，请稍候（约10-30秒）…</div>';
+  const titleEl = document.getElementById('aiSolTitle');
+  if (titleEl) {
+    const wbTitle = _loadedWb ? _loadedWb.title : '题册';
+    titleEl.textContent = `🤖 AI 解析 — ${wbTitle} Q${qNum}`;
+  }
+  mo.style.display = 'flex';
+
+  // 获取题目图片
+  let imgB64 = qObj ? (qObj._img_b64 || '') : '';
+  let ansB64 = qObj ? (qObj.answer_b64 || '') : '';
+  const board   = qObj ? (qObj._lazy_board || (_loadedWb && _loadedWb.board) || '') : '';
+  const subject = qObj ? (qObj._lazy_subject || (_loadedWb && _loadedWb.subject) || '') : '';
+  const wbId    = qObj ? (qObj._lazy_wb_id || (_loadedWb && _loadedWb.id) || '') : '';
+  const context = (_loadedWb ? _loadedWb.title : 'BPhO') + ` Q${qNum}`;
+
+  // 若懒加载图片还没拉取，先拉取
+  function _doAI(ib64, ab64) {
+    const payload = { img_b64: ib64, q_num: qNum, context, ans_b64: ab64 };
+    fetch('/api/ai_solution', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(d => {
+      const box = document.getElementById('aiSolContent');
+      if (!box) return;
+      if (d.ok && d.solution) {
+        // 渲染Markdown风格内容（简单处理）
+        let html = d.solution
+          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+          .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+          .replace(/\*(.+?)\*/g,'<em>$1</em>')
+          .replace(/`(.+?)`/g,'<code>$1</code>')
+          .replace(/\$\$(.+?)\$\$/gs,'<span class="math-block">$$1$</span>')
+          .replace(/\$(.+?)\$/g,'<span class="math-inline">$$1$</span>')
+          .replace(/^#{3}\s+(.+)$/gm,'<h4>$1</h4>')
+          .replace(/^#{2}\s+(.+)$/gm,'<h3>$1</h3>')
+          .replace(/^#{1}\s+(.+)$/gm,'<h2>$1</h2>')
+          .replace(/^\d+\.\s+(.+)$/gm,'<li>$1</li>')
+          .replace(/^[-•]\s+(.+)$/gm,'<li>$1</li>')
+          .replace(/\n\n/g,'</p><p>')
+          .replace(/\n/g,'<br>');
+        box.innerHTML = `<div class="ai-sol-body"><p>${html}</p></div>`;
+      } else {
+        box.innerHTML = `<div style="color:#dc2626;padding:20px">❌ ${d.error || '解析失败，请检查 OPENAI_API_KEY 是否已配置'}</div>`;
+      }
+    })
+    .catch(err => {
+      const box = document.getElementById('aiSolContent');
+      if (box) box.innerHTML = `<div style="color:#dc2626;padding:20px">❌ 请求失败：${err.message}</div>`;
+    });
+  }
+
+  if (imgB64) {
+    _doAI(imgB64, ansB64);
+  } else if (wbId) {
+    // 懒加载图片后再请求AI
+    fetch(`/api/library/img/${wbId}/${qNum}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&type=q`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok && d.b64) {
+          if (qObj) { qObj._img_b64 = d.b64; }
+          // 同时拉答案图片
+          if (ansB64) { _doAI(d.b64, ansB64); return; }
+          fetch(`/api/library/img/${wbId}/${qNum}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&type=a`)
+            .then(r2 => r2.json())
+            .then(d2 => _doAI(d.b64, d2.ok ? d2.b64 : ''))
+            .catch(() => _doAI(d.b64, ''));
+        } else {
+          _doAI('', ansB64);
+        }
+      })
+      .catch(() => _doAI('', ansB64));
+  } else {
+    document.getElementById('aiSolContent').innerHTML = '<div style="color:#dc2626;padding:20px">❌ 无法获取题目图片</div>';
+  }
+}
+
+function closeAiSolution() {
+  const mo = document.getElementById('aiSolutionModal');
+  if (mo) mo.style.display = 'none';
+  _aiMoUid = null;
+}
+
 // ── 答案显示/隐藏切换 ──
 function toggleAnswer(uid, e) {
-  if (e) e.stopPropagation();
   const ansWrap = document.getElementById(`ans-${uid}`);
   const ansBtn  = document.getElementById(`ansbtn-${uid}`);
   if (!ansWrap) return;
@@ -2495,6 +2599,39 @@ function procThumbQ() {
       img.src = dataUrl; img.style.display='';
       if (ld) ld.style.display='none';
       thumbIng--; procThumbQ();
+      continue;
+    }
+
+    // ── 懒加载模式：从 R2 按需拉取单题图片（题册读取极速首屏后台加载）──
+    if (qObj && qObj._lazy_wb_id) {
+      const _wbId  = qObj._lazy_wb_id;
+      const _board = encodeURIComponent(qObj._lazy_board || '');
+      const _subj  = encodeURIComponent(qObj._lazy_subject || '');
+      const _capTok = tok;
+      fetch(`/api/library/img/${_wbId}/${qObj.q_num}?board=${_board}&subject=${_subj}&type=q`)
+        .then(r => r.json())
+        .then(d => {
+          if (_capTok !== uploadToken) { thumbIng--; procThumbQ(); return; }
+          if (d.ok && d.b64) {
+            qObj._img_b64 = d.b64;
+            qObj._img_w   = d.w || 0;
+            qObj._img_h   = d.h || 0;
+            const mime2 = d.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+            const el = document.getElementById(`th-${uid}`);
+            if (el) { el.src = `data:${mime2};base64,${d.b64}`; el.style.display = ''; }
+            const ldEl = document.getElementById(`tld-${uid}`);
+            if (ldEl) ldEl.style.display = 'none';
+          } else {
+            const ldEl = document.getElementById(`tld-${uid}`);
+            if (ldEl) ldEl.innerHTML = '⚠️';
+          }
+          thumbIng--; procThumbQ();
+        })
+        .catch(() => {
+          const ldEl = document.getElementById(`tld-${uid}`);
+          if (ldEl) ldEl.innerHTML = '⚠️';
+          thumbIng--; procThumbQ();
+        });
       continue;
     }
 
@@ -4690,17 +4827,17 @@ async function loadFromLib(board, subject, wbId, title) {
   closeLoadLibDialog();
   showLdProgress(`正在读取题册《${title}》`, 10, '发起请求…');
   try {
-    // 30% → 等待响应
-    setLdProgress(30, '下载题目数据…');
-    const r = await fetch(`/api/library/load/${wbId}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}`);
+    // 懒加载模式：先只拉元数据，极速首屏
+    setLdProgress(30, '下载题目列表…');
+    const r = await fetch(`/api/library/load/${wbId}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&lazy=1`);
 
-    setLdProgress(70, '解析题目列表…');
+    setLdProgress(65, '解析题目列表…');
     const d = await r.json();
 
     if (!r.ok || !d.ok) { hideLd(); toast(d.error || '读取失败', 'err'); return; }
 
-    setLdProgress(85, `加载 ${d.count} 道题目…`);
-    await new Promise(r => setTimeout(r, 150));
+    setLdProgress(85, `准备 ${d.count} 道题目…`);
+    await new Promise(r => setTimeout(r, 80));
 
     try {
       _applyLoadedWorkbook(d);
@@ -4712,9 +4849,9 @@ async function loadFromLib(board, subject, wbId, title) {
     }
 
     setLdProgress(100, '读取完成！');
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 300));
     hideLd();
-    toast(`✅ 题册《${d.title}》已读取，共 ${d.count} 题，可继续编辑`, 'ok');
+    toast(`✅ 题册《${d.title}》已读取，共 ${d.count} 题，图片后台加载中`, 'ok');
   } catch(e) {
     console.error('[loadFromLib] 异常:', e.stack || e);
     hideLd(); toast('读取题册失败：' + e.message, 'err');
@@ -5075,6 +5212,11 @@ function _applyLoadedWorkbook(d) {
       // 答案图片（从 library_load 的 answer_b64 字段）
       answer_b64:    q.answer_b64 || '',
       answer_pages:  q.answer_pages || null,
+      // 懒加载标记
+      has_answer:    q.has_answer || !!q.answer_b64,
+      _lazy_wb_id:   q._wb_id || d.id,
+      _lazy_board:   d.board || '',
+      _lazy_subject: d.subject || '',
     };
     allQuestions.push(qObj);
     g.questions.push(qObj);
@@ -6912,6 +7054,43 @@ document.addEventListener('DOMContentLoaded', () => {
 <!-- Toolbar 追加套题专用 file input：放在 body 最末尾，完全脱离 drop 事件树 -->
 <input type="file" id="appendPdfInput" accept=".pdf" multiple style="display:none"
        onchange="appendPdfToCurrentSession(this)">
+
+<!-- AI 解析 Modal -->
+<div id="aiSolutionModal" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.55);
+     align-items:center;justify-content:center;" onclick="if(event.target===this)closeAiSolution()">
+  <div style="background:#fff;border-radius:16px;width:min(780px,95vw);max-height:88vh;
+              display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;">
+    <!-- Header -->
+    <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <span style="font-size:20px">🤖</span>
+      <span id="aiSolTitle" style="font-weight:700;font-size:16px;color:#1e1b4b;flex:1">AI 解析</span>
+      <span style="font-size:11px;color:#6b7280;background:#f3f4f6;padding:3px 8px;border-radius:10px">由 GPT-4o 生成，仅供参考</span>
+      <button onclick="closeAiSolution()" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280;padding:2px 6px;border-radius:6px">✕</button>
+    </div>
+    <!-- Content -->
+    <div id="aiSolContent" style="flex:1;overflow-y:auto;padding:20px 24px;font-size:14px;line-height:1.8;color:#1f2937;">
+    </div>
+    <!-- Footer -->
+    <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;flex-shrink:0;background:#fafafa;">
+      <button onclick="closeAiSolution()"
+        style="padding:8px 20px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;">
+        关闭
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+.ai-sol-body h2{font-size:16px;font-weight:700;color:#1e1b4b;margin:16px 0 8px}
+.ai-sol-body h3{font-size:15px;font-weight:700;color:#3730a3;margin:14px 0 6px}
+.ai-sol-body h4{font-size:14px;font-weight:700;color:#4f46e5;margin:12px 0 4px}
+.ai-sol-body strong{color:#111}
+.ai-sol-body code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-family:monospace;font-size:13px}
+.ai-sol-body li{margin:4px 0 4px 18px;list-style:disc}
+.ai-sol-body p{margin:8px 0}
+.math-inline{font-family:monospace;background:#fef9c3;padding:1px 4px;border-radius:3px}
+.math-block{display:block;font-family:monospace;background:#fef9c3;padding:4px 10px;border-radius:4px;margin:6px 0}
+</style>
 
 </body>
 </html>

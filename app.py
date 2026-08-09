@@ -5981,7 +5981,102 @@ def get_answer():
     })
 
 
-@app.route('/api/get_source_pages', methods=['GET'])
+# ─────────────────────────────── AI 解析接口 ───────────────────────────────
+@app.route('/api/ai_solution', methods=['POST'])
+def ai_solution():
+    """
+    调用 OpenAI GPT-4o Vision 对题目图片进行解析，返回详细解题过程。
+    POST body JSON: {img_b64: "...", q_num: 1, context: "BPhO 2022 Q1"}
+    返回: {ok: true, solution: "...markdown text..."}
+    需要环境变量: OPENAI_API_KEY
+    """
+    import os as _os
+    import json as _json
+    import urllib.request as _urllib_req
+    import urllib.error  as _urllib_err
+
+    OPENAI_API_KEY = _os.environ.get('OPENAI_API_KEY', '')
+    if not OPENAI_API_KEY:
+        return jsonify({'ok': False, 'error': '未配置 OPENAI_API_KEY，请在 Railway Variables 中添加'}), 400
+
+    data = request.get_json(force=True, silent=True) or {}
+    img_b64  = data.get('img_b64', '')
+    q_num    = data.get('q_num', '')
+    context  = data.get('context', 'BPhO 物理竞赛')
+    ans_b64  = data.get('ans_b64', '')   # 可选：Mark Scheme 图片
+
+    if not img_b64:
+        return jsonify({'ok': False, 'error': '缺少题目图片'}), 400
+
+    # 构建消息内容
+    content_parts = [
+        {
+            "type": "text",
+            "text": (
+                f"你是一位专业的英国物理竞赛（BPhO）辅导老师。请对以下题目给出**详细的解题过程和答案**。\n\n"
+                f"题目背景：{context}，第 {q_num} 题\n\n"
+                f"要求：\n"
+                f"1. 用**中文**解释每个步骤，关键公式用LaTeX格式（$...$）\n"
+                f"2. 列出所用物理定律/公式，并说明适用条件\n"
+                f"3. 分步骤清晰推导，标注每步的物理意义\n"
+                f"4. 给出最终答案，注意单位\n"
+                f"5. 如有多问(i)(ii)(iii)等，逐一解答\n"
+                f"6. 最后给出解题要点总结（1-3条）"
+            )
+        },
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{img_b64}",
+                "detail": "high"
+            }
+        }
+    ]
+
+    # 如果有 Mark Scheme，也一起发给AI作参考
+    if ans_b64:
+        content_parts.append({
+            "type": "text",
+            "text": "以下是官方 Mark Scheme（答案评分标准），请结合此参考你的解析："
+        })
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{ans_b64}",
+                "detail": "high"
+            }
+        })
+
+    payload = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": content_parts}],
+        "max_tokens": 2000,
+        "temperature": 0.3
+    }
+
+    try:
+        req_data = _json.dumps(payload).encode('utf-8')
+        req = _urllib_req.Request(
+            'https://api.openai.com/v1/chat/completions',
+            data=req_data,
+            headers={
+                'Authorization': f'Bearer {OPENAI_API_KEY}',
+                'Content-Type': 'application/json'
+            },
+            method='POST'
+        )
+        with _urllib_req.urlopen(req, timeout=60) as resp:
+            result = _json.loads(resp.read().decode('utf-8'))
+        solution = result['choices'][0]['message']['content']
+        return jsonify({'ok': True, 'solution': solution})
+    except _urllib_err.HTTPError as e:
+        err_body = e.read().decode('utf-8', errors='replace')
+        return jsonify({'ok': False, 'error': f'OpenAI API 错误 {e.code}: {err_body[:300]}'}), 500
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'请求失败: {str(e)}'}), 500
+
+
+
 def get_source_pages():
     """
     按需返回题目的 Section C 材料页（无需已有答案）。
@@ -9065,10 +9160,12 @@ def library_load(wb_id):
     读取图书馆中的一个题册，返回题目列表（含图片 base64）。
     前端通过 GET /api/library/load/<wb_id>?board=Edexcel&subject=数学Maths
     board/subject 可选：若不提供，则自动搜索 library 目录查找匹配 wb_id 的题册。
+    ?lazy=1：懒加载模式，只返回元数据，不含图片base64（大幅提速首屏）
     """
     import base64 as _b64
     board   = request.args.get('board', '')
     subject = request.args.get('subject', '')
+    lazy    = request.args.get('lazy', '0') == '1'  # 懒加载模式
 
     # ── 自动搜索：若 board/subject 为空，扫描本地目录或 R2 找 wb_id ──
     if not board or not subject:
@@ -9111,47 +9208,68 @@ def library_load(wb_id):
         if manifest is None:
             return jsonify({'error': '题册不存在'}), 404
 
-        # ── 并发下载所有图片（大幅提速，199题从串行~200次R2请求→并发完成）──
         from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
-        import base64 as _b64
 
         q_list = manifest.get('questions', [])
 
-        def _fetch_img(args):
-            idx, img_file, ans_file = args
-            result = {'idx': idx, 'b64': '', 'ans_b64': ''}
-            if img_file:
-                raw = storage.load_bytes(f'{wb_prefix}/{img_file}')
-                if raw:
-                    result['b64'] = _b64.b64encode(raw).decode('ascii')
-            if ans_file:
-                raw_ans = storage.load_bytes(f'{wb_prefix}/{ans_file}')
-                if raw_ans:
-                    result['ans_b64'] = _b64.b64encode(raw_ans).decode('ascii')
-            return result
+        # ── 懒加载模式：只返回元数据，极速首屏 ──
+        if lazy:
+            questions_out = []
+            for i, q in enumerate(q_list):
+                questions_out.append({
+                    'seq':        q.get('seq', 0),
+                    'q_num':      q.get('q_num', 0),
+                    'difficulty': q.get('difficulty'),
+                    'topics':     q.get('topics', []),
+                    'exam_date':  q.get('exam_date', ''),
+                    'source':     q.get('source', ''),
+                    'img_bytes_b64': '',
+                    'img_w':      q.get('img_w', 0),
+                    'img_h':      q.get('img_h', 0),
+                    'answer_b64': '',
+                    'has_answer': bool(q.get('ans_file', '')),
+                    '_wb_id':     wb_id,
+                    '_img_file':  q.get('img_file', ''),
+                    '_ans_file':  q.get('ans_file', ''),
+                })
+        else:
+            # ── 并发下载所有图片（大幅提速，199题从串行~200次R2请求→并发完成）──
+            def _fetch_img(args):
+                idx, img_file, ans_file = args
+                result = {'idx': idx, 'b64': '', 'ans_b64': ''}
+                if img_file:
+                    raw = storage.load_bytes(f'{wb_prefix}/{img_file}')
+                    if raw:
+                        result['b64'] = _b64.b64encode(raw).decode('ascii')
+                if ans_file:
+                    raw_ans = storage.load_bytes(f'{wb_prefix}/{ans_file}')
+                    if raw_ans:
+                        result['ans_b64'] = _b64.b64encode(raw_ans).decode('ascii')
+                return result
 
-        tasks = [(i, q.get('img_file',''), q.get('ans_file','')) for i, q in enumerate(q_list)]
-        img_map = {}  # idx -> {b64, ans_b64}
-        with _TPE(max_workers=20) as _ex:
-            for fut in _ac([_ex.submit(_fetch_img, t) for t in tasks]):
-                r = fut.result()
-                img_map[r['idx']] = r
+            tasks = [(i, q.get('img_file',''), q.get('ans_file','')) for i, q in enumerate(q_list)]
+            img_map = {}  # idx -> {b64, ans_b64}
+            with _TPE(max_workers=20) as _ex:
+                for fut in _ac([_ex.submit(_fetch_img, t) for t in tasks]):
+                    r = fut.result()
+                    img_map[r['idx']] = r
 
-        questions_out = []
-        for i, q in enumerate(q_list):
-            imgs = img_map.get(i, {'b64': '', 'ans_b64': ''})
-            questions_out.append({
-                'seq':           q.get('seq', 0),
-                'q_num':         q.get('q_num', 0),
-                'difficulty':    q.get('difficulty'),
-                'topics':        q.get('topics', []),
-                'exam_date':     q.get('exam_date', ''),
-                'source':        q.get('source', ''),
-                'img_bytes_b64': imgs['b64'],
-                'img_w':         q.get('img_w', 0),
-                'img_h':         q.get('img_h', 0),
-                'answer_b64':    imgs['ans_b64'],
-            })
+            questions_out = []
+            for i, q in enumerate(q_list):
+                imgs = img_map.get(i, {'b64': '', 'ans_b64': ''})
+                questions_out.append({
+                    'seq':           q.get('seq', 0),
+                    'q_num':         q.get('q_num', 0),
+                    'difficulty':    q.get('difficulty'),
+                    'topics':        q.get('topics', []),
+                    'exam_date':     q.get('exam_date', ''),
+                    'source':        q.get('source', ''),
+                    'img_bytes_b64': imgs['b64'],
+                    'img_w':         q.get('img_w', 0),
+                    'img_h':         q.get('img_h', 0),
+                    'answer_b64':    imgs['ans_b64'],
+                    'has_answer':    bool(imgs['ans_b64']),
+                })
     else:
         mfest = os.path.join(wb_prefix, 'manifest.json')
         if not os.path.isfile(mfest):
@@ -9204,7 +9322,72 @@ def library_load(wb_id):
     })
 
 
-@app.route('/api/library/delete/<wb_id>', methods=['DELETE'])
+# ─────────────────────────────── 懒加载单题图片 ───────────────────────────────
+@app.route('/api/library/img/<wb_id>/<q_num_str>', methods=['GET'])
+def library_img_lazy(wb_id, q_num_str):
+    """
+    懒加载单题图片。GET /api/library/img/<wb_id>/<q_num>?board=&subject=&type=q|a
+    type=q: 返回题目图片; type=a: 返回答案图片
+    返回: {ok, b64, w, h}
+    """
+    import base64 as _b64
+    board   = request.args.get('board', '')
+    subject = request.args.get('subject', '')
+    img_type = request.args.get('type', 'q')   # 'q' or 'a'
+    try:
+        q_num = int(q_num_str)
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'invalid q_num'}), 400
+
+    wb_prefix = _lib_key_prefix(board, subject, wb_id)
+
+    # 从 manifest 找到对应题目的文件名
+    if storage.is_r2_mode():
+        manifest = storage.load_json(f'{wb_prefix}/manifest.json')
+        if not manifest:
+            return jsonify({'ok': False, 'error': '题册不存在'}), 404
+        q_list = manifest.get('questions', [])
+        q_obj  = next((q for q in q_list if q.get('q_num') == q_num), None)
+        if not q_obj:
+            return jsonify({'ok': False, 'error': '题目不存在'}), 404
+
+        file_key = q_obj.get('ans_file' if img_type == 'a' else 'img_file', '')
+        if not file_key:
+            return jsonify({'ok': False, 'error': '无图片文件', 'b64': ''}), 200
+
+        raw = storage.load_bytes(f'{wb_prefix}/{file_key}')
+        if not raw:
+            return jsonify({'ok': False, 'error': '图片读取失败', 'b64': ''}), 200
+
+        b64 = _b64.b64encode(raw).decode('ascii')
+        return jsonify({
+            'ok': True,
+            'b64': b64,
+            'w': q_obj.get('img_w', 0),
+            'h': q_obj.get('img_h', 0),
+        })
+    else:
+        # 本地模式
+        mfest = os.path.join(wb_prefix, 'manifest.json')
+        if not os.path.isfile(mfest):
+            return jsonify({'ok': False, 'error': '题册不存在'}), 404
+        with open(mfest, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+        q_obj = next((q for q in manifest.get('questions', []) if q.get('q_num') == q_num), None)
+        if not q_obj:
+            return jsonify({'ok': False, 'error': '题目不存在'}), 404
+        file_name = q_obj.get('ans_file' if img_type == 'a' else 'img_file', '')
+        if not file_name:
+            return jsonify({'ok': False, 'error': '无图片文件', 'b64': ''}), 200
+        img_path = os.path.join(wb_prefix, file_name)
+        if not os.path.isfile(img_path):
+            return jsonify({'ok': False, 'error': '图片不存在', 'b64': ''}), 200
+        with open(img_path, 'rb') as f:
+            b64 = _b64.b64encode(f.read()).decode('ascii')
+        return jsonify({'ok': True, 'b64': b64, 'w': q_obj.get('img_w', 0), 'h': q_obj.get('img_h', 0)})
+
+
+
 def library_delete(wb_id):
     """删除图书馆中的一个题册。"""
     board   = request.args.get('board', '')
