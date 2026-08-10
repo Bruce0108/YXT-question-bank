@@ -2453,7 +2453,10 @@ function openAiSolution(uid, qNum, gIdx, e) {
           window.MathJax.typesetPromise([box]).catch(()=>{});
         }
       } else {
-        box.innerHTML = `<div style="color:#dc2626;padding:20px">❌ ${d.error || '解析失败，请确认 GEMINI_API_KEY 已在 Railway 中配置'}</div>`;
+        // 显示所有模型的错误详情，方便排查
+        const allErrs = d.all_errors ? d.all_errors.join('<br>• ') : '';
+        const errDetail = allErrs ? `<br><small style="color:#9ca3af">• ${allErrs}</small>` : '';
+        box.innerHTML = `<div style="color:#dc2626;padding:20px">❌ ${d.error || '解析失败'}${errDetail}</div>`;
       }
     })
     .catch(err => {

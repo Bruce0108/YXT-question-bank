@@ -6042,11 +6042,13 @@ def ai_solution():
     # 策略1：OpenRouter（OpenAI Chat Completions 格式）
     # ══════════════════════════════════════════════════════
     if OPENROUTER_API_KEY:
-        # OpenRouter 免费视觉模型列表（2026-08 实测可用，均支持 image_url）
+        # OpenRouter 免费视觉模型列表（2026-08 从API实时确认，均支持 image_url）
         OR_MODELS = [
-            "google/gemma-4-26b-a4b-it:free",          # ✅ 实测OK：Google Gemma4 多模态
-            "nvidia/nemotron-nano-12b-v2-vl:free",     # NVIDIA Nemotron Nano 2 VL 视觉
-            "meta-llama/llama-3.2-90b-vision-instruct:free",  # Llama3.2 视觉
+            "google/gemma-4-26b-a4b-it:free",                     # ✅ 实测OK: Google Gemma4 多模态
+            "google/gemma-4-31b-it:free",                          # Google Gemma4 31B 多模态
+            "nvidia/nemotron-nano-12b-v2-vl:free",                 # NVIDIA Nano VL 视觉专用
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",  # NVIDIA Omni 多模态推理
+            "openrouter/free",                                      # 自动路由到可用免费模型
         ]
 
         # 构建消息：把图片用 base64 data URL 传入
