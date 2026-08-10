@@ -4815,7 +4815,12 @@ function closeSaveLibDialog() {
 async function openLoadLibDialog() {
   const modal = document.getElementById('libLoadModal');
   modal.style.display = 'flex';
-  await refreshLibTree();
+  // 已有缓存直接渲染，无需重新请求（用户可点刷新按钮强制更新）
+  if (_libTree) {
+    renderLibTree(_libTree);
+  } else {
+    await refreshLibTree();
+  }
 }
 
 async function refreshLibTree() {

@@ -5986,7 +5986,7 @@ def get_answer():
 def ai_solution():
     """
     调用 Google Gemini Vision 对题目图片进行解析，返回详细解题过程。
-    自动降级：gemini-2.0-flash -> gemini-1.5-flash -> gemini-1.5-flash-8b
+    自动降级：gemini-2.5-flash -> gemini-2.5-flash-lite -> gemini-2.0-flash-lite -> gemini-2.0-flash
     需要环境变量: GEMINI_API_KEY
     """
     import os as _os
@@ -6046,8 +6046,12 @@ def ai_solution():
         }
     }
 
-    # 自动降级模型列表（优先使用 thinking 能力更强的模型）
-    models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"]
+    # 自动降级模型列表（均为 v1beta 2026年现役模型，按能力/配额从优到稳排序）
+    # gemini-2.5-flash       — 最强推理，免费 tier 10 RPM
+    # gemini-2.5-flash-lite  — 轻量快速，免费 tier 30 RPM
+    # gemini-2.0-flash-lite  — 更稳定的免费配额
+    # gemini-2.0-flash       — 备用
+    models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.0-flash"]
     last_error = ""
 
     for model in models:
@@ -8779,39 +8783,54 @@ def library_list():
 
     tree = []
     if storage.is_r2_mode():
-        # ── R2 模式：先并发扫描所有 prefix，再并发读取所有 manifest ──
-        # Step1：收集所有 (board, subject, prefix, wb_id) 任务
-        manifest_tasks = []
+        # ── R2 模式：Step1 并发扫描所有 prefix（新旧路径）──
+        # 构建所有需要扫描的 (board, subject, prefix) 组合
+        scan_targets = []
+        seen_target = set()
         for board in _EXAM_BOARDS:
             for subject in _SUBJECTS_MAP.get(board, []):
-                # 新路径（含括号，当前版本）
-                safe_board_new   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', board).strip()
-                safe_subject_new = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', subject).strip()
-                # 旧路径（无括号，旧版本保存的题册）
-                safe_board_old   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
-                safe_subject_old = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
+                safe_b_new = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', board).strip()
+                safe_s_new = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', subject).strip()
+                safe_b_old = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
+                safe_s_old = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
+                for sb, ss in [(safe_b_new, safe_s_new), (safe_b_old, safe_s_old)]:
+                    pf = f'library/{sb}/{ss}/'
+                    key = (board, subject, pf)
+                    if key not in seen_target:
+                        seen_target.add(key)
+                        scan_targets.append((board, subject, pf))
 
-                seen_wb = set()
-                # 扫描所有可能的路径（新路径 + 旧路径，去重）
-                prefixes_to_scan = [f'library/{safe_board_new}/{safe_subject_new}/']
-                old_prefix = f'library/{safe_board_old}/{safe_subject_old}/'
-                if old_prefix != prefixes_to_scan[0]:
-                    prefixes_to_scan.append(old_prefix)
+        # 并发执行所有 list_prefix
+        def _list_one(args):
+            board, subject, prefix = args
+            keys = storage.list_prefix(prefix)
+            tasks = []
+            seen_wb = set()
+            for k in keys:
+                parts = k.split('/')
+                if len(parts) >= 5 and parts[-1] == 'manifest.json':
+                    wb_id = parts[3]
+                    if wb_id not in seen_wb:
+                        seen_wb.add(wb_id)
+                        tasks.append((board, subject, prefix, wb_id))
+            return tasks
 
-                for prefix in prefixes_to_scan:
-                    keys = storage.list_prefix(prefix)
-                    for k in keys:
-                        parts = k.split('/')
-                        if len(parts) >= 5 and parts[-1] == 'manifest.json':
-                            wb_id = parts[3]
-                            if wb_id not in seen_wb:
-                                seen_wb.add(wb_id)
-                                manifest_tasks.append((board, subject, prefix, wb_id))
+        manifest_tasks = []
+        seen_wb_global = set()   # (board, subject, wb_id) 全局去重
+        with ThreadPoolExecutor(max_workers=32) as _ex:
+            futures = [_ex.submit(_list_one, t) for t in scan_targets]
+            for fut in futures:
+                for task in fut.result():
+                    b, s, pf, wid = task
+                    dedup_key = (b, s, wid)
+                    if dedup_key not in seen_wb_global:
+                        seen_wb_global.add(dedup_key)
+                        manifest_tasks.append(task)
 
-        # Step2：并发读取所有 manifest（最多16线程）
+        # Step2：并发读取所有 manifest（最多32线程）
         results_map = {}  # (board, subject) -> [wb_info, ...]
         if manifest_tasks:
-            with ThreadPoolExecutor(max_workers=16) as _ex:
+            with ThreadPoolExecutor(max_workers=32) as _ex:
                 futures = {_ex.submit(_load_manifest_r2, t): t for t in manifest_tasks}
                 for fut in _as_completed(futures):
                     res = fut.result()
