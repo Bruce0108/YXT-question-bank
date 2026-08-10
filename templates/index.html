@@ -478,9 +478,10 @@
 </style>
 <!-- KaTeX: 快速LaTeX渲染，比MathJax轻量10倍 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
   onload="window._katexReady=true"></script>
+<!-- html2canvas: 渲染HTML到Canvas长图 -->
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </head>
 <body>
 
@@ -2307,103 +2308,113 @@ function openAiSolution(uid, qNum, gIdx, e) {
   const wbId    = qObj ? (qObj._lazy_wb_id || (_loadedWb && _loadedWb.id) || '') : '';
   const context = (_loadedWb ? _loadedWb.title : 'BPhO') + ` Q${qNum}`;
 
-  // ── 将 Gemini 返回的 Markdown 文本安全渲染为 HTML ──────────────────────────
-  // 逐行处理，不依赖全局替换链，避免贪婪/非贪婪正则截断多行内容
+  // ── Markdown → HTML 渲染器（永久修复版）──────────────────────────────────
+  // 核心原则：数学公式全程用占位符保护，绝不被 HTML 转义污染
+  // KaTeX auto-render 最后统一处理所有 $$ 和 $ 公式
   function _renderAiMd(raw) {
     if (!raw) return '';
 
-    // 1. 先把 $$...$$ 多行公式整体保护（替换为占位符）
-    const mathBlocks = [];
-    let s = raw.replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => {
-      mathBlocks.push(m);
-      return `@@MATHBLOCK${mathBlocks.length - 1}@@`;
-    });
+    // ① 用占位符保护所有数学，防止后续 HTML 转义破坏 LaTeX 语法
+    const MATH = [];
+    function saveMath(tex, display) {
+      MATH.push({ tex, display });
+      return `\x00MATH${MATH.length - 1}\x00`;
+    }
+    // 先保护 $$...$$（多行）
+    let s = raw.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => saveMath(t, true));
+    // 再保护 $...$（单行，不含换行）
+    s = s.replace(/\$([^$\n]+?)\$/g, (_, t) => saveMath(t, false));
 
-    // 2. 按行处理
+    // ② 逐行处理 Markdown 结构（此时 s 里已无任何数学符号）
+    function escHtml(t) {
+      return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    function inlineMd(t) {
+      t = escHtml(t);
+      t = t.replace(/\*\*(.+?)\*\*/g,  '<strong>$1</strong>');
+      t = t.replace(/__(.+?)__/g,       '<strong>$1</strong>');
+      t = t.replace(/\*([^*\n]+?)\*/g,  '<em>$1</em>');
+      // 行内代码 `...`
+      t = t.replace(/`([^`\n]+?)`/g, '<code style="background:#f3f4f6;padding:1px 5px;border-radius:4px;font-family:monospace;font-size:0.92em">$1</code>');
+      return t;
+    }
+
     const lines = s.split('\n');
-    const out = [];
+    const out   = [];
     let inUl = false, inOl = false;
-
     function closeList() {
       if (inUl) { out.push('</ul>'); inUl = false; }
       if (inOl) { out.push('</ol>'); inOl = false; }
     }
 
-    function inlineEsc(t) {
-      // 先 HTML 转义
-      t = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      // 行内数学 $...$（单个$，非紧跟$）— 保留 $ 符号让 KaTeX auto-render 识别
-      t = t.replace(/\$([^$\n]+?)\$/g, (_, m) => `<span class="katex-inline">$${m}$</span>`);
-      // 粗体 **...** 和 __...__
-      t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      t = t.replace(/__(.+?)__/g, '<strong>$1</strong>');
-      // 斜体 *...* 和 _..._（单个）
-      t = t.replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
-      t = t.replace(/_([^_\n]+?)_/g, '<em>$1</em>');
-      // 行内代码 `...`
-      t = t.replace(/`([^`]+?)`/g, '<code>$1</code>');
-      // blockquote 引用标记 "> ..."
-      t = t.replace(/^&gt;\s*/, '<span style="color:#888;font-style:italic">');
-      return t;
-    }
+    for (const line of lines) {
+      if (line.trim() === '') { closeList(); out.push('<div style="height:6px"></div>'); continue; }
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      if (/^###\s/.test(line)) { closeList();
+        out.push(`<h4 style="margin:14px 0 5px;color:#4f46e5;border-bottom:1px solid #e5e7eb;padding-bottom:3px;font-size:14px">${inlineMd(line.replace(/^###\s+/,''))}</h4>`); continue; }
+      if (/^##\s/.test(line))  { closeList();
+        out.push(`<h3 style="margin:16px 0 6px;color:#1e40af;font-size:15px">${inlineMd(line.replace(/^##\s+/,''))}</h3>`); continue; }
+      if (/^#\s/.test(line))   { closeList();
+        out.push(`<h2 style="margin:18px 0 8px;color:#1e3a8a;font-size:16px">${inlineMd(line.replace(/^#\s+/,''))}</h2>`); continue; }
 
-      // 空行
-      if (line.trim() === '') {
-        closeList();
-        out.push('<br>');
-        continue;
-      }
+      const olM = line.match(/^(\d+)\.\s+([\s\S]+)/);
+      if (olM) { if (!inOl) { closeList(); out.push('<ol style="margin:4px 0 4px 22px;padding:0">'); inOl=true; }
+        out.push(`<li style="margin:2px 0;line-height:1.8">${inlineMd(olM[2])}</li>`); continue; }
 
-      // 标题 ###
-      if (/^###\s+/.test(line)) {
-        closeList();
-        out.push(`<h4 style="margin:14px 0 6px;color:#4f46e5;border-bottom:1px solid #e5e7eb;padding-bottom:4px">${inlineEsc(line.replace(/^###\s+/,''))}</h4>`);
-        continue;
-      }
-      if (/^##\s+/.test(line)) {
-        closeList();
-        out.push(`<h3 style="margin:18px 0 8px;color:#1e40af">${inlineEsc(line.replace(/^##\s+/,''))}</h3>`);
-        continue;
-      }
-      if (/^#\s+/.test(line)) {
-        closeList();
-        out.push(`<h2 style="margin:20px 0 10px;color:#1e3a8a">${inlineEsc(line.replace(/^#\s+/,''))}</h2>`);
-        continue;
-      }
+      const ulM = line.match(/^[-•*]\s+([\s\S]+)/);
+      if (ulM) { if (!inUl) { closeList(); out.push('<ul style="margin:4px 0 4px 22px;padding:0">'); inUl=true; }
+        out.push(`<li style="margin:2px 0;line-height:1.8">${inlineMd(ulM[1])}</li>`); continue; }
 
-      // 有序列表
-      const olMatch = line.match(/^(\d+)\.\s+([\s\S]+)/);
-      if (olMatch) {
-        if (!inOl) { closeList(); out.push('<ol style="margin:6px 0 6px 20px;padding:0">'); inOl = true; }
-        out.push(`<li style="margin:3px 0">${inlineEsc(olMatch[2])}</li>`);
-        continue;
-      }
+      // blockquote
+      if (/^>\s?/.test(line)) { closeList();
+        out.push(`<p style="margin:4px 0;padding-left:12px;border-left:3px solid #d1d5db;color:#6b7280;font-style:italic;line-height:1.75">${inlineMd(line.replace(/^>\s?/,''))}</p>`); continue; }
 
-      // 无序列表
-      const ulMatch = line.match(/^[-•*]\s+([\s\S]+)/);
-      if (ulMatch) {
-        if (!inUl) { closeList(); out.push('<ul style="margin:6px 0 6px 20px;padding:0">'); inUl = true; }
-        out.push(`<li style="margin:3px 0">${inlineEsc(ulMatch[1])}</li>`);
-        continue;
-      }
-
-      // 普通段落
       closeList();
-      out.push(`<p style="margin:6px 0;line-height:1.75">${inlineEsc(line)}</p>`);
+      out.push(`<p style="margin:4px 0;line-height:1.8">${inlineMd(line)}</p>`);
     }
     closeList();
 
-    // 3. 还原数学块占位符为 KaTeX 块公式（保留 $$ 分隔符让 auto-render 识别）
-    let html = out.join('\n');
-    html = html.replace(/@@MATHBLOCK(\d+)@@/g, (_, idx) => {
-      const formula = mathBlocks[parseInt(idx)];
-      return `<div class="katex-block">$$${formula}$$</div>`;
+    // ③ 把占位符还原为 KaTeX 能识别的 $$ / $ 公式
+    //    关键：用 textContent 方式插入，不经过 HTML 转义！
+    //    这里用特殊属性 data-katex 标记，配合下面的 restoreMath() 处理
+    let html = out.join('');
+    html = html.replace(/\x00MATH(\d+)\x00/g, (_, i) => {
+      const { tex, display } = MATH[parseInt(i)];
+      if (display) {
+        return `<div class="katex-block" style="text-align:center;margin:10px 0;padding:8px;background:#f5f3ff;border-radius:6px;overflow-x:auto" data-katex-display="1" data-katex-src="${encodeURIComponent(tex)}"></div>`;
+      } else {
+        return `<span data-katex-inline="1" data-katex-src="${encodeURIComponent(tex)}"></span>`;
+      }
     });
 
     return html;
+  }
+
+  // ── KaTeX 渲染：扫描 data-katex-* 元素，用 katex.renderToString 直接替换 ──
+  function _renderKatexInEl(el) {
+    if (!window.katex) { setTimeout(() => _renderKatexInEl(el), 500); return; }
+    // 块公式
+    el.querySelectorAll('[data-katex-display]').forEach(node => {
+      const src = decodeURIComponent(node.getAttribute('data-katex-src') || '');
+      try {
+        node.innerHTML = katex.renderToString(src, {displayMode: true, throwOnError: false, output: 'html'});
+      } catch(e) {
+        node.textContent = `$$${src}$$`;
+      }
+      node.removeAttribute('data-katex-display');
+    });
+    // 行内公式
+    el.querySelectorAll('[data-katex-inline]').forEach(node => {
+      const src = decodeURIComponent(node.getAttribute('data-katex-src') || '');
+      try {
+        node.outerHTML = katex.renderToString(src, {displayMode: false, throwOnError: false, output: 'html'});
+      } catch(e) {
+        // outerHTML 替换后 node 失效，用 replaceWith
+        const span = document.createElement('span');
+        span.textContent = `$${src}$`;
+        node.replaceWith(span);
+      }
+    });
   }
 
   // ── 用 canvas 压缩 base64 图片，控制最大边长和质量 ──
@@ -2490,15 +2501,18 @@ function openAiSolution(uid, qNum, gIdx, e) {
         const modelBadge = document.getElementById('aiSolModelBadge');
         if (modelBadge) modelBadge.textContent = modelLabel + '，仅供参考';
         box.innerHTML = `${truncWarn}<div class="ai-sol-body" style="font-size:0.95em;color:#1f2937">${_renderAiMd(d.solution)}</div>`;
+        // ★ 用新的 KaTeX 渲染函数（不依赖 auto-render，直接 katex.renderToString）
+        if (window._katexReady) { _renderKatexInEl(box); }
+        else { setTimeout(() => _renderKatexInEl(box), 800); }
         // 存储 solution 到 modal，供"转为参考答案"使用
         const _mo = document.getElementById('aiSolutionModal');
         if (_mo) { _mo._aiSolution = d.solution; _mo._aiUid = _aiMoUid; }
-        // 检查是否已有 AI 答案，决定按钮文字
+        // 检查是否已有答案（answer_b64），决定按钮状态
         const _qForBtn = _uidToQ(_aiMoUid);
         const _sb2 = document.getElementById('aiSolSaveBtn');
         const _sh2 = document.getElementById('aiSolSavedHint');
         if (_sb2) {
-          if (_qForBtn && _qForBtn.ai_text_answer) {
+          if (_qForBtn && _qForBtn.answer_b64) {
             _sb2.style.display = 'none';
             if (_sh2) { _sh2.style.display = 'inline'; }
           } else {
@@ -2506,22 +2520,6 @@ function openAiSolution(uid, qNum, gIdx, e) {
             if (_sh2) _sh2.style.display = 'none';
           }
         }
-        // 触发 KaTeX auto-render 渲染所有 $...$ 和 $$...$$ 公式
-        function _runKatex() {
-          if (window.renderMathInElement) {
-            renderMathInElement(box, {
-              delimiters: [
-                {left: '$$', right: '$$', display: true},
-                {left: '$',  right: '$',  display: false}
-              ],
-              throwOnError: false,
-              output: 'html'
-            });
-          }
-        }
-        if (window._katexReady) { _runKatex(); }
-        else { window.addEventListener('_katexLoaded', _runKatex, {once:true});
-               setTimeout(_runKatex, 2000); }  // 兜底2秒后强制渲染
       } else {
         // 显示所有模型的错误详情，方便排查
         const allErrs = d.all_errors ? d.all_errors.join('<br>• ') : '';
@@ -2574,94 +2572,155 @@ function closeAiSolution() {
   _aiMoUid = null;
 }
 
-// ── 将 AI 解析保存为该题的参考答案 ──
-function _saveAiAsAnswer() {
+// ── 将 AI 解析渲染为长图，保存为该题的参考答案（answer_b64） ──
+async function _saveAiAsAnswer() {
   const mo = document.getElementById('aiSolutionModal');
-  if (!mo || !mo._aiSolution || !mo._aiUid) return;
-  const uid = mo._aiUid;
-  const qObj = _uidToQ(uid);
+  if (!mo || !mo._aiUid) return;
+  const uid   = mo._aiUid;
+  const qObj  = _uidToQ(uid);
   if (!qObj) return;
 
-  // 保存到题目对象
-  qObj.ai_text_answer = mo._aiSolution;
+  // 获取已渲染好的解析区域（含 KaTeX 渲染结果）
+  const solBox = document.getElementById('aiSolContent');
+  if (!solBox || !solBox.querySelector('.ai-sol-body')) {
+    toast('⚠️ 解析内容未加载，请稍后再试', 'warn'); return;
+  }
 
-  // 更新按钮状态
+  // 更新按钮为"生成中"
   const sb = document.getElementById('aiSolSaveBtn');
   const sh = document.getElementById('aiSolSavedHint');
-  if (sb) sb.style.display = 'none';
-  if (sh) sh.style.display = 'inline';
+  if (sb) { sb.disabled = true; sb.textContent = '⏳ 生成长图…'; }
 
-  // 在题目卡片上动态注入"📝 AI答案"按钮和内容区
-  _injectAiAnswerCard(uid, qObj);
-  toast('✅ 已保存为参考答案，保存题册时将一并保存', 'ok');
+  try {
+    if (!window.html2canvas) throw new Error('html2canvas 未加载');
+
+    // ① html2canvas 截图（2x 清晰度，白底）
+    const canvas = await html2canvas(solBox, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+    });
+
+    // ② 宽度超过 1400px 则等比压缩（不限高度）
+    let finalCanvas = canvas;
+    const MAX_W = 1400 * 2;   // 已经是 2x scale，实际像素
+    if (canvas.width > MAX_W) {
+      const ratio = MAX_W / canvas.width;
+      const c2    = document.createElement('canvas');
+      c2.width    = MAX_W;
+      c2.height   = Math.round(canvas.height * ratio);
+      c2.getContext('2d').drawImage(canvas, 0, 0, c2.width, c2.height);
+      finalCanvas = c2;
+    }
+    const dataUrl = finalCanvas.toDataURL('image/jpeg', 0.88);
+    const b64 = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
+
+    // ③ 保存到 qObj（覆盖或新增 answer_b64）
+    qObj.answer_b64  = b64;
+    qObj._answer_b64 = b64;
+    qObj.has_answer  = true;
+
+    // ④ 注入答案区域和答案按钮（复用现有基础设施）
+    _injectAnsFromAi(uid, qObj, b64);
+
+    // ⑤ 更新按钮状态
+    if (sb) { sb.style.display = 'none'; sb.disabled = false; sb.textContent = '📋 转为参考答案'; }
+    if (sh) sh.style.display = 'inline';
+
+    toast('✅ 已渲染为长图，保存题册后永久生效', 'ok');
+  } catch(err) {
+    console.error('[_saveAiAsAnswer]', err);
+    if (sb) { sb.disabled = false; sb.textContent = '📋 转为参考答案'; }
+    toast('❌ 生成长图失败：' + err.message, 'err');
+  }
 }
 
-// ── 在题目卡片上注入 AI 文字答案区域 ──
-function _injectAiAnswerCard(uid, qObj) {
+// ── 注入/更新答案区域（answer_b64 长图 → ans-{uid} + ansbtn-{uid}）──
+// 复用现有 toggleAnswer() 基础设施，与上传 Mark Scheme 效果一致
+function _injectAnsFromAi(uid, qObj, b64) {
   const card = document.getElementById(`qc-${uid}`);
   if (!card) return;
 
-  // 如果已存在 AI 答案区域则更新内容
-  let aiAnsWrap = document.getElementById(`ai-ans-${uid}`);
-  if (!aiAnsWrap) {
-    // 新建容器
-    aiAnsWrap = document.createElement('div');
-    aiAnsWrap.id = `ai-ans-${uid}`;
-    aiAnsWrap.style.cssText = 'display:none;border-top:1px solid #d1fae5;margin-top:8px;padding:12px 14px;background:#f0fdf4;border-radius:0 0 8px 8px;';
-    aiAnsWrap.innerHTML = `
-      <div style="font-size:12px;color:#059669;font-weight:600;margin-bottom:8px;">📝 AI 参考解析</div>
-      <div id="ai-ans-body-${uid}" class="ai-sol-body" style="font-size:13px;color:#1f2937;line-height:1.75;max-height:400px;overflow-y:auto"></div>
-    `;
-    // 插入到答案区域之前（或卡片操作区之前）
+  // —— 答案包装区 ——
+  let ansWrap = document.getElementById(`ans-${uid}`);
+  if (!ansWrap) {
+    ansWrap = document.createElement('div');
+    ansWrap.className = 'qc-answer-wrap';
+    ansWrap.id = `ans-${uid}`;
+    ansWrap.style.display = 'none';
+    ansWrap.dataset.gidx   = qObj.gIdx != null ? qObj.gIdx : 0;
+    ansWrap.dataset.qnum   = qObj.q_num != null ? qObj.q_num : 0;
+    ansWrap.dataset.loaded = '1';
+    ansWrap.dataset.totalpages = '1';
+    ansWrap.innerHTML = '<div class="qc-answer-bar">📋 AI 参考解析（长图）</div>';
     const actDiv = card.querySelector('.qc-act');
-    if (actDiv) card.insertBefore(aiAnsWrap, actDiv);
-    else card.appendChild(aiAnsWrap);
+    if (actDiv) card.insertBefore(ansWrap, actDiv);
+    else card.appendChild(ansWrap);
+  } else {
+    ansWrap.dataset.loaded = '1';
+  }
 
-    // 在操作栏动态插入"📝 AI答案"按钮
+  // 更新图片内容区
+  let contentArea = document.getElementById(`ans-content-${uid}`);
+  if (!contentArea) {
+    contentArea = document.createElement('div');
+    contentArea.id = `ans-content-${uid}`;
+    ansWrap.appendChild(contentArea);
+  }
+  contentArea.innerHTML = `<img class="qc-answer-img"
+    src="data:image/jpeg;base64,${b64}"
+    alt="AI解析长图" style="width:100%;display:block;border-radius:0 0 4px 4px">`;
+
+  // —— 答案按钮 ——
+  let ansBtn = document.getElementById(`ansbtn-${uid}`);
+  if (!ansBtn) {
+    ansBtn = document.createElement('button');
+    ansBtn.className = 'btn btn-sm btn-ans-toggle';
+    ansBtn.id = `ansbtn-${uid}`;
+    ansBtn.style.cssText = 'background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0';
+    ansBtn.textContent = '👁 答案';
+    ansBtn.onclick = (e) => { e.stopPropagation(); toggleAnswer(uid, e); };
     const actBar = card.querySelector('.qc-act');
-    if (actBar) {
-      const aiBtn = document.createElement('button');
-      aiBtn.className = 'btn btn-sm';
-      aiBtn.id = `ai-ans-btn-${uid}`;
-      aiBtn.style.cssText = 'background:#dcfce7;color:#15803d;border:1px solid #86efac';
-      aiBtn.textContent = '📝 AI答案';
-      aiBtn.onclick = (e) => { e.stopPropagation(); _toggleAiAnswer(uid); };
-      // 插入到"🤖 解析"按钮之后
-      const solBtn = document.getElementById(`aibtn-${uid}`);
-      if (solBtn && solBtn.nextSibling) actBar.insertBefore(aiBtn, solBtn.nextSibling);
-      else actBar.appendChild(aiBtn);
-    }
+    const solBtn = document.getElementById(`aibtn-${uid}`);
+    if (actBar && solBtn) actBar.insertBefore(ansBtn, solBtn);
+    else if (actBar) actBar.prepend(ansBtn);
   }
 
-  // 渲染内容
-  const bodyEl = document.getElementById(`ai-ans-body-${uid}`);
-  if (bodyEl) {
-    bodyEl.innerHTML = _renderAiMd(qObj.ai_text_answer);
-    if (window.renderMathInElement) {
-      renderMathInElement(bodyEl, {
-        delimiters: [{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],
-        throwOnError: false
-      });
-    }
+  // 卡片头部补 MS 徽标
+  const hdr = card.querySelector('.qc-hdr');
+  if (hdr && !hdr.querySelector('.ms-badge')) {
+    const badge = document.createElement('span');
+    badge.className = 'ms-badge';
+    badge.title = 'AI 生成参考解析';
+    badge.textContent = 'AI';
+    const pgEl = hdr.querySelector('.qpg');
+    if (pgEl) hdr.insertBefore(badge, pgEl);
+    else hdr.appendChild(badge);
   }
 }
 
-// ── 切换 AI 答案区域显示/隐藏 ──
-function _toggleAiAnswer(uid) {
-  const wrap = document.getElementById(`ai-ans-${uid}`);
-  const btn  = document.getElementById(`ai-ans-btn-${uid}`);
-  if (!wrap) return;
-  const showing = wrap.style.display !== 'none';
-  wrap.style.display = showing ? 'none' : 'block';
-  if (btn) btn.style.background = showing ? '#dcfce7' : '#bbf7d0';
-}
-
-// ── 页面加载题册后，恢复已有 AI 文字答案的卡片按钮 ──
+// ── 页面加载题册后，恢复已有 answer_b64 的答案区域 ──
 function _restoreAiAnswerCards() {
   allQuestions.forEach(q => {
-    if (q.ai_text_answer) {
-      const uid = q._seq != null ? `s${q._seq}` : `${q.gIdx}_${q.q_num}`;
-      _injectAiAnswerCard(uid, q);
+    if (!q.answer_b64) return;
+    const uid  = q._seq != null ? `s${q._seq}` : `${q.gIdx}_${q.q_num}`;
+    const card = document.getElementById(`qc-${uid}`);
+    if (!card) return;
+    // renderGrid 已通过 hasAnswer 渲染了 ans-{uid}，只需补充图片内容
+    const ansWrap = document.getElementById(`ans-${uid}`);
+    if (ansWrap && !document.getElementById(`ans-content-${uid}`)) {
+      // 仅补充内容，不重复创建容器
+      ansWrap.dataset.loaded = '1';
+      const contentArea = document.createElement('div');
+      contentArea.id = `ans-content-${uid}`;
+      contentArea.innerHTML = `<img class="qc-answer-img"
+        src="data:image/jpeg;base64,${q.answer_b64}"
+        alt="AI解析长图" style="width:100%;display:block;border-radius:0 0 4px 4px">`;
+      ansWrap.appendChild(contentArea);
+    } else if (!ansWrap) {
+      // 极少数情况（首次加载 renderGrid 前）：完整注入
+      _injectAnsFromAi(uid, q, q.answer_b64);
     }
   });
 }
