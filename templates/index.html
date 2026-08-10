@@ -5763,21 +5763,23 @@ function _applyLoadedWorkbook(d) {
     _wb_title:       d.title,
   };
 
-  // 追加所有题目（前端去重：按 seq+img_file 组合键去重，防止 manifest 出现完全相同的条目）
-  // 注意：q_num 在多套试卷组成的题册中是非唯一的（每套卷 q_num 都从 1 开始），
-  // 不能用 q_num 去重，否则会误删大量正常题目。
+  // 追加所有题目（前端去重：按 exam_date+q_num 组合键去重）
+  // 场景：用户重复追加同一套 PDF → manifest 里会有 exam_date+q_num 完全相同的条目
+  // 注意：只有当题目包含 exam_date 时才启用去重，避免误删正常题目
+  const _hasExamDates = d.questions.some(q => q.exam_date);
   const _seenKeys = new Set();
   const baseSeq = allQuestions.length;
   let _pushIdx = 0;
   for (let i = 0; i < d.questions.length; i++) {
     const q = d.questions[i];
-    // 组合键：seq（后端全局序号）+ img_file（若存在）
-    const _dedupKey = String(q.seq ?? i) + '|' + (q._img_file || '');
-    if (_seenKeys.has(_dedupKey)) {
-      console.warn('[_applyLoadedWorkbook] 跳过重复条目 seq:', q.seq, 'q_num:', q.q_num);
-      continue;
+    if (_hasExamDates && q.exam_date) {
+      const _dedupKey = String(q.exam_date || '') + '|' + String(q.q_num ?? '');
+      if (_seenKeys.has(_dedupKey)) {
+        console.warn('[_applyLoadedWorkbook] 跳过重复条目 exam_date:', q.exam_date, 'q_num:', q.q_num);
+        continue;
+      }
+      _seenKeys.add(_dedupKey);
     }
-    _seenKeys.add(_dedupKey);
     const _qn = q.q_num || (baseSeq + i + 1);
     const qObj = {
       q_num:         _qn,

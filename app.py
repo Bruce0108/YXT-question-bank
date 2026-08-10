@@ -9535,19 +9535,24 @@ def _library_load_impl(wb_id):
 
         q_list = manifest.get('questions', [])
 
-        # ── 去重：按 (seq, img_file) 组合键保留首次出现，防止 manifest 中出现完全相同的条目 ──
-        # 注意：q_num 在多套试卷组成的题册中是非唯一的（每套卷 q_num 都从1开始），
-        # 不能用 q_num 去重，否则会误删大量正常题目。
-        # 改用 seq（全局序号）+ img_file（图片文件名）作为唯一标识。
+        # ── 去重：按 (exam_date, q_num) 组合键保留首次出现 ──
+        # 场景：用户重复追加同一套 PDF，manifest 中会存在 exam_date+q_num 完全相同的条目。
+        # 注意：只有当 exam_date 非空时才启用去重，否则退化为保留全部（不同套卷可能都没有年份）。
         _seen_keys = set()
         _deduped = []
+        _has_dates = any(_q.get('exam_date') for _q in q_list)   # 题册是否含年份信息
         for _q in q_list:
-            _key = (_q.get('seq'), _q.get('img_file', ''))
-            if _key not in _seen_keys:
+            if _has_dates:
+                _key = (str(_q.get('exam_date') or '').strip(),
+                        str(_q.get('q_num')     or '').strip())
+                if _key in _seen_keys:
+                    app.logger.warning(
+                        f'[library_load] 跳过重复 exam_date={_q.get("exam_date")!r} '
+                        f'q_num={_q.get("q_num")!r} in wb_id={wb_id!r}'
+                    )
+                    continue
                 _seen_keys.add(_key)
-                _deduped.append(_q)
-            else:
-                app.logger.warning(f'[library_load] 跳过完全重复条目 seq={_q.get("seq")!r} img={_q.get("img_file")!r} in wb_id={wb_id!r}')
+            _deduped.append(_q)
         if len(_deduped) < len(q_list):
             app.logger.warning(f'[library_load] 题册 {wb_id!r} 共去除 {len(q_list)-len(_deduped)} 条重复题目')
         q_list = _deduped
@@ -9616,15 +9621,19 @@ def _library_load_impl(wb_id):
             return jsonify({'error': '题册不存在'}), 404
         with open(mfest, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
-        # ── 去重：按 (seq, img_file) 组合键保留首次出现（q_num 在多套卷题册中非唯一）──
+        # ── 去重：按 (exam_date, q_num) 保留首次出现（本地模式同 R2）──
         _local_qs = manifest.get('questions', [])
         _seen_local = set()
         _deduped_local = []
+        _has_dates_local = any(_lq.get('exam_date') for _lq in _local_qs)
         for _lq in _local_qs:
-            _lkey = (_lq.get('seq'), _lq.get('img_file', ''))
-            if _lkey not in _seen_local:
+            if _has_dates_local:
+                _lkey = (str(_lq.get('exam_date') or '').strip(),
+                         str(_lq.get('q_num')     or '').strip())
+                if _lkey in _seen_local:
+                    continue
                 _seen_local.add(_lkey)
-                _deduped_local.append(_lq)
+            _deduped_local.append(_lq)
         questions_out = []
         for q in _deduped_local:
             img_file = q.get('img_file', '')
@@ -9815,6 +9824,39 @@ def library_append(wb_id):
 
     # ── 计算新图片的起始序号（在旧题目后面接续编号）──
     existing_qs = manifest.get('questions', [])
+
+    # ── 去重：过滤掉已存在于题册中的题目（按 exam_date+q_num 组合键判断）──
+    # 防止用户重复追加同一套 PDF 导致题目翻倍
+    existing_keys = set()
+    for _eq in existing_qs:
+        _edate = str(_eq.get('exam_date') or '').strip()
+        _eqnum = str(_eq.get('q_num') or '').strip()
+        if _edate or _eqnum:               # 至少有一个字段才建立去重键
+            existing_keys.add((_edate, _eqnum))
+
+    if existing_keys:
+        orig_count = len(questions)
+        questions = [
+            q for q in questions
+            if (str(q.get('exam_date') or '').strip(),
+                str(q.get('q_num')     or '').strip()) not in existing_keys
+        ]
+        skipped = orig_count - len(questions)
+        if skipped:
+            app.logger.warning(
+                f'[library/append] wb_id={wb_id!r} 跳过 {skipped} 道已存在的重复题目'
+                f'（按 exam_date+q_num 判断），剩余 {len(questions)} 道新题'
+            )
+        if not questions:
+            return jsonify({
+                'ok':    True,
+                'id':    wb_id,
+                'title': manifest.get('title', wb_id),
+                'added': 0,
+                'total': len(existing_qs),
+                'msg':   f'所有题目在题册中已存在（共跳过 {skipped} 题），无需追加',
+            })
+
     start_idx   = len(existing_qs)   # 旧题目数量，新题从 start_idx+1 开始编号
 
     # ── 按 file_idx 分组，批量裁图（复用 library/save 逻辑）──
