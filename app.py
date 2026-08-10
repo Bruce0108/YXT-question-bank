@@ -5995,8 +5995,12 @@ def ai_solution():
     import urllib.error  as _urllib_err
     import time as _time
 
-    OPENROUTER_API_KEY = _os.environ.get('OPENROUTER_API_KEY', '')
-    GEMINI_API_KEY     = _os.environ.get('GEMINI_API_KEY', '')
+    OPENROUTER_API_KEY = _os.environ.get('OPENROUTER_API_KEY', '').strip()
+    GEMINI_API_KEY     = _os.environ.get('GEMINI_API_KEY', '').strip()
+
+    # 调试日志：记录 key 前缀，方便排查 Railway 环境变量是否生效
+    app.logger.info(f'[ai_solution] OR_KEY={OPENROUTER_API_KEY[:12]+"..." if OPENROUTER_API_KEY else "未设置"} '
+                    f'GEMINI_KEY={"已设置" if GEMINI_API_KEY else "未设置"}')
 
     if not OPENROUTER_API_KEY and not GEMINI_API_KEY:
         return jsonify({'ok': False,
@@ -6216,8 +6220,8 @@ def test_gemini():
     import urllib.request as _urllib_req
     import urllib.error  as _urllib_err
 
-    OPENROUTER_API_KEY = _os.environ.get('OPENROUTER_API_KEY', '')
-    GEMINI_API_KEY     = _os.environ.get('GEMINI_API_KEY', '')
+    OPENROUTER_API_KEY = _os.environ.get('OPENROUTER_API_KEY', '').strip()
+    GEMINI_API_KEY     = _os.environ.get('GEMINI_API_KEY', '').strip()
     results = []
 
     # 测试 OpenRouter
@@ -6264,7 +6268,7 @@ def test_gemini():
                 results.append({'provider':'gemini','model':m,'status':'error','code':0,'detail':str(e)})
 
     configured = []
-    if OPENROUTER_API_KEY: configured.append('OPENROUTER_API_KEY ✅')
+    if OPENROUTER_API_KEY: configured.append(f'OPENROUTER_API_KEY ✅ (前缀: {OPENROUTER_API_KEY[:12]}...)')
     if GEMINI_API_KEY:     configured.append('GEMINI_API_KEY ✅')
     if not configured:     configured.append('未配置任何 Key ❌')
 
