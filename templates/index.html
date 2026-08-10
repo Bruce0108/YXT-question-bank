@@ -4982,7 +4982,9 @@ async function confirmSaveLib() {
   try {
     const activeG = groups[activeGIdx] || {};
 
-    // ── 准备 payload（5% → 20%）：对 PDF 来源题目异步获取 300dpi 高清图 ──
+    // ── 准备 payload（纯内存操作，毫秒级完成）──
+    // PDF 来源题目：不在前端获取高清图，直接传 session_id_override + file_idx 让后端模式A裁图
+    // 这样 payload 极小，后端并发裁图，速度提升 10-50x
     const questionsPayload = [];
     for (let i = 0; i < visibles.length; i++) {
       const q = visibles[i];
@@ -5008,44 +5010,22 @@ async function confirmSaveLib() {
         entry.img_w         = q._img_w || 0;
         entry.img_h         = q._img_h || 0;
       } else {
-        // PDF 来源题目：用 300dpi 重新获取高清图（保存时始终以高清存储）
-        // 追加的题目用其自己的 _append_session_id 和 _append_file_idx
-        const fetchSid  = q._append_session_id || sessionId;
-        const fetchFIdx = q._append_session_id ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
-        try {
-          const hiRes = await fetch(`/api/preview_b64/${q.q_num}?dpi=300&session_id=${fetchSid}&file_idx=${fetchFIdx}`);
-          if (hiRes.ok) {
-            const hiData = await hiRes.json();
-            if (hiData.img_b64) {
-              entry.img_bytes_b64 = hiData.img_b64;
-              entry.img_w         = hiData.img_w || 0;
-              entry.img_h         = hiData.img_h || 0;
-              // 同步更新内存缓存（下次打开题册读取时也是高清）
-              q._img_b64 = hiData.img_b64;
-              q._img_w   = hiData.img_w || 0;
-              q._img_h   = hiData.img_h || 0;
-            }
-          }
-        } catch (_e) {
-          // 获取失败时 fallback 到缓存
-          if (q._img_b64) {
-            entry.img_bytes_b64 = q._img_b64;
-            entry.img_w         = q._img_w || 0;
-            entry.img_h         = q._img_h || 0;
-          }
+        // PDF 来源题目：让后端模式A自行裁300dpi高清图（无需前端传图）
+        // 追加的题目需告知后端使用哪个 session + file_idx
+        if (q._append_session_id) {
+          entry.session_id_override = q._append_session_id;
+          entry.file_idx_override   = q._append_file_idx ?? q.gIdx;
+        }
+        // 若内存中已有缓存图（低分辨率预览），作为 fallback（后端找不到 session 时用）
+        if (q._img_b64) {
+          entry.img_bytes_b64_fallback = q._img_b64;
         }
       }
 
-      if (q.answer_b64)    entry.answer_b64    = q.answer_b64;
-      if (q.answer_pages)  entry.answer_pages  = q.answer_pages;
+      if (q.answer_b64)     entry.answer_b64     = q.answer_b64;
+      if (q.answer_pages)   entry.answer_pages   = q.answer_pages;
       if (q.ai_text_answer) entry.ai_text_answer = q.ai_text_answer;
       questionsPayload.push(entry);
-
-      // 更新进度（5% → 20%）
-      if (i % 5 === 0) {
-        setLdProgress(5 + Math.round(i / visibles.length * 15), `准备题目 ${i+1}/${visibles.length}…`);
-        await new Promise(r => setTimeout(r, 0));  // 让 UI 刷新
-      }
     }
     setLdProgress(20, '正在上传数据…');
 
@@ -5089,8 +5069,8 @@ async function confirmSaveLib() {
         }
       };
       xhr.onerror = () => reject(new Error('网络错误'));
-      xhr.timeout = 120000;
-      xhr.ontimeout = () => reject(new Error('请求超时'));
+      xhr.timeout = 300000;  // 5分钟：后端可能需要批量裁图
+      xhr.ontimeout = () => reject(new Error('请求超时（服务端处理超过5分钟）'));
       xhr.send(payload);
     });
 

@@ -9145,18 +9145,29 @@ def library_save():
         os.makedirs(wb_prefix, exist_ok=True)
 
     saved_q = []
-    # 按 file_idx 分组，批量打开 PDF（避免同一文件反复 open/close）
+    # 按 (session_obj, file_idx) 分组，批量打开 PDF（避免同一文件反复 open/close）
     from collections import defaultdict
-    file_idx_map = defaultdict(list)   # file_idx -> [(list_pos, q_dict)]
+    file_idx_map = defaultdict(list)   # (sess_id_key, file_idx) -> [(list_pos, q_dict, sess_obj)]
     q_has_b64    = {}                  # list_pos -> True/False（是否已有图片）
+
+    # 构建 session_id -> sess 映射（支持 session_id_override）
+    _sess_cache = {}
+    def _get_sess_cached(sid):
+        if sid not in _sess_cache:
+            _sess_cache[sid] = _get_session(sid) if sid else None
+        return _sess_cache[sid]
 
     for i, q in enumerate(questions):
         b64 = q.get('img_bytes_b64', '')
         if b64:
             q_has_b64[i] = True
         else:
-            file_idx = int(q.get('file_idx', q.get('gIdx', 0)))
-            file_idx_map[file_idx].append((i, q))
+            # 支持追加题目的 session_id_override（不同来源的题目）
+            q_sid = q.get('session_id_override', '') or session_id
+            q_sess = _get_sess_cached(q_sid)
+            # 支持 file_idx_override（追加题目可能 file_idx 不同）
+            file_idx = int(q.get('file_idx_override', q.get('file_idx', q.get('gIdx', 0))))
+            file_idx_map[(q_sid, file_idx)].append((i, q, q_sess))
 
     # ── 步骤1：处理已有 b64 的题目（直接写图片文件）── 并发上传加速
     from concurrent.futures import ThreadPoolExecutor as _SaveTPE, as_completed as _save_ac
@@ -9211,30 +9222,50 @@ def library_save():
     # ── 步骤2：从 PDF session 裁图（模式A）── 裁图串行，R2上传并发
     _r2_upload_queue = []   # [(key, data)] 待并发上传
 
-    for file_idx, items in file_idx_map.items():
-        if not sess or file_idx >= len(sess):
-            for (i, q) in items:
-                img_results[i] = ('', 0, 0, '')
+    for (q_sid, file_idx), items in file_idx_map.items():
+        # items 中每个元素是 (i, q, q_sess)
+        # 取第一个的 q_sess（同组 session 相同）
+        q_sess = items[0][2] if items else None
+        if not q_sess or file_idx >= len(q_sess):
+            # session 不可用时：尝试用 fallback img（img_bytes_b64_fallback）
+            for (i, q, _qs) in items:
+                fb = q.get('img_bytes_b64_fallback', '')
+                if fb:
+                    q['img_bytes_b64'] = fb  # 降级为 fallback
+                    q_has_b64[i] = True
+                else:
+                    img_results[i] = ('', 0, 0, '')
             continue
 
-        group      = sess[file_idx]
+        group      = q_sess[file_idx]
         save_path  = group['path']
         paper_type = group['paper_type']
         questions_meta = group['questions']
 
         if not os.path.exists(save_path):
-            for (i, q) in items:
-                img_results[i] = ('', 0, 0, '')
+            # PDF 文件丢失：尝试 fallback
+            for (i, q, _qs) in items:
+                fb = q.get('img_bytes_b64_fallback', '')
+                if fb:
+                    q['img_bytes_b64'] = fb
+                    q_has_b64[i] = True
+                else:
+                    img_results[i] = ('', 0, 0, '')
             continue
 
         try:
             doc = fitz.open(save_path)
-            for (i, q) in items:
+            for (i, q, _qs) in items:
                 q_num = int(q.get('q_num', 0))
                 q_idx = next((qi for qi, qo in enumerate(questions_meta)
                               if qo['q_num'] == q_num), None)
                 if q_idx is None:
-                    img_results[i] = ('', 0, 0, '')
+                    fb = q.get('img_bytes_b64_fallback', '')
+                    if fb:
+                        q['img_bytes_b64'] = fb
+                        q_has_b64[i] = True
+                    else:
+                        img_results[i] = ('', 0, 0, '')
                     continue
                 try:
                     img_bytes, w, h = crop_question_image(
@@ -9277,11 +9308,25 @@ def library_save():
 
                     img_results[i] = (img_file, w, h, ans_fname)
                 except Exception:
-                    img_results[i] = ('', 0, 0, '')
+                    fb = q.get('img_bytes_b64_fallback', '')
+                    if fb:
+                        q['img_bytes_b64'] = fb
+                        q_has_b64[i] = True
+                    else:
+                        img_results[i] = ('', 0, 0, '')
             doc.close()
         except Exception:
-            for (i, q) in items:
+            for (i, q, _qs) in items:
                 img_results[i] = ('', 0, 0, '')
+
+    # fallback 图片需补充处理（img_bytes_b64_fallback 降级为 b64 任务）
+    late_b64_tasks = [(i, q) for i, q in enumerate(questions)
+                      if q_has_b64.get(i) and i not in img_results]
+    if late_b64_tasks:
+        with _SaveTPE(max_workers=16) as _ex:
+            for fut in _save_ac([_ex.submit(_encode_and_store, t) for t in late_b64_tasks]):
+                i, img_f, w, h, ans_f = fut.result()
+                img_results[i] = (img_f, w, h, ans_f)
 
     # R2 模式：并发上传所有裁图结果
     if storage.is_r2_mode() and _r2_upload_queue:
@@ -9289,6 +9334,7 @@ def library_save():
             storage.store_bytes(kv[0], kv[1])
         with _SaveTPE(max_workers=16) as _ex:
             list(_ex.map(_r2_upload, _r2_upload_queue))
+
 
     # ── 步骤3：构建 manifest ──
     for i, q in enumerate(questions):
