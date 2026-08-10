@@ -6845,91 +6845,69 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
                     _insert_answer_pages(out_doc, q_obj, PW, PH, M, GAP, label)
 
         if ordered_items:
-            # ── 有序模式：按 ordered_items 全局顺序逐题输出 ──
-            # 需要分组打开 src_doc（按 gIdx 缓存）
-            src_docs = {}  # g_idx -> fitz.Document
+            # ── 有序模式：严格按 ordered_items 全局顺序逐题输出 ──
+            # 修复：原逻辑先按 gIdx 分组再批量处理，导致跨组排序（如 chapter 排序）时顺序丢失。
+            # 新逻辑：逐题遍历 ordered_items，每道题单独查询所在组并渲染一页，保证全局顺序。
+            src_docs = {}  # g_idx -> fitz.Document（懒加载，用时再打开）
+            is_cloud_group = {}  # g_idx -> bool，缓存判断结果
             done_total = 0
 
-            # 按 gIdx 预打开文件（跳过路径为空的云端组，以及 workbook/img_bytes_b64 组）
+            # 预计算每个 gIdx 是否为 cloud/workbook 组
             for ginfo in groups_info:
-                gi = ginfo['g_idx']
-                # workbook/云端题目判断：
-                #   1. source == 'workbook' / 'imported' / 'cloud'（由 export_pdf 明确传递）
-                #   2. 或 questions 中有任意题目含 img_bytes_b64（兜底检测，不限第一题）
-                #   3. 或 path 为空（无实体 PDF）
-                # 符合任一条件 → 不打开 src_doc → 强制走 _export_cloud_questions 路径
+                gi  = ginfo['g_idx']
                 src = ginfo.get('source', '')
-                is_cloud = (
+                is_cloud_group[gi] = (
                     src in ('workbook', 'imported', 'cloud')
                     or not ginfo.get('path')
                     or any(q.get('img_bytes_b64') for q in (ginfo.get('questions') or []))
                 )
-                if is_cloud:
-                    continue  # 不加入 src_docs → gi not in src_docs → _export_cloud_questions
-                if os.path.exists(ginfo['path']):
-                    src_docs[gi] = fitz.open(ginfo['path'])
 
-            # 注意：MCQ 打包模式（多题共页）在全局顺序下需要特殊处理
-            # 策略：先按 gIdx 分组收集有序 q_nums，逐组调用 _export_xxx
-            # 但跨组题目顺序仍需全局维持 → 改为按 ordered_items 顺序，
-            # 每遇到 gIdx 切换时关闭上一组段落，开新组段落
-            # 简单可靠方案：全局按 ordered_items 顺序，以组为段依次处理
-            # （同组相邻题目保持连续；跨组切换时自然分段）
-
-            # 构建每个 gIdx 的有序 items（保持 ordered_items 中的顺序）
-            # item 格式: {q_num, _seq(optional)} ; _seq 用于 workbook 精确定位
-            ordered_by_group = {}  # g_idx -> [(q_num, _seq_or_None), ...]（按 ordered_items 顺序）
             for item in ordered_items:
-                gi = item.get('gIdx', 0)
-                qn = item.get('q_num')
-                _seq = item.get('_seq', None)   # workbook 唯一序号
-                if qn is None:
+                gi    = item.get('gIdx', 0)
+                q_num = item.get('q_num')
+                _seq  = item.get('_seq', None)
+                if q_num is None or gi not in group_map:
+                    done_total += 1
                     continue
-                if gi not in ordered_by_group:
-                    ordered_by_group[gi] = []
-                ordered_by_group[gi].append((qn, _seq))
 
-            # 按 ordered_items 中 gIdx 的首次出现顺序处理各组
-            seen_gi = []
-            for item in ordered_items:
-                gi = item.get('gIdx', 0)
-                if gi not in seen_gi:
-                    seen_gi.append(gi)
-
-            for gi in seen_gi:
-                if gi not in group_map:
-                    continue
-                ginfo     = group_map[gi]
-                questions = ginfo['questions']
+                ginfo      = group_map[gi]
+                questions  = ginfo['questions']
                 paper_type = ginfo['paper_type']
-                q_items_ordered = ordered_by_group.get(gi, [])
-                if not q_items_ordered:
-                    continue
-                # 为兼容 _export_two_per_page/_export_one_per_page，抽取 q_nums（可能重复）
-                q_nums_ordered = [qn for qn, _ in q_items_ordered]
+                export_seq = done_total  # seq_start 传入（0-based）
 
-                done_before = done_total
-                def cb(p, _done=done_before):
-                    upd(_done + p)
-
-                if gi not in src_docs:
-                    # ── workbook/云端题目（无实体PDF）：用 _seq 精确定位 ──
-                    _export_cloud_questions(out_doc, questions, q_items_ordered, dpi,
-                                            PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
-                                            seq_start=done_total)
-                elif layout == 'two_per_page':
-                    src_doc = src_docs[gi]
-                    _export_two_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
-                                         paper_type, PAGE_W, PAGE_H, MARGIN,
-                                         HEADER_H, GAP, FS, progress_cb=cb,
-                                         seq_start=done_total)
+                if is_cloud_group.get(gi, False):
+                    # ── workbook/云端：直接从 img_bytes_b64 渲染 ──
+                    _export_cloud_questions(
+                        out_doc, questions, [(q_num, _seq)], dpi,
+                        PAGE_W, PAGE_H, MARGIN, HEADER_H, GAP, FS,
+                        seq_start=export_seq
+                    )
                 else:
+                    # ── 实体 PDF：懒加载 src_doc，逐题渲染一页 ──
+                    if gi not in src_docs:
+                        pdf_path = ginfo.get('path', '')
+                        if pdf_path and os.path.exists(pdf_path):
+                            src_docs[gi] = fitz.open(pdf_path)
+                        else:
+                            done_total += 1
+                            upd(done_total)
+                            continue
                     src_doc = src_docs[gi]
-                    _export_one_per_page(out_doc, src_doc, questions, q_nums_ordered, dpi,
-                                         paper_type, PAGE_W, PAGE_H, MARGIN,
-                                         HEADER_H, GAP, FS, progress_cb=cb,
-                                         seq_start=done_total)
-                done_total += len(q_nums_ordered)
+                    if layout == 'two_per_page':
+                        _export_two_per_page(
+                            out_doc, src_doc, questions, [q_num], dpi,
+                            paper_type, PAGE_W, PAGE_H, MARGIN,
+                            HEADER_H, GAP, FS, seq_start=export_seq
+                        )
+                    else:
+                        _export_one_per_page(
+                            out_doc, src_doc, questions, [q_num], dpi,
+                            paper_type, PAGE_W, PAGE_H, MARGIN,
+                            HEADER_H, GAP, FS, seq_start=export_seq
+                        )
+
+                done_total += 1
+                upd(done_total)
 
             for sd in src_docs.values():
                 sd.close()
