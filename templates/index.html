@@ -1945,7 +1945,11 @@ function getVisibleQuestions() {
     return raw || String(best.id || '').replace(/\.\d+$/, '') || 'ZZZ';
   }
   function _chapterKey(chId) {
-    const m = chId.match(/^([A-Za-z]+\d+)-(\d+)/);
+    // BPhO 格式：'BPhO-10'、'BPhO-11-2' → 前缀='BPhO', 章节号=10
+    const bphoM = chId.match(/^BPhO-(\d+)/i);
+    if (bphoM) return ['BPhO', parseInt(bphoM[1])];
+    // 通用格式：'P3-2'、'EdM-5-1' 等 → [前缀+字母段, 数字]
+    const m = chId.match(/^([A-Za-z]+\d*)-(\d+)/);
     if (!m) return [chId, 0];
     return [m[1], parseInt(m[2])];
   }
