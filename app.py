@@ -6203,13 +6203,34 @@ def ai_solution():
                 errors_detail.append(f'Gemini/{model}: {str(e)}')
                 continue
 
-    # 全部失败
-    last = errors_detail[-1] if errors_detail else '无详情'
-    app.logger.error(f'[ai_solution] 全部失败: {errors_detail}')
+    # 全部失败 —— 把 key 状态也附在返回里方便前端诊断
+    or_key_hint = f'OR_KEY前缀={OPENROUTER_API_KEY[:12]}...' if OPENROUTER_API_KEY else 'OR_KEY未设置'
+    gem_hint    = 'GEMINI_KEY已设置' if GEMINI_API_KEY else 'GEMINI_KEY未设置'
+    last = errors_detail[-1] if errors_detail else '无详情（两个key均未设置？）'
+    app.logger.error(f'[ai_solution] 全部失败 [{or_key_hint} {gem_hint}]: {errors_detail}')
     return jsonify({
         'ok': False,
-        'error': f'所有模型均失败，详情：{last}'
+        'error': f'所有模型均失败，详情：{last}',
+        'key_status': f'{or_key_hint} | {gem_hint}',
+        'all_errors': errors_detail
     }), 500
+
+
+@app.route('/api/env_check', methods=['GET'])
+def env_check():
+    """安全诊断：检查环境变量是否存在，不暴露完整key值。"""
+    import os as _os
+    keys_to_check = ['OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'R2_BUCKET_NAME',
+                     'R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']
+    result = {}
+    for k in keys_to_check:
+        v = _os.environ.get(k, '')
+        v = v.strip()
+        if v:
+            result[k] = f'✅ 已设置 (长度={len(v)}, 前缀={v[:8]}...)'
+        else:
+            result[k] = '❌ 未设置或为空'
+    return jsonify({'ok': True, 'env': result})
 
 
 @app.route('/api/test_gemini', methods=['GET'])
