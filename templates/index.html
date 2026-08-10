@@ -4982,6 +4982,39 @@ async function confirmSaveLib() {
   try {
     const activeG = groups[activeGIdx] || {};
 
+    // ── 步骤0：预加载懒加载题目的图片（并发，8并发）──
+    // 题册加载使用 lazy=1，图片初始为空；保存前需确保所有题目 _img_b64 已填充
+    const lazyQ = visibles.filter(q =>
+      (q._lazy_wb_id || q.source === 'workbook' || q.source === 'cloud') && !q._img_b64
+    );
+    if (lazyQ.length > 0) {
+      setLdProgress(5, `预加载图片 0/${lazyQ.length}…`);
+      const CONCUR = 8;
+      let loaded = 0;
+      for (let bi = 0; bi < lazyQ.length; bi += CONCUR) {
+        const batch = lazyQ.slice(bi, bi + CONCUR);
+        await Promise.all(batch.map(async q => {
+          const wbId  = q._lazy_wb_id || '';
+          const board = encodeURIComponent(q._lazy_board || '');
+          const subj  = encodeURIComponent(q._lazy_subject || '');
+          if (!wbId) return;
+          try {
+            const r = await fetch(`/api/library/img/${wbId}/${q.q_num}?board=${board}&subject=${subj}&type=q`);
+            if (r.ok) {
+              const d = await r.json();
+              if (d.ok && d.b64) {
+                q._img_b64 = d.b64;
+                q._img_w   = d.img_w || 0;
+                q._img_h   = d.img_h || 0;
+              }
+            }
+          } catch(_) {}
+          loaded++;
+        }));
+        setLdProgress(5 + Math.round(loaded / lazyQ.length * 13), `预加载图片 ${loaded}/${lazyQ.length}…`);
+      }
+    }
+
     // ── 准备 payload（纯内存操作，毫秒级完成）──
     // PDF 来源题目：不在前端获取高清图，直接传 session_id_override + file_idx 让后端模式A裁图
     // 这样 payload 极小，后端并发裁图，速度提升 10-50x
@@ -4997,8 +5030,15 @@ async function confirmSaveLib() {
         source:     q.source   || '',
       };
 
-      if (q.source === 'workbook' || q.source === 'cloud') {
-        // 题册/云端题目：直接用内存中的 _img_b64（已是最终分辨率，无原始 PDF）
+      // 判断是否"无原始 PDF session 可用"的题目：
+      //   1. source === 'workbook' / 'cloud'：显式题册/云端来源
+      //   2. _lazy_wb_id 有值：题目从某个题册加载（含 source='bpho'/'cambridge' 等二次加载题目）
+      //   3. _img_replaced：用户手动替换了图片，不能走 PDF 裁图（否则覆盖用户图片）
+      // 以上情况均直接用内存 _img_b64，不走后端 PDF 裁图
+      const _fromWorkbook = q._lazy_wb_id || q.source === 'workbook' || q.source === 'cloud';
+
+      if (_fromWorkbook) {
+        // 题册/云端/二次加载题目（含 bpho 题册等）：直接用内存中的 _img_b64
         if (q._img_b64) {
           entry.img_bytes_b64 = q._img_b64;
           entry.img_w         = q._img_w || 0;
@@ -5010,7 +5050,7 @@ async function confirmSaveLib() {
         entry.img_w         = q._img_w || 0;
         entry.img_h         = q._img_h || 0;
       } else {
-        // PDF 来源题目：让后端模式A自行裁300dpi高清图（无需前端传图）
+        // 当前会话直传 PDF 来源：让后端模式A自行裁300dpi高清图（无需前端传图）
         // 追加的题目需告知后端使用哪个 session + file_idx
         if (q._append_session_id) {
           entry.session_id_override = q._append_session_id;
