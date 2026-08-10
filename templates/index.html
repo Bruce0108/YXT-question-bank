@@ -2272,6 +2272,8 @@ function renderGrid() {
   });
 
   updateSelUI();
+  // 恢复已有 AI 文字答案的卡片按钮（从题册加载时）
+  setTimeout(_restoreAiAnswerCards, 0);
 }
 
 // ─────────────────────── AI 解析功能 ───────────────────────
@@ -2285,6 +2287,11 @@ function openAiSolution(uid, qNum, gIdx, e) {
   if (!mo) return;
   // 重置内容
   document.getElementById('aiSolContent').innerHTML = '<div style="text-align:center;padding:40px;color:#888">⏳ 正在生成解析，请稍候（约10-30秒）…</div>';
+  // 重置"转为参考答案"按钮状态
+  const _sb = document.getElementById('aiSolSaveBtn');
+  const _sh = document.getElementById('aiSolSavedHint');
+  if (_sb) _sb.style.display = 'none';
+  if (_sh) _sh.style.display = 'none';
   const titleEl = document.getElementById('aiSolTitle');
   if (titleEl) {
     const wbTitle = _loadedWb ? _loadedWb.title : '题册';
@@ -2399,8 +2406,30 @@ function openAiSolution(uid, qNum, gIdx, e) {
     return html;
   }
 
+  // ── 用 canvas 压缩 base64 图片，控制最大边长和质量 ──
+  function _compressB64(b64, maxEdge, quality) {
+    return new Promise(resolve => {
+      if (!b64) { resolve(''); return; }
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxEdge || h > maxEdge) {
+          if (w > h) { h = Math.round(h * maxEdge / w); w = maxEdge; }
+          else       { w = Math.round(w * maxEdge / h); h = maxEdge; }
+        }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        // 去掉 data URL 前缀，只保留纯 base64
+        resolve(c.toDataURL('image/jpeg', quality).replace(/^data:[^;]+;base64,/, ''));
+      };
+      img.onerror = () => resolve(b64);  // 压缩失败则用原始
+      img.src = `data:image/jpeg;base64,${b64}`;
+    });
+  }
+
   // ── 若懒加载图片还没拉取，先拉取，再调用 AI ──────────────────────────────
-  function _doAI(ib64, ab64) {
+  async function _doAI(ib64, ab64) {
     // 防止图片为空时直接调用（会得到无意义的介绍段落）
     if (!ib64) {
       const box = document.getElementById('aiSolContent');
@@ -2411,11 +2440,8 @@ function openAiSolution(uid, qNum, gIdx, e) {
     // 清理 base64 字符串：去除 data URL 前缀、空白、非 base64 字符
     function _cleanB64(s) {
       if (!s) return '';
-      // 去除 data:image/...;base64, 前缀
       s = s.replace(/^data:[^;]+;base64,/, '');
-      // 去除所有空白符
       s = s.replace(/\s/g, '');
-      // 只保留合法 base64 字符
       s = s.replace(/[^A-Za-z0-9+/=]/g, '');
       return s;
     }
@@ -2427,6 +2453,15 @@ function openAiSolution(uid, qNum, gIdx, e) {
       if (box) box.innerHTML = '<div style="color:#dc2626;padding:20px">❌ 题目图片数据无效，请重新加载后再试。</div>';
       return;
     }
+
+    // 压缩图片：最大边长 900px，质量 0.82（大幅减少 token，提升速度）
+    const box0 = document.getElementById('aiSolContent');
+    if (box0) box0.innerHTML = '<div style="text-align:center;padding:40px;color:#888">⏳ 压缩图片中… (1/2)</div>';
+    [ib64, ab64] = await Promise.all([
+      _compressB64(ib64, 900, 0.82),
+      _compressB64(ab64, 900, 0.82),
+    ]);
+    if (box0) box0.innerHTML = '<div style="text-align:center;padding:40px;color:#888">🤖 正在生成解析… (2/2)</div>';
 
     let bodyStr;
     try {
@@ -2455,6 +2490,22 @@ function openAiSolution(uid, qNum, gIdx, e) {
         const modelBadge = document.getElementById('aiSolModelBadge');
         if (modelBadge) modelBadge.textContent = modelLabel + '，仅供参考';
         box.innerHTML = `${truncWarn}<div class="ai-sol-body" style="font-size:0.95em;color:#1f2937">${_renderAiMd(d.solution)}</div>`;
+        // 存储 solution 到 modal，供"转为参考答案"使用
+        const _mo = document.getElementById('aiSolutionModal');
+        if (_mo) { _mo._aiSolution = d.solution; _mo._aiUid = _aiMoUid; }
+        // 检查是否已有 AI 答案，决定按钮文字
+        const _qForBtn = _uidToQ(_aiMoUid);
+        const _sb2 = document.getElementById('aiSolSaveBtn');
+        const _sh2 = document.getElementById('aiSolSavedHint');
+        if (_sb2) {
+          if (_qForBtn && _qForBtn.ai_text_answer) {
+            _sb2.style.display = 'none';
+            if (_sh2) { _sh2.style.display = 'inline'; }
+          } else {
+            _sb2.style.display = 'inline-block';
+            if (_sh2) _sh2.style.display = 'none';
+          }
+        }
         // 触发 KaTeX auto-render 渲染所有 $...$ 和 $$...$$ 公式
         function _runKatex() {
           if (window.renderMathInElement) {
@@ -2521,6 +2572,98 @@ function closeAiSolution() {
   const mo = document.getElementById('aiSolutionModal');
   if (mo) mo.style.display = 'none';
   _aiMoUid = null;
+}
+
+// ── 将 AI 解析保存为该题的参考答案 ──
+function _saveAiAsAnswer() {
+  const mo = document.getElementById('aiSolutionModal');
+  if (!mo || !mo._aiSolution || !mo._aiUid) return;
+  const uid = mo._aiUid;
+  const qObj = _uidToQ(uid);
+  if (!qObj) return;
+
+  // 保存到题目对象
+  qObj.ai_text_answer = mo._aiSolution;
+
+  // 更新按钮状态
+  const sb = document.getElementById('aiSolSaveBtn');
+  const sh = document.getElementById('aiSolSavedHint');
+  if (sb) sb.style.display = 'none';
+  if (sh) sh.style.display = 'inline';
+
+  // 在题目卡片上动态注入"📝 AI答案"按钮和内容区
+  _injectAiAnswerCard(uid, qObj);
+  toast('✅ 已保存为参考答案，保存题册时将一并保存', 'ok');
+}
+
+// ── 在题目卡片上注入 AI 文字答案区域 ──
+function _injectAiAnswerCard(uid, qObj) {
+  const card = document.getElementById(`qc-${uid}`);
+  if (!card) return;
+
+  // 如果已存在 AI 答案区域则更新内容
+  let aiAnsWrap = document.getElementById(`ai-ans-${uid}`);
+  if (!aiAnsWrap) {
+    // 新建容器
+    aiAnsWrap = document.createElement('div');
+    aiAnsWrap.id = `ai-ans-${uid}`;
+    aiAnsWrap.style.cssText = 'display:none;border-top:1px solid #d1fae5;margin-top:8px;padding:12px 14px;background:#f0fdf4;border-radius:0 0 8px 8px;';
+    aiAnsWrap.innerHTML = `
+      <div style="font-size:12px;color:#059669;font-weight:600;margin-bottom:8px;">📝 AI 参考解析</div>
+      <div id="ai-ans-body-${uid}" class="ai-sol-body" style="font-size:13px;color:#1f2937;line-height:1.75;max-height:400px;overflow-y:auto"></div>
+    `;
+    // 插入到答案区域之前（或卡片操作区之前）
+    const actDiv = card.querySelector('.qc-act');
+    if (actDiv) card.insertBefore(aiAnsWrap, actDiv);
+    else card.appendChild(aiAnsWrap);
+
+    // 在操作栏动态插入"📝 AI答案"按钮
+    const actBar = card.querySelector('.qc-act');
+    if (actBar) {
+      const aiBtn = document.createElement('button');
+      aiBtn.className = 'btn btn-sm';
+      aiBtn.id = `ai-ans-btn-${uid}`;
+      aiBtn.style.cssText = 'background:#dcfce7;color:#15803d;border:1px solid #86efac';
+      aiBtn.textContent = '📝 AI答案';
+      aiBtn.onclick = (e) => { e.stopPropagation(); _toggleAiAnswer(uid); };
+      // 插入到"🤖 解析"按钮之后
+      const solBtn = document.getElementById(`aibtn-${uid}`);
+      if (solBtn && solBtn.nextSibling) actBar.insertBefore(aiBtn, solBtn.nextSibling);
+      else actBar.appendChild(aiBtn);
+    }
+  }
+
+  // 渲染内容
+  const bodyEl = document.getElementById(`ai-ans-body-${uid}`);
+  if (bodyEl) {
+    bodyEl.innerHTML = _renderAiMd(qObj.ai_text_answer);
+    if (window.renderMathInElement) {
+      renderMathInElement(bodyEl, {
+        delimiters: [{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],
+        throwOnError: false
+      });
+    }
+  }
+}
+
+// ── 切换 AI 答案区域显示/隐藏 ──
+function _toggleAiAnswer(uid) {
+  const wrap = document.getElementById(`ai-ans-${uid}`);
+  const btn  = document.getElementById(`ai-ans-btn-${uid}`);
+  if (!wrap) return;
+  const showing = wrap.style.display !== 'none';
+  wrap.style.display = showing ? 'none' : 'block';
+  if (btn) btn.style.background = showing ? '#dcfce7' : '#bbf7d0';
+}
+
+// ── 页面加载题册后，恢复已有 AI 文字答案的卡片按钮 ──
+function _restoreAiAnswerCards() {
+  allQuestions.forEach(q => {
+    if (q.ai_text_answer) {
+      const uid = q._seq != null ? `s${q._seq}` : `${q.gIdx}_${q.q_num}`;
+      _injectAiAnswerCard(uid, q);
+    }
+  });
 }
 
 // ── 答案显示/隐藏切换 ──
@@ -4780,8 +4923,9 @@ async function confirmSaveLib() {
         }
       }
 
-      if (q.answer_b64) entry.answer_b64 = q.answer_b64;
-      if (q.answer_pages) entry.answer_pages = q.answer_pages;
+      if (q.answer_b64)    entry.answer_b64    = q.answer_b64;
+      if (q.answer_pages)  entry.answer_pages  = q.answer_pages;
+      if (q.ai_text_answer) entry.ai_text_answer = q.ai_text_answer;
       questionsPayload.push(entry);
 
       // 更新进度（5% → 20%）
@@ -5400,10 +5544,12 @@ function _applyLoadedWorkbook(d) {
       _img_w:        q.img_w || 0,
       _img_h:        q.img_h || 0,
       // 答案图片（从 library_load 的 answer_b64 字段）
-      answer_b64:    q.answer_b64 || '',
-      answer_pages:  q.answer_pages || null,
+      answer_b64:     q.answer_b64 || '',
+      answer_pages:   q.answer_pages || null,
+      // AI 文字答案
+      ai_text_answer: q.ai_text_answer || '',
       // 懒加载标记
-      has_answer:    q.has_answer || !!q.answer_b64,
+      has_answer:     q.has_answer || !!q.answer_b64,
       _lazy_wb_id:   q._wb_id || d.id,
       _lazy_board:   d.board || '',
       _lazy_subject: d.subject || '',
@@ -7261,7 +7407,15 @@ document.addEventListener('DOMContentLoaded', () => {
     <div id="aiSolContent" style="flex:1;overflow-y:auto;padding:20px 24px;font-size:14px;line-height:1.8;color:#1f2937;">
     </div>
     <!-- Footer -->
-    <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;flex-shrink:0;background:#fafafa;">
+    <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:#fafafa;">
+      <div>
+        <button id="aiSolSaveBtn" onclick="_saveAiAsAnswer()"
+          style="display:none;padding:8px 18px;background:#059669;color:#fff;border:none;
+                 border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;">
+          📋 转为参考答案
+        </button>
+        <span id="aiSolSavedHint" style="display:none;font-size:13px;color:#059669;font-weight:600;">✅ 已保存为参考答案</span>
+      </div>
       <button onclick="closeAiSolution()"
         style="padding:8px 20px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;">
         关闭

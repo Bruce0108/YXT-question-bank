@@ -9574,16 +9574,17 @@ def _library_load_impl(wb_id):
                     with open(ans_path, 'rb') as f:
                         ans_b64 = _b64.b64encode(f.read()).decode('ascii')
             questions_out.append({
-                'seq':           q.get('seq', 0),
-                'q_num':         q.get('q_num', 0),
-                'difficulty':    q.get('difficulty'),
-                'topics':        q.get('topics', []),
-                'exam_date':     q.get('exam_date', ''),
-                'source':        q.get('source', ''),
-                'img_bytes_b64': b64,
-                'img_w':         q.get('img_w', 0),
-                'img_h':         q.get('img_h', 0),
-                'answer_b64':    ans_b64,   # Task1
+                'seq':            q.get('seq', 0),
+                'q_num':          q.get('q_num', 0),
+                'difficulty':     q.get('difficulty'),
+                'topics':         q.get('topics', []),
+                'exam_date':      q.get('exam_date', ''),
+                'source':         q.get('source', ''),
+                'img_bytes_b64':  b64,
+                'img_w':          q.get('img_w', 0),
+                'img_h':          q.get('img_h', 0),
+                'answer_b64':     ans_b64,
+                'ai_text_answer': q.get('ai_text_answer', ''),   # AI解析文字答案
             })
 
     return jsonify({
@@ -9902,17 +9903,18 @@ def library_append(wb_id):
     for i, q in enumerate(questions):
         img_file, img_w, img_h, ans_file = img_results.get(i, ('', 0, 0, ''))
         new_qs.append({
-            'seq':        start_idx + i + 1,
-            'q_num':      q.get('q_num', start_idx + i + 1),
-            'file_idx':   int(q.get('file_idx', q.get('gIdx', 0))),
-            'difficulty': q.get('difficulty'),
-            'topics':     q.get('topics', []),
-            'exam_date':  q.get('exam_date', ''),
-            'source':     q.get('source', ''),
-            'img_file':   img_file,
-            'img_w':      img_w,
-            'img_h':      img_h,
-            'ans_file':   ans_file,
+            'seq':            start_idx + i + 1,
+            'q_num':          q.get('q_num', start_idx + i + 1),
+            'file_idx':       int(q.get('file_idx', q.get('gIdx', 0))),
+            'difficulty':     q.get('difficulty'),
+            'topics':         q.get('topics', []),
+            'exam_date':      q.get('exam_date', ''),
+            'source':         q.get('source', ''),
+            'img_file':       img_file,
+            'img_w':          img_w,
+            'img_h':          img_h,
+            'ans_file':       ans_file,
+            'ai_text_answer': q.get('ai_text_answer', ''),   # AI解析文字答案
         })
 
     added_count   = sum(1 for q in new_qs if q.get('img_file'))
