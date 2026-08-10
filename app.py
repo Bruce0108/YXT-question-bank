@@ -6042,13 +6042,14 @@ def ai_solution():
     # 策略1：OpenRouter（OpenAI Chat Completions 格式）
     # ══════════════════════════════════════════════════════
     if OPENROUTER_API_KEY:
-        # OpenRouter 免费视觉模型列表（2026-08 从API实时确认，均支持 image_url）
+        # OpenRouter 免费视觉模型（2026-08-10 确认，仅保留真正支持图片的模型）
+        # ⚠️  移除 openrouter/free：会自动路由到 nemotron-3.5-content-safety，
+        #     该模型只返回安全过滤文本（"User Safety: safe"），不做解题
+        # ⚠️  移除 nemotron-3-nano-omni-30b-a3b-reasoning：推理链超长，响应慢
         OR_MODELS = [
-            "google/gemma-4-26b-a4b-it:free",                     # ✅ 实测OK: Google Gemma4 多模态
-            "google/gemma-4-31b-it:free",                          # Google Gemma4 31B 多模态
-            "nvidia/nemotron-nano-12b-v2-vl:free",                 # NVIDIA Nano VL 视觉专用
-            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",  # NVIDIA Omni 多模态推理
-            "openrouter/free",                                      # 自动路由到可用免费模型
+            "google/gemma-4-26b-a4b-it:free",    # Google Gemma4 26B 多模态 ✅ 实测首选
+            "google/gemma-4-31b-it:free",          # Google Gemma4 31B 多模态 ✅
+            "nvidia/nemotron-nano-12b-v2-vl:free", # NVIDIA Nano VL 轻量视觉 ✅
         ]
 
         # 构建消息：把图片用 base64 data URL 传入
@@ -6066,18 +6067,14 @@ def ai_solution():
             return [{"role": "user", "content": content}]
 
         # ── 并发竞速：同时向所有模型发请求，取最快成功的那个 ──
-        import queue as _queue
         from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
 
-        result_queue = _queue.Queue()
-
         def _call_one_model(model_id):
-            """向单个 OpenRouter 模型发请求，成功则放入 result_queue"""
             try:
                 body = _json.dumps({
                     "model": model_id,
                     "messages": _build_or_messages(True),
-                    "max_tokens": 8192,
+                    "max_tokens": 4096,
                     "temperature": 0.2,
                 }).encode('utf-8')
                 req = _urllib_req.Request(
@@ -6091,7 +6088,7 @@ def ai_solution():
                     },
                     method='POST'
                 )
-                with _urllib_req.urlopen(req, timeout=90) as resp:
+                with _urllib_req.urlopen(req, timeout=45) as resp:
                     result = _json.loads(resp.read().decode('utf-8'))
 
                 choices = result.get('choices', [])
@@ -6100,9 +6097,15 @@ def ai_solution():
                     return {'ok': False, 'model': model_id,
                             'error': f'无choices: {err.get("message","")}'}
 
-                solution      = choices[0].get('message', {}).get('content', '')
+                solution      = choices[0].get('message', {}).get('content', '') or ''
                 finish_reason = choices[0].get('finish_reason', 'UNKNOWN')
-                if not solution:
+
+                # ── 过滤垃圾回复：内容过短 (<80字符) 或只含安全标签说明 ──
+                solution_stripped = solution.strip()
+                if len(solution_stripped) < 80:
+                    return {'ok': False, 'model': model_id,
+                            'error': f'返回内容过短({len(solution_stripped)}字符)，疑似安全过滤: {solution_stripped[:100]}'}
+                if not solution_stripped:
                     return {'ok': False, 'model': model_id, 'error': '返回内容为空'}
 
                 return {'ok': True, 'model': model_id,

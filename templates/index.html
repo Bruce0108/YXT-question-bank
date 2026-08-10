@@ -2472,7 +2472,22 @@ function openAiSolution(uid, qNum, gIdx, e) {
       _compressB64(ib64, 900, 0.82),
       _compressB64(ab64, 900, 0.82),
     ]);
-    if (box0) box0.innerHTML = '<div style="text-align:center;padding:40px;color:#888">🤖 正在生成解析… (2/2)</div>';
+
+    // ── 显示计时器 ──
+    const _t0 = Date.now();
+    let _timerInterval = null;
+    function _updateLoadingTimer() {
+      const sec = Math.floor((Date.now() - _t0) / 1000);
+      const box = document.getElementById('aiSolContent');
+      if (box && box.querySelector('#ai-loading-label')) {
+        box.querySelector('#ai-loading-label').textContent = `🤖 正在并发调用多个模型，请稍候… ${sec}s`;
+      }
+    }
+    if (box0) box0.innerHTML = `<div style="text-align:center;padding:40px;color:#888">
+      <div id="ai-loading-label">🤖 正在并发调用多个模型，请稍候… 0s</div>
+      <div style="font-size:0.8em;margin-top:8px;color:#aaa">通常10-25秒，3个模型竞速取最快结果</div>
+    </div>`;
+    _timerInterval = setInterval(_updateLoadingTimer, 1000);
 
     let bodyStr;
     try {
@@ -2490,16 +2505,18 @@ function openAiSolution(uid, qNum, gIdx, e) {
     })
     .then(r => r.json())
     .then(d => {
+      clearInterval(_timerInterval);
+      const elapsed = ((Date.now() - _t0) / 1000).toFixed(1);
       const box = document.getElementById('aiSolContent');
       if (!box) return;
       if (d.ok && d.solution) {
         const modelLabel = d.model ? `由 ${d.model} 生成` : '由 Gemini 生成';
-        const truncWarn  = (d.finish_reason === 'MAX_TOKENS')
+        const truncWarn  = (d.finish_reason === 'MAX_TOKENS' || d.finish_reason === 'length')
           ? '<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:0.85em;color:#92400e">⚠️ 解析内容较长，可能已被截断。如需完整解析，请重试。</div>'
           : '';
-        // 更新标题栏的模型标注
+        // 更新标题栏的模型标注（含用时）
         const modelBadge = document.getElementById('aiSolModelBadge');
-        if (modelBadge) modelBadge.textContent = modelLabel + '，仅供参考';
+        if (modelBadge) modelBadge.textContent = `${modelLabel}，用时${elapsed}s，仅供参考`;
         box.innerHTML = `${truncWarn}<div class="ai-sol-body" style="font-size:0.95em;color:#1f2937">${_renderAiMd(d.solution)}</div>`;
         // ★ 用新的 KaTeX 渲染函数（不依赖 auto-render，直接 katex.renderToString）
         if (window._katexReady) { _renderKatexInEl(box); }
@@ -2528,6 +2545,7 @@ function openAiSolution(uid, qNum, gIdx, e) {
       }
     })
     .catch(err => {
+      clearInterval(_timerInterval);
       const box = document.getElementById('aiSolContent');
       if (box) box.innerHTML = `<div style="color:#dc2626;padding:20px">❌ 请求失败：${err.message}</div>`;
     });
