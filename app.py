@@ -5986,25 +5986,24 @@ def get_answer():
 def ai_solution():
     """
     调用 AI 视觉模型对题目图片进行解析，返回详细解题过程。
-    优先使用 OpenRouter（OPENROUTER_API_KEY），备用 Gemini（GEMINI_API_KEY）。
-    OpenRouter 兼容 OpenAI Chat Completions 格式，支持 500+ 模型。
+    OpenRouter(OR) + Gemini 全部并发竞速，取最快成功的那个。
+    OR 遇到 429 rate-limit 时，Gemini 会自动顶上，无需等 OR 全部超时。
     """
     import os as _os
     import json as _json
     import urllib.request as _urllib_req
     import urllib.error  as _urllib_err
-    import time as _time
+    from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
 
     OPENROUTER_API_KEY = _os.environ.get('OPENROUTER_API_KEY', '').strip()
     GEMINI_API_KEY     = _os.environ.get('GEMINI_API_KEY', '').strip()
 
-    # 调试日志：记录 key 前缀，方便排查 Railway 环境变量是否生效
     app.logger.info(f'[ai_solution] OR_KEY={OPENROUTER_API_KEY[:12]+"..." if OPENROUTER_API_KEY else "未设置"} '
                     f'GEMINI_KEY={"已设置" if GEMINI_API_KEY else "未设置"}')
 
     if not OPENROUTER_API_KEY and not GEMINI_API_KEY:
         return jsonify({'ok': False,
-                        'error': '未配置 AI API Key。请在 Railway Variables 中添加 OPENROUTER_API_KEY（推荐）或 GEMINI_API_KEY'}), 400
+                        'error': '未配置 AI API Key。请在 Railway Variables 中添加 OPENROUTER_API_KEY 或 GEMINI_API_KEY'}), 400
 
     data    = request.get_json(force=True, silent=True) or {}
     img_b64 = data.get('img_b64', '')
@@ -6016,144 +6015,104 @@ def ai_solution():
         return jsonify({'ok': False, 'error': '缺少题目图片'}), 400
 
     prompt_text = (
-        f"你是一位专业的英国物理竞赛（BPhO）解题专家。\n"
+        "你是一位专业的英国物理竞赛（BPhO）解题专家。\n"
         f"题目背景：{context}\n\n"
-        f"【重要指令】请直接给出完整详细的解题过程，不要写任何介绍、问候语或自我介绍。直接从"## 解题过程"开始。\n\n"
-        f"请按以下格式输出：\n\n"
-        f"## 解题过程\n\n"
-        f"**【已知条件】**\n"
-        f"列出题目中的所有已知量（含数值和单位）\n\n"
-        f"**【求解目标】**\n"
-        f"明确需要求的量\n\n"
-        f"**【物理原理】**\n"
-        f"列出本题涉及的物理定律/公式（LaTeX格式，$$公式$$）\n\n"
-        f"**【逐步推导】**\n"
-        f"若有多问 (a)(b)(c) 或 (i)(ii)(iii)，每问单独一个小节，逐步推导，每步说明物理意义\n\n"
-        f"**【最终答案】**\n"
-        f"给出所有问的最终数值结果，注意单位\n\n"
-        f"**【解题要点】**\n"
-        f"1-3条解题关键点总结\n\n"
-        f"注意：所有公式使用LaTeX（行间公式 $$...$$ ，行内公式 $...$），中文解释，内容要完整详尽。"
+        "【重要指令】请直接给出完整详细的解题过程，不要写任何介绍、问候语或自我介绍。直接从"## 解题过程"开始。\n\n"
+        "请按以下格式输出：\n\n"
+        "## 解题过程\n\n"
+        "**【已知条件】**\n"
+        "列出题目中的所有已知量（含数值和单位）\n\n"
+        "**【求解目标】**\n"
+        "明确需要求的量\n\n"
+        "**【物理原理】**\n"
+        "列出本题涉及的物理定律/公式（LaTeX格式，$$公式$$）\n\n"
+        "**【逐步推导】**\n"
+        "若有多问 (a)(b)(c) 或 (i)(ii)(iii)，每问单独一个小节，逐步推导，每步说明物理意义\n\n"
+        "**【最终答案】**\n"
+        "给出所有问的最终数值结果，注意单位\n\n"
+        "**【解题要点】**\n"
+        "1-3条解题关键点总结\n\n"
+        "注意：所有公式使用LaTeX（行间公式 $$...$$ ，行内公式 $...$），中文解释，内容要完整详尽。"
     )
 
     errors_detail = []
+    workers = []   # list of callables, each returns a result dict
 
-    # ══════════════════════════════════════════════════════
-    # 策略1：OpenRouter（OpenAI Chat Completions 格式）
-    # ══════════════════════════════════════════════════════
+    # ── OpenRouter workers ──────────────────────────────────────────
     if OPENROUTER_API_KEY:
-        # OpenRouter 免费视觉模型（2026-08-10 确认，仅保留真正支持图片的模型）
-        # ⚠️  移除 openrouter/free：会自动路由到 nemotron-3.5-content-safety，
-        #     该模型只返回安全过滤文本（"User Safety: safe"），不做解题
-        # ⚠️  移除 nemotron-3-nano-omni-30b-a3b-reasoning：推理链超长，响应慢
+        # 2026-08 确认支持图片的免费视觉模型（不含 openrouter/free 安全过滤路由）
         OR_MODELS = [
-            "google/gemma-4-26b-a4b-it:free",    # Google Gemma4 26B 多模态 ✅ 实测首选
-            "google/gemma-4-31b-it:free",          # Google Gemma4 31B 多模态 ✅
-            "nvidia/nemotron-nano-12b-v2-vl:free", # NVIDIA Nano VL 轻量视觉 ✅
+            "google/gemma-4-26b-a4b-it:free",    # Gemma4 26B ✅
+            "google/gemma-4-31b-it:free",          # Gemma4 31B ✅
+            "nvidia/nemotron-nano-12b-v2-vl:free", # Nemotron VL ✅
         ]
 
-        # 构建消息：把图片用 base64 data URL 传入
-        def _build_or_messages(include_ans):
-            content = [
-                {"type": "text", "text": prompt_text},
-                {"type": "image_url",
-                 "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-            ]
-            if include_ans and ans_b64:
-                content.append({"type": "text",
-                                 "text": "\n以下是官方 Mark Scheme（评分标准），请严格按照它核对答案和步骤分："})
-                content.append({"type": "image_url",
-                                 "image_url": {"url": f"data:image/jpeg;base64,{ans_b64}"}})
-            return [{"role": "user", "content": content}]
+        def _make_or_worker(model_id):
+            def _worker():
+                try:
+                    content = [
+                        {"type": "text", "text": prompt_text},
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+                    ]
+                    if ans_b64:
+                        content.append({"type": "text",
+                                         "text": "\n以下是官方 Mark Scheme，请严格按照它核对答案："})
+                        content.append({"type": "image_url",
+                                         "image_url": {"url": f"data:image/jpeg;base64,{ans_b64}"}})
+                    body = _json.dumps({
+                        "model": model_id,
+                        "messages": [{"role": "user", "content": content}],
+                        "max_tokens": 4096,
+                        "temperature": 0.2,
+                    }).encode('utf-8')
+                    req = _urllib_req.Request(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        data=body,
+                        headers={
+                            'Content-Type': 'application/json',
+                            'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+                            'HTTP-Referer': 'https://yxt-question-bank.railway.app',
+                            'X-Title': 'BPhO Question Bank',
+                        },
+                        method='POST'
+                    )
+                    with _urllib_req.urlopen(req, timeout=45) as resp:
+                        result = _json.loads(resp.read().decode('utf-8'))
 
-        # ── 并发竞速：同时向所有模型发请求，取最快成功的那个 ──
-        from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
+                    choices = result.get('choices', [])
+                    if not choices:
+                        err = result.get('error', {})
+                        return {'ok': False, 'model': model_id, 'provider': 'openrouter',
+                                'error': f'无choices: {err.get("message", str(result))[:200]}'}
 
-        def _call_one_model(model_id):
-            try:
-                body = _json.dumps({
-                    "model": model_id,
-                    "messages": _build_or_messages(True),
-                    "max_tokens": 4096,
-                    "temperature": 0.2,
-                }).encode('utf-8')
-                req = _urllib_req.Request(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    data=body,
-                    headers={
-                        'Content-Type': 'application/json',
-                        'Authorization': f'Bearer {OPENROUTER_API_KEY}',
-                        'HTTP-Referer': 'https://yxt-question-bank.railway.app',
-                        'X-Title': 'BPhO Question Bank',
-                    },
-                    method='POST'
-                )
-                with _urllib_req.urlopen(req, timeout=45) as resp:
-                    result = _json.loads(resp.read().decode('utf-8'))
+                    solution      = (choices[0].get('message', {}).get('content', '') or '').strip()
+                    finish_reason = choices[0].get('finish_reason', 'UNKNOWN')
 
-                choices = result.get('choices', [])
-                if not choices:
-                    err = result.get('error', {})
-                    return {'ok': False, 'model': model_id,
-                            'error': f'无choices: {err.get("message","")}'}
+                    if len(solution) < 80:
+                        return {'ok': False, 'model': model_id, 'provider': 'openrouter',
+                                'error': f'内容过短({len(solution)}字符): {solution[:120]}'}
 
-                solution      = choices[0].get('message', {}).get('content', '') or ''
-                finish_reason = choices[0].get('finish_reason', 'UNKNOWN')
+                    return {'ok': True, 'model': model_id, 'provider': 'openrouter',
+                            'solution': solution, 'finish_reason': finish_reason}
 
-                # ── 过滤垃圾回复：内容过短 (<80字符) 或只含安全标签说明 ──
-                solution_stripped = solution.strip()
-                if len(solution_stripped) < 80:
-                    return {'ok': False, 'model': model_id,
-                            'error': f'返回内容过短({len(solution_stripped)}字符)，疑似安全过滤: {solution_stripped[:100]}'}
-                if not solution_stripped:
-                    return {'ok': False, 'model': model_id, 'error': '返回内容为空'}
+                except _urllib_err.HTTPError as e:
+                    body_txt = e.read().decode('utf-8', errors='replace')
+                    return {'ok': False, 'model': model_id, 'provider': 'openrouter',
+                            'error': f'HTTP {e.code}: {body_txt[:200]}'}
+                except Exception as e:
+                    return {'ok': False, 'model': model_id, 'provider': 'openrouter',
+                            'error': f'{type(e).__name__}: {str(e)}'}
+            return _worker
 
-                return {'ok': True, 'model': model_id,
-                        'solution': solution, 'finish_reason': finish_reason}
+        for _m in OR_MODELS:
+            workers.append(_make_or_worker(_m))
 
-            except _urllib_err.HTTPError as e:
-                err_body = e.read().decode('utf-8', errors='replace')
-                return {'ok': False, 'model': model_id,
-                        'error': f'HTTP {e.code}: {err_body[:200]}'}
-            except Exception as e:
-                return {'ok': False, 'model': model_id,
-                        'error': f'{type(e).__name__}: {str(e)}'}
-
-        # 并发发射所有模型请求，等待最快成功的一个
-        with _TPE(max_workers=len(OR_MODELS)) as executor:
-            futures = {executor.submit(_call_one_model, m): m for m in OR_MODELS}
-            first_success = None
-            for fut in _as_completed(futures):
-                res = fut.result()
-                if res['ok']:
-                    first_success = res
-                    # 取消其余请求（Python 中只能标记取消，已发出的网络请求无法中断）
-                    for f in futures:
-                        f.cancel()
-                    break
-                else:
-                    errors_detail.append(f"OR/{res['model']}: {res['error']}")
-                    app.logger.warning(f"[ai_solution] {errors_detail[-1]}")
-
-        if first_success:
-            sol      = first_success['solution']
-            fin      = first_success['finish_reason']
-            mid      = first_success['model']
-            if fin == 'length':
-                sol += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
-            app.logger.info(f'[ai_solution] OpenRouter 并发成功 model={mid} finish={fin} len={len(sol)}')
-            return jsonify({'ok': True, 'solution': sol, 'model': mid,
-                            'finish_reason': fin, 'provider': 'openrouter'})
-
-    # ══════════════════════════════════════════════════════
-    # 策略2：Gemini v1beta（备用，原生格式）
-    # ══════════════════════════════════════════════════════
+    # ── Gemini workers ──────────────────────────────────────────────
     if GEMINI_API_KEY:
         GEMINI_MODELS = [
             "gemini-2.5-flash",
-            "gemini-2.5-flash-lite-preview-06-17",
             "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
         ]
 
         gemini_parts = [
@@ -6161,59 +6120,86 @@ def ai_solution():
             {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
         ]
         if ans_b64:
-            gemini_parts.append({"text": "\n以下是官方 Mark Scheme（评分标准），请严格按照它核对答案和步骤分："})
+            gemini_parts.append({"text": "\n以下是官方 Mark Scheme，请严格按照它核对答案："})
             gemini_parts.append({"inline_data": {"mime_type": "image/jpeg", "data": ans_b64}})
-
         gemini_payload = _json.dumps({
             "contents": [{"parts": gemini_parts}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192, "topP": 0.95}
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096, "topP": 0.95}
         }).encode('utf-8')
 
-        for model in GEMINI_MODELS:
-            try:
-                url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                       f"{model}:generateContent?key={GEMINI_API_KEY}")
-                req = _urllib_req.Request(url, data=gemini_payload,
-                                          headers={'Content-Type': 'application/json'}, method='POST')
-                with _urllib_req.urlopen(req, timeout=90) as resp:
-                    result = _json.loads(resp.read().decode('utf-8'))
+        def _make_gemini_worker(model):
+            def _worker():
+                try:
+                    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                           f"{model}:generateContent?key={GEMINI_API_KEY}")
+                    req = _urllib_req.Request(url, data=gemini_payload,
+                                              headers={'Content-Type': 'application/json'},
+                                              method='POST')
+                    with _urllib_req.urlopen(req, timeout=60) as resp:
+                        result = _json.loads(resp.read().decode('utf-8'))
 
-                candidates = result.get('candidates', [])
-                if not candidates:
-                    errors_detail.append(f'Gemini/{model}: 无候选结果')
-                    continue
+                    candidates = result.get('candidates', [])
+                    if not candidates:
+                        return {'ok': False, 'model': model, 'provider': 'gemini',
+                                'error': '无候选结果'}
 
-                finish_reason = candidates[0].get('finishReason', 'UNKNOWN')
-                parts_out     = candidates[0].get('content', {}).get('parts', [])
-                solution      = ''.join(p.get('text', '') for p in parts_out if 'text' in p)
+                    finish_reason = candidates[0].get('finishReason', 'UNKNOWN')
+                    parts_out     = candidates[0].get('content', {}).get('parts', [])
+                    solution      = ''.join(p.get('text', '') for p in parts_out if 'text' in p).strip()
 
-                if not solution:
-                    errors_detail.append(f'Gemini/{model}: 返回文本为空')
-                    continue
+                    if not solution:
+                        return {'ok': False, 'model': model, 'provider': 'gemini',
+                                'error': '返回文本为空'}
 
-                if finish_reason == 'MAX_TOKENS':
-                    solution += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
+                    if finish_reason == 'MAX_TOKENS':
+                        solution += '\n\n> 警告：内容较长，已达到输出上限，解析可能不完整'
 
-                app.logger.info(f'[ai_solution] Gemini 成功 model={model} finish={finish_reason}')
-                return jsonify({'ok': True, 'solution': solution, 'model': model,
-                                'finish_reason': finish_reason, 'provider': 'gemini'})
+                    return {'ok': True, 'model': model, 'provider': 'gemini',
+                            'solution': solution, 'finish_reason': finish_reason}
 
-            except _urllib_err.HTTPError as e:
-                err_body = e.read().decode('utf-8', errors='replace')
-                err_msg  = f'Gemini/{model} HTTP {e.code}: {err_body[:200]}'
-                errors_detail.append(err_msg)
-                app.logger.warning(f'[ai_solution] {err_msg}')
-                if e.code == 429:
-                    _time.sleep(1)
-                continue
-            except Exception as e:
-                errors_detail.append(f'Gemini/{model}: {str(e)}')
-                continue
+                except _urllib_err.HTTPError as e:
+                    body_txt = e.read().decode('utf-8', errors='replace')
+                    return {'ok': False, 'model': model, 'provider': 'gemini',
+                            'error': f'HTTP {e.code}: {body_txt[:200]}'}
+                except Exception as e:
+                    return {'ok': False, 'model': model, 'provider': 'gemini',
+                            'error': f'{type(e).__name__}: {str(e)}'}
+            return _worker
 
-    # 全部失败 —— 把 key 状态也附在返回里方便前端诊断
-    or_key_hint = f'OR_KEY前缀={OPENROUTER_API_KEY[:12]}...' if OPENROUTER_API_KEY else 'OR_KEY未设置'
-    gem_hint    = 'GEMINI_KEY已设置' if GEMINI_API_KEY else 'GEMINI_KEY未设置'
-    last = errors_detail[-1] if errors_detail else '无详情（两个key均未设置？）'
+        for _m in GEMINI_MODELS:
+            workers.append(_make_gemini_worker(_m))
+
+    # ── 全部 workers 并发竞速，取最快成功的那个 ──────────────────────
+    # OR 429 时，Gemini 马上顶上；无需等 OR timeout
+    first_success = None
+    with _TPE(max_workers=max(len(workers), 1)) as executor:
+        futures = {executor.submit(w): w for w in workers}
+        for fut in _as_completed(futures):
+            res = fut.result()
+            if res.get('ok'):
+                first_success = res
+                for f in futures:
+                    f.cancel()
+                break
+            else:
+                tag = f"{res.get('provider','?')}/{res.get('model','?')}"
+                errors_detail.append(f"{tag}: {res.get('error','未知错误')}")
+                app.logger.warning(f'[ai_solution] x {errors_detail[-1]}')
+
+    if first_success:
+        sol = first_success['solution']
+        fin = first_success['finish_reason']
+        mid = first_success['model']
+        if fin == 'length':
+            sol += '\n\n> 警告：内容较长，已达到输出上限，解析可能不完整'
+        app.logger.info(f'[ai_solution] OK {first_success["provider"]}/{mid} finish={fin} len={len(sol)}')
+        return jsonify({'ok': True, 'solution': sol, 'model': mid,
+                        'finish_reason': fin, 'provider': first_success['provider']})
+
+    # 全部失败
+    or_key_hint = f'OR前缀={OPENROUTER_API_KEY[:12]}...' if OPENROUTER_API_KEY else 'OR未设置'
+    gem_hint    = 'Gemini已设置' if GEMINI_API_KEY else 'Gemini未设置'
+    last = errors_detail[-1] if errors_detail else '无详情'
     app.logger.error(f'[ai_solution] 全部失败 [{or_key_hint} {gem_hint}]: {errors_detail}')
     return jsonify({
         'ok': False,
