@@ -9183,6 +9183,14 @@ def library_load(wb_id):
     board/subject 可选：若不提供，则自动搜索 library 目录查找匹配 wb_id 的题册。
     ?lazy=1：懒加载模式，只返回元数据，不含图片base64（大幅提速首屏）
     """
+    try:
+        return _library_load_impl(wb_id)
+    except Exception as _e:
+        import traceback
+        app.logger.error(f'[library_load] 未捕获异常: {traceback.format_exc()}')
+        return jsonify({'ok': False, 'error': f'服务器内部错误: {str(_e)}'}), 500
+
+def _library_load_impl(wb_id):
     import base64 as _b64
     board   = request.args.get('board', '')
     subject = request.args.get('subject', '')
@@ -9224,10 +9232,26 @@ def library_load(wb_id):
     else:
         wb_prefix = _lib_key_prefix(board, subject, wb_id)
 
+    app.logger.info(f'[library_load] wb_id={wb_id!r} board={board!r} subject={subject!r} lazy={lazy} prefix={wb_prefix!r}')
+
     if storage.is_r2_mode():
         manifest = storage.load_json(f'{wb_prefix}/manifest.json')
+
+        # ── 向后兼容：旧版代码保存时括号会被剥离，尝试不含括号的路径 ──
         if manifest is None:
-            return jsonify({'error': '题册不存在'}), 404
+            legacy_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
+            legacy_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
+            legacy_prefix  = f'library/{legacy_board}/{legacy_subject}/{wb_id}' if wb_id else f'library/{legacy_board}/{legacy_subject}'
+            if legacy_prefix != wb_prefix:
+                app.logger.info(f'[library_load] trying legacy prefix: {legacy_prefix!r}')
+                manifest = storage.load_json(f'{legacy_prefix}/manifest.json')
+                if manifest is not None:
+                    wb_prefix = legacy_prefix
+                    app.logger.info(f'[library_load] found via legacy prefix: {wb_prefix!r}')
+
+        if manifest is None:
+            app.logger.warning(f'[library_load] manifest not found at {wb_prefix}/manifest.json')
+            return jsonify({'ok': False, 'error': f'题册不存在（路径: {wb_prefix}）'}), 404
 
         from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
 
@@ -9365,6 +9389,15 @@ def library_img_lazy(wb_id, q_num_str):
     # 从 manifest 找到对应题目的文件名
     if storage.is_r2_mode():
         manifest = storage.load_json(f'{wb_prefix}/manifest.json')
+        # 向后兼容：旧版路径无括号
+        if not manifest:
+            legacy_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
+            legacy_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
+            legacy_prefix  = f'library/{legacy_board}/{legacy_subject}/{wb_id}'
+            if legacy_prefix != wb_prefix:
+                manifest = storage.load_json(f'{legacy_prefix}/manifest.json')
+                if manifest is not None:
+                    wb_prefix = legacy_prefix
         if not manifest:
             return jsonify({'ok': False, 'error': '题册不存在'}), 404
         q_list = manifest.get('questions', [])

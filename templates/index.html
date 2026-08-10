@@ -4940,18 +4940,42 @@ async function loadFromLib(board, subject, wbId, title) {
   try {
     // 懒加载模式：先只拉元数据，极速首屏
     setLdProgress(30, '下载题目列表…');
-    const r = await fetch(`/api/library/load/${wbId}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&lazy=1`);
+    let r;
+    try {
+      r = await fetch(`/api/library/load/${wbId}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&lazy=1`);
+    } catch(fetchErr) {
+      hideLd();
+      toast(`❌ 网络请求失败：${fetchErr.message}`, 'err');
+      return;
+    }
+
+    setLdProgress(55, '解析服务器响应…');
+    let d;
+    try {
+      const rawText = await r.text();
+      try {
+        d = JSON.parse(rawText);
+      } catch(jsonErr) {
+        hideLd();
+        toast(`❌ 服务器返回非JSON（HTTP ${r.status}）：${rawText.slice(0, 200)}`, 'err');
+        console.error('[loadFromLib] 服务器返回：', rawText.slice(0, 500));
+        return;
+      }
+    } catch(readErr) {
+      hideLd();
+      toast(`❌ 读取响应失败：${readErr.message}`, 'err');
+      return;
+    }
 
     setLdProgress(65, '解析题目列表…');
-    const d = await r.json();
 
-    if (!r.ok || !d.ok) { hideLd(); toast(d.error || '读取失败', 'err'); return; }
+    if (!r.ok || !d2.ok) { hideLd(); toast(d2.error || `读取失败（HTTP ${r.status}）`, 'err'); return; }
 
-    setLdProgress(85, `准备 ${d.count} 道题目…`);
+    setLdProgress(85, `准备 ${d2.count} 道题目…`);
     await new Promise(r => setTimeout(r, 80));
 
     try {
-      _applyLoadedWorkbook(d);
+      _applyLoadedWorkbook(d2);
     } catch(applyErr) {
       console.error('[loadFromLib] _applyLoadedWorkbook 异常:', applyErr.stack || applyErr);
       hideLd();
@@ -4962,7 +4986,7 @@ async function loadFromLib(board, subject, wbId, title) {
     setLdProgress(100, '读取完成！');
     await new Promise(r => setTimeout(r, 300));
     hideLd();
-    toast(`✅ 题册《${d.title}》已读取，共 ${d.count} 题，图片后台加载中`, 'ok');
+    toast(`✅ 题册《${d2.title}》已读取，共 ${d2.count} 题，图片后台加载中`, 'ok');
   } catch(e) {
     console.error('[loadFromLib] 异常:', e.stack || e);
     hideLd(); toast('读取题册失败：' + e.message, 'err');
