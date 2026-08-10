@@ -6042,13 +6042,13 @@ def ai_solution():
     # 策略1：OpenRouter（OpenAI Chat Completions 格式）
     # ══════════════════════════════════════════════════════
     if OPENROUTER_API_KEY:
-        # OpenRouter 免费视觉模型列表（按能力排序，均支持 image_url）
+        # OpenRouter 免费视觉模型列表（2026-08 实测可用，均支持 image_url）
         OR_MODELS = [
-            "google/gemini-2.5-flash",               # Gemini 2.5 Flash via OpenRouter
-            "google/gemini-2.5-flash-lite",           # Gemini 2.5 Flash Lite
-            "google/gemini-2.0-flash-exp:free",       # Gemini 2.0 Flash 免费版
+            "google/gemma-4-26b-a4b-it:free",                 # Google Gemma4 多模态 免费
+            "nvidia/nemotron-nano-omni-3-30b:free",            # NVIDIA Omni 多模态 免费
+            "nvidia/nemotron-nano-2-vl:free",                  # NVIDIA VL 视觉 免费
+            "qwen/qwen2.5-vl-72b-instruct:free",              # Qwen2.5 VL 72B 免费
             "meta-llama/llama-3.2-90b-vision-instruct:free",  # Llama3.2 视觉 免费
-            "qwen/qwen2.5-vl-72b-instruct:free",     # Qwen2.5 VL 72B 免费
         ]
 
         # 构建消息：把图片用 base64 data URL 传入
@@ -6247,13 +6247,11 @@ def test_gemini():
 
     # 测试 OpenRouter
     if OPENROUTER_API_KEY:
-        or_models = ["google/gemini-2.5-flash", "google/gemini-2.0-flash-exp:free",
-                     "meta-llama/llama-3.2-90b-vision-instruct:free"]
-        test_body = _json.dumps({
-            "model": "google/gemini-2.5-flash",
-            "messages": [{"role": "user", "content": "Hello"}],
-            "max_tokens": 5
-        }).encode('utf-8')
+        or_models = [
+            "google/gemma-4-26b-a4b-it:free",
+            "nvidia/nemotron-nano-omni-3-30b:free",
+            "qwen/qwen2.5-vl-72b-instruct:free",
+        ]
         for m in or_models:
             body = _json.dumps({"model": m, "messages": [{"role":"user","content":"Hi"}], "max_tokens": 5}).encode()
             try:
