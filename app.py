@@ -6009,15 +6009,24 @@ def ai_solution():
         return jsonify({'ok': False, 'error': '缺少题目图片'}), 400
 
     prompt_text = (
-        f"你是一位专业的英国物理竞赛（BPhO）辅导老师。请对以下题目给出详细的解题过程和答案。\n\n"
-        f"题目背景：{context}，第 {q_num} 题\n\n"
-        f"要求：\n"
-        f"1. 用中文解释每个步骤，关键公式用LaTeX格式（$$行间公式$$，$行内公式$）\n"
-        f"2. 列出所用物理定律/公式，并说明适用条件\n"
-        f"3. 分步骤清晰推导，标注每步的物理意义\n"
-        f"4. 给出最终答案，注意单位\n"
-        f"5. 如有多问(i)(ii)(iii)等，逐一解答\n"
-        f"6. 最后给出解题要点总结（1-3条）"
+        f"你是一位专业的英国物理竞赛（BPhO）解题专家。\n"
+        f"题目背景：{context}\n\n"
+        f"【重要指令】请直接给出完整详细的解题过程，不要写任何介绍、问候语或自我介绍。直接从"## 解题过程"开始。\n\n"
+        f"请按以下格式输出：\n\n"
+        f"## 解题过程\n\n"
+        f"**【已知条件】**\n"
+        f"列出题目中的所有已知量（含数值和单位）\n\n"
+        f"**【求解目标】**\n"
+        f"明确需要求的量\n\n"
+        f"**【物理原理】**\n"
+        f"列出本题涉及的物理定律/公式（LaTeX格式，$$公式$$）\n\n"
+        f"**【逐步推导】**\n"
+        f"若有多问 (a)(b)(c) 或 (i)(ii)(iii)，每问单独一个小节，逐步推导，每步说明物理意义\n\n"
+        f"**【最终答案】**\n"
+        f"给出所有问的最终数值结果，注意单位\n\n"
+        f"**【解题要点】**\n"
+        f"1-3条解题关键点总结\n\n"
+        f"注意：所有公式使用LaTeX（行间公式 $$...$$ ，行内公式 $...$），中文解释，内容要完整详尽。"
     )
 
     parts = [
@@ -6025,16 +6034,20 @@ def ai_solution():
         {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
     ]
     if ans_b64:
-        parts.append({"text": "以下是官方 Mark Scheme，请结合参考："})
+        parts.append({"text": "\n以下是官方 Mark Scheme（评分标准），请严格按照它核对答案和步骤分："})
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": ans_b64}})
 
     payload = {
         "contents": [{"parts": parts}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048}
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 8192,
+            "topP": 0.95
+        }
     }
 
-    # 自动降级模型列表
-    models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash"]
+    # 自动降级模型列表（优先使用 thinking 能力更强的模型）
+    models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"]
     last_error = ""
 
     for model in models:
@@ -6046,18 +6059,27 @@ def ai_solution():
                 headers={'Content-Type': 'application/json'},
                 method='POST'
             )
-            with _urllib_req.urlopen(req, timeout=60) as resp:
+            with _urllib_req.urlopen(req, timeout=90) as resp:
                 result = _json.loads(resp.read().decode('utf-8'))
 
             candidates = result.get('candidates', [])
             if not candidates:
                 last_error = f'{model}: 无候选结果'
                 continue
-            solution = candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+
+            candidate   = candidates[0]
+            finish_reason = candidate.get('finishReason', 'UNKNOWN')
+            solution    = candidate.get('content', {}).get('parts', [{}])[0].get('text', '')
+
             if not solution:
-                last_error = f'{model}: 返回内容为空'
+                last_error = f'{model}: 返回内容为空 (finishReason={finish_reason})'
                 continue
-            return jsonify({'ok': True, 'solution': solution, 'model': model})
+
+            # 如果因 MAX_TOKENS 截断，在末尾追加提示
+            if finish_reason == 'MAX_TOKENS':
+                solution += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
+
+            return jsonify({'ok': True, 'solution': solution, 'model': model, 'finish_reason': finish_reason})
 
         except _urllib_err.HTTPError as e:
             err_body = e.read().decode('utf-8', errors='replace')

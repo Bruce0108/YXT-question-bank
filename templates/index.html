@@ -2292,8 +2292,115 @@ function openAiSolution(uid, qNum, gIdx, e) {
   const wbId    = qObj ? (qObj._lazy_wb_id || (_loadedWb && _loadedWb.id) || '') : '';
   const context = (_loadedWb ? _loadedWb.title : 'BPhO') + ` Q${qNum}`;
 
-  // 若懒加载图片还没拉取，先拉取
+  // ── 将 Gemini 返回的 Markdown 文本安全渲染为 HTML ──────────────────────────
+  // 逐行处理，不依赖全局替换链，避免贪婪/非贪婪正则截断多行内容
+  function _renderAiMd(raw) {
+    if (!raw) return '';
+
+    // 1. 先把 $$...$$ 多行公式整体保护（替换为占位符）
+    const mathBlocks = [];
+    let s = raw.replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => {
+      mathBlocks.push(m);
+      return `@@MATHBLOCK${mathBlocks.length - 1}@@`;
+    });
+
+    // 2. 按行处理
+    const lines = s.split('\n');
+    const out = [];
+    let inUl = false, inOl = false;
+
+    function closeList() {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (inOl) { out.push('</ol>'); inOl = false; }
+    }
+
+    function inlineEsc(t) {
+      // 先 HTML 转义
+      t = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      // 行内数学 $...$（单个$，非紧跟$）
+      t = t.replace(/\$([^$\n]+?)\$/g, (_, m) => `<span class="math-inline">$${m}$</span>`);
+      // 粗体 **...** 和 __...__
+      t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(/__(.+?)__/g, '<strong>$1</strong>');
+      // 斜体 *...* 和 _..._（单个）
+      t = t.replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
+      t = t.replace(/_([^_\n]+?)_/g, '<em>$1</em>');
+      // 行内代码 `...`
+      t = t.replace(/`([^`]+?)`/g, '<code>$1</code>');
+      // blockquote 引用标记 "> ..."
+      t = t.replace(/^&gt;\s*/, '<span style="color:#888;font-style:italic">');
+      return t;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // 空行
+      if (line.trim() === '') {
+        closeList();
+        out.push('<br>');
+        continue;
+      }
+
+      // 标题 ###
+      if (/^###\s+/.test(line)) {
+        closeList();
+        out.push(`<h4 style="margin:14px 0 6px;color:#4f46e5;border-bottom:1px solid #e5e7eb;padding-bottom:4px">${inlineEsc(line.replace(/^###\s+/,''))}</h4>`);
+        continue;
+      }
+      if (/^##\s+/.test(line)) {
+        closeList();
+        out.push(`<h3 style="margin:18px 0 8px;color:#1e40af">${inlineEsc(line.replace(/^##\s+/,''))}</h3>`);
+        continue;
+      }
+      if (/^#\s+/.test(line)) {
+        closeList();
+        out.push(`<h2 style="margin:20px 0 10px;color:#1e3a8a">${inlineEsc(line.replace(/^#\s+/,''))}</h2>`);
+        continue;
+      }
+
+      // 有序列表
+      const olMatch = line.match(/^(\d+)\.\s+([\s\S]+)/);
+      if (olMatch) {
+        if (!inOl) { closeList(); out.push('<ol style="margin:6px 0 6px 20px;padding:0">'); inOl = true; }
+        out.push(`<li style="margin:3px 0">${inlineEsc(olMatch[2])}</li>`);
+        continue;
+      }
+
+      // 无序列表
+      const ulMatch = line.match(/^[-•*]\s+([\s\S]+)/);
+      if (ulMatch) {
+        if (!inUl) { closeList(); out.push('<ul style="margin:6px 0 6px 20px;padding:0">'); inUl = true; }
+        out.push(`<li style="margin:3px 0">${inlineEsc(ulMatch[1])}</li>`);
+        continue;
+      }
+
+      // 普通段落
+      closeList();
+      out.push(`<p style="margin:6px 0;line-height:1.75">${inlineEsc(line)}</p>`);
+    }
+    closeList();
+
+    // 3. 还原数学块占位符为带样式的 span
+    let html = out.join('\n');
+    html = html.replace(/@@MATHBLOCK(\d+)@@/g, (_, idx) => {
+      const formula = mathBlocks[parseInt(idx)]
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return `<div class="math-block" style="text-align:center;margin:12px 0;padding:8px;background:#f5f3ff;border-radius:6px;font-family:monospace;font-size:0.95em;overflow-x:auto">$$${formula}$$</div>`;
+    });
+
+    return html;
+  }
+
+  // ── 若懒加载图片还没拉取，先拉取，再调用 AI ──────────────────────────────
   function _doAI(ib64, ab64) {
+    // 防止图片为空时直接调用（会得到无意义的介绍段落）
+    if (!ib64) {
+      const box = document.getElementById('aiSolContent');
+      if (box) box.innerHTML = '<div style="color:#dc2626;padding:20px">❌ 题目图片尚未加载，请先等待图片显示后再点击解析。</div>';
+      return;
+    }
+
     const payload = { img_b64: ib64, q_num: qNum, context, ans_b64: ab64 };
     fetch('/api/ai_solution', {
       method: 'POST',
@@ -2305,24 +2412,20 @@ function openAiSolution(uid, qNum, gIdx, e) {
       const box = document.getElementById('aiSolContent');
       if (!box) return;
       if (d.ok && d.solution) {
-        // 渲染Markdown风格内容（简单处理）
-        let html = d.solution
-          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-          .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-          .replace(/\*(.+?)\*/g,'<em>$1</em>')
-          .replace(/`(.+?)`/g,'<code>$1</code>')
-          .replace(/\$\$(.+?)\$\$/gs,'<span class="math-block">$$1$</span>')
-          .replace(/\$(.+?)\$/g,'<span class="math-inline">$$1$</span>')
-          .replace(/^#{3}\s+(.+)$/gm,'<h4>$1</h4>')
-          .replace(/^#{2}\s+(.+)$/gm,'<h3>$1</h3>')
-          .replace(/^#{1}\s+(.+)$/gm,'<h2>$1</h2>')
-          .replace(/^\d+\.\s+(.+)$/gm,'<li>$1</li>')
-          .replace(/^[-•]\s+(.+)$/gm,'<li>$1</li>')
-          .replace(/\n\n/g,'</p><p>')
-          .replace(/\n/g,'<br>');
-        box.innerHTML = `<div class="ai-sol-body"><p>${html}</p></div>`;
+        const modelLabel = d.model ? `由 ${d.model} 生成` : '由 Gemini 生成';
+        const truncWarn  = (d.finish_reason === 'MAX_TOKENS')
+          ? '<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:0.85em;color:#92400e">⚠️ 解析内容较长，可能已被截断。如需完整解析，请重试。</div>'
+          : '';
+        // 更新标题栏的模型标注
+        const modelBadge = document.getElementById('aiSolModelBadge');
+        if (modelBadge) modelBadge.textContent = modelLabel + '，仅供参考';
+        box.innerHTML = `${truncWarn}<div class="ai-sol-body" style="font-size:0.95em;color:#1f2937">${_renderAiMd(d.solution)}</div>`;
+        // 触发 KaTeX/MathJax 渲染（若页面有加载）
+        if (window.MathJax && window.MathJax.typesetPromise) {
+          window.MathJax.typesetPromise([box]).catch(()=>{});
+        }
       } else {
-        box.innerHTML = `<div style="color:#dc2626;padding:20px">❌ ${d.error || '解析失败，请检查 OPENAI_API_KEY 是否已配置'}</div>`;
+        box.innerHTML = `<div style="color:#dc2626;padding:20px">❌ ${d.error || '解析失败，请确认 GEMINI_API_KEY 已在 Railway 中配置'}</div>`;
       }
     })
     .catch(err => {
@@ -2335,11 +2438,15 @@ function openAiSolution(uid, qNum, gIdx, e) {
     _doAI(imgB64, ansB64);
   } else if (wbId) {
     // 懒加载图片后再请求AI
+    const loadingBox = document.getElementById('aiSolContent');
+    if (loadingBox) loadingBox.innerHTML = '<div style="text-align:center;padding:40px;color:#888">⏳ 正在加载题目图片…</div>';
     fetch(`/api/library/img/${wbId}/${qNum}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&type=q`)
       .then(r => r.json())
       .then(d => {
         if (d.ok && d.b64) {
           if (qObj) { qObj._img_b64 = d.b64; }
+          const loadingBox2 = document.getElementById('aiSolContent');
+          if (loadingBox2) loadingBox2.innerHTML = '<div style="text-align:center;padding:40px;color:#888">🤖 正在生成解析，请稍候（约15-30秒）…</div>';
           // 同时拉答案图片
           if (ansB64) { _doAI(d.b64, ansB64); return; }
           fetch(`/api/library/img/${wbId}/${qNum}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&type=a`)
@@ -2347,12 +2454,16 @@ function openAiSolution(uid, qNum, gIdx, e) {
             .then(d2 => _doAI(d.b64, d2.ok ? d2.b64 : ''))
             .catch(() => _doAI(d.b64, ''));
         } else {
-          _doAI('', ansB64);
+          const box = document.getElementById('aiSolContent');
+          if (box) box.innerHTML = '<div style="color:#dc2626;padding:20px">❌ 无法加载题目图片（R2存储未响应），请稍后重试。</div>';
         }
       })
-      .catch(() => _doAI('', ansB64));
+      .catch(() => {
+        const box = document.getElementById('aiSolContent');
+        if (box) box.innerHTML = '<div style="color:#dc2626;padding:20px">❌ 网络错误，无法加载题目图片。</div>';
+      });
   } else {
-    document.getElementById('aiSolContent').innerHTML = '<div style="color:#dc2626;padding:20px">❌ 无法获取题目图片</div>';
+    document.getElementById('aiSolContent').innerHTML = '<div style="color:#dc2626;padding:20px">❌ 无法获取题目图片（题目对象丢失）</div>';
   }
 }
 
@@ -7064,7 +7175,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-shrink:0;">
       <span style="font-size:20px">🤖</span>
       <span id="aiSolTitle" style="font-weight:700;font-size:16px;color:#1e1b4b;flex:1">AI 解析</span>
-      <span style="font-size:11px;color:#6b7280;background:#f3f4f6;padding:3px 8px;border-radius:10px">由 GPT-4o 生成，仅供参考</span>
+      <span id="aiSolModelBadge" style="font-size:11px;color:#6b7280;background:#f3f4f6;padding:3px 8px;border-radius:10px">由 Gemini 生成，仅供参考</span>
       <button onclick="closeAiSolution()" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280;padding:2px 6px;border-radius:6px">✕</button>
     </div>
     <!-- Content -->
