@@ -9535,6 +9535,20 @@ def _library_load_impl(wb_id):
 
         q_list = manifest.get('questions', [])
 
+        # ── 去重：按 q_num 保留首次出现，防止 manifest 中存在重复题目 ──
+        _seen_qnums = set()
+        _deduped = []
+        for _q in q_list:
+            _qn = _q.get('q_num')
+            if _qn not in _seen_qnums:
+                _seen_qnums.add(_qn)
+                _deduped.append(_q)
+            else:
+                app.logger.warning(f'[library_load] 跳过重复 q_num={_qn!r} in wb_id={wb_id!r}')
+        if len(_deduped) < len(q_list):
+            app.logger.warning(f'[library_load] 题册 {wb_id!r} 共去除 {len(q_list)-len(_deduped)} 条重复题目')
+        q_list = _deduped
+
         # ── 懒加载模式：只返回元数据，极速首屏 ──
         if lazy:
             questions_out = []
@@ -9599,8 +9613,17 @@ def _library_load_impl(wb_id):
             return jsonify({'error': '题册不存在'}), 404
         with open(mfest, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
+        # ── 去重：按 q_num 保留首次出现 ──
+        _local_qs = manifest.get('questions', [])
+        _seen_local = set()
+        _deduped_local = []
+        for _lq in _local_qs:
+            _lqn = _lq.get('q_num')
+            if _lqn not in _seen_local:
+                _seen_local.add(_lqn)
+                _deduped_local.append(_lq)
         questions_out = []
-        for q in manifest.get('questions', []):
+        for q in _deduped_local:
             img_file = q.get('img_file', '')
             b64 = ''
             if img_file:

@@ -5763,12 +5763,20 @@ function _applyLoadedWorkbook(d) {
     _wb_title:       d.title,
   };
 
-  // 追加所有题目
+  // 追加所有题目（前端去重：按 q_num 保留首次出现，防止 manifest 重复数据导致题目翻倍）
+  const _seenQNums = new Set();
   const baseSeq = allQuestions.length;
+  let _pushIdx = 0;
   for (let i = 0; i < d.questions.length; i++) {
     const q = d.questions[i];
+    const _qn = q.q_num || (baseSeq + i + 1);
+    if (_seenQNums.has(_qn)) {
+      console.warn('[_applyLoadedWorkbook] 跳过重复 q_num:', _qn);
+      continue;
+    }
+    _seenQNums.add(_qn);
     const qObj = {
-      q_num:         q.q_num || (baseSeq + i + 1),
+      q_num:         _qn,
       difficulty:    q.difficulty,
       topics:        q.topics || [],
       exam_date:     q.exam_date || '',
@@ -5776,7 +5784,7 @@ function _applyLoadedWorkbook(d) {
       paper_type:    g.paper_type,
       maths_unit:    g.maths_unit,
       gIdx:          newGIdx,
-      _seq:          baseSeq + i,    // 全局唯一序号，用于 uid 定位
+      _seq:          baseSeq + _pushIdx,    // 全局唯一序号，用于 uid 定位
       // 图片缓存（base64）
       _img_b64:      q.img_bytes_b64 || '',
       _img_w:        q.img_w || 0,
@@ -5794,6 +5802,7 @@ function _applyLoadedWorkbook(d) {
     };
     allQuestions.push(qObj);
     g.questions.push(qObj);
+    _pushIdx++;
   }
 
   groups.push(g);
