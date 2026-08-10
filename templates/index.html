@@ -2845,7 +2845,6 @@ function toggleAnswer(uid, e) {
 async function _loadAnswerPages(uid, ansWrap) {
   const gIdx  = parseInt(ansWrap.dataset.gidx);
   const qNum  = parseInt(ansWrap.dataset.qnum);
-  if (!sessionId) return;
 
   // 追加套题用自己的 session_id + file_idx
   const _qObj  = _uidToQ(uid);
@@ -2857,12 +2856,56 @@ async function _loadAnswerPages(uid, ansWrap) {
   const contentArea = document.createElement('div');
   contentArea.id = `ans-content-${uid}`;
   contentArea.innerHTML = `<div style="text-align:center;padding:16px 8px;color:#15803d;font-size:13px">
-    <span class="spin">⏳</span> 正在加载答案（共 ${ansWrap.dataset.totalpages || '?'} 页）…
+    <span class="spin">⏳</span> 正在加载答案…
   </div>`;
   // 清除旧内容（保留 bar），插入 loading
   Array.from(ansWrap.children).forEach(el => { if (el !== barEl) el.remove(); });
   ansWrap.appendChild(contentArea);
 
+  // ── 快速路径 A：answer_b64 已在内存中（非懒加载 or 已下载过）──
+  const _cachedB64 = _qObj && (_qObj.answer_b64 || _qObj._answer_b64);
+  if (_cachedB64) {
+    const mime = _cachedB64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+    contentArea.innerHTML = `<img class="qc-answer-img" src="data:${mime};base64,${_cachedB64}"
+      alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">`;
+    ansWrap.dataset.loaded = '1';
+    return;
+  }
+
+  // ── 快速路径 B：workbook 题册懒加载答案 → /api/library/img/ ──
+  // 判断：qObj 有 _lazy_wb_id，或当前已打开题册（_loadedWb）属于 workbook 类型
+  const _wbId   = (_qObj && _qObj._lazy_wb_id) || (_loadedWb && _loadedWb.id) || '';
+  const _wbBoard   = (_qObj && _qObj._lazy_board)   || (_loadedWb && _loadedWb.board)   || '';
+  const _wbSubject = (_qObj && _qObj._lazy_subject) || (_loadedWb && _loadedWb.subject) || '';
+  if (_wbId) {
+    try {
+      const r = await fetch(`/api/library/img/${_wbId}/${qNum}?board=${encodeURIComponent(_wbBoard)}&subject=${encodeURIComponent(_wbSubject)}&type=a`);
+      const d = await r.json();
+      if (d.ok && d.b64) {
+        const mime = d.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+        contentArea.innerHTML = `<img class="qc-answer-img" src="data:${mime};base64,${d.b64}"
+          alt="Answer" style="width:100%;display:block;border-radius:0 0 4px 4px">`;
+        ansWrap.dataset.loaded = '1';
+        // 缓存到 qObj，避免下次再请求
+        if (_qObj) { _qObj.answer_b64 = d.b64; }
+        return;
+      }
+      // ans_file 不存在时（has_answer 误判），静默隐藏
+      contentArea.innerHTML = '<div style="color:#9ca3af;padding:8px;font-size:12px">暂无参考答案</div>';
+      ansWrap.dataset.loaded = '1';
+    } catch(err) {
+      console.warn('[_loadAnswerPages] library/img fetch failed:', err);
+      contentArea.innerHTML = '<div style="color:red;padding:8px">加载出错</div>';
+    }
+    return;
+  }
+
+  // ── 标准路径：PDF session 题目，走 /api/get_answer ──
+  if (!sessionId) {
+    contentArea.innerHTML = '<div style="color:#9ca3af;padding:8px;font-size:12px">暂无答案数据</div>';
+    ansWrap.dataset.loaded = '1';
+    return;
+  }
   try {
     const resp = await fetch(`/api/get_answer?session_id=${_aSid}&file_idx=${_aFidx}&q_num=${qNum}`);
     if (!resp.ok) { contentArea.innerHTML = '<div style="color:red;padding:8px">加载失败</div>'; return; }
@@ -2891,9 +2934,8 @@ async function _loadAnswerPages(uid, ansWrap) {
     }
     contentArea.innerHTML = html;
     ansWrap.dataset.loaded = '1';
-    // 同步更新 allQuestions（后续展开无需再请求）
-    const qObj = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
-    if (qObj) qObj.answer_pages = pages;
+    // 同步更新 qObj（后续展开无需再请求）
+    if (_qObj) _qObj.answer_pages = pages;
   } catch(err) {
     console.warn('[_loadAnswerPages] failed:', err);
     contentArea.innerHTML = '<div style="color:red;padding:8px">加载出错</div>';
