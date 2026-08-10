@@ -6034,7 +6034,7 @@ def ai_solution():
     }
 
     # 自动降级模型列表
-    models = ["gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro"]
+    models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash"]
     last_error = ""
 
     for model in models:
