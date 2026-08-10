@@ -6044,11 +6044,9 @@ def ai_solution():
     if OPENROUTER_API_KEY:
         # OpenRouter 免费视觉模型列表（2026-08 实测可用，均支持 image_url）
         OR_MODELS = [
-            "google/gemma-4-26b-a4b-it:free",                 # Google Gemma4 多模态 免费
-            "nvidia/nemotron-nano-omni-3-30b:free",            # NVIDIA Omni 多模态 免费
-            "nvidia/nemotron-nano-2-vl:free",                  # NVIDIA VL 视觉 免费
-            "qwen/qwen2.5-vl-72b-instruct:free",              # Qwen2.5 VL 72B 免费
-            "meta-llama/llama-3.2-90b-vision-instruct:free",  # Llama3.2 视觉 免费
+            "google/gemma-4-26b-a4b-it:free",          # ✅ 实测OK：Google Gemma4 多模态
+            "nvidia/nemotron-nano-12b-v2-vl:free",     # NVIDIA Nemotron Nano 2 VL 视觉
+            "meta-llama/llama-3.2-90b-vision-instruct:free",  # Llama3.2 视觉
         ]
 
         # 构建消息：把图片用 base64 data URL 传入
@@ -6249,8 +6247,8 @@ def test_gemini():
     if OPENROUTER_API_KEY:
         or_models = [
             "google/gemma-4-26b-a4b-it:free",
-            "nvidia/nemotron-nano-omni-3-30b:free",
-            "qwen/qwen2.5-vl-72b-instruct:free",
+            "nvidia/nemotron-nano-12b-v2-vl:free",
+            "meta-llama/llama-3.2-90b-vision-instruct:free",
         ]
         for m in or_models:
             body = _json.dumps({"model": m, "messages": [{"role":"user","content":"Hi"}], "max_tokens": 5}).encode()
