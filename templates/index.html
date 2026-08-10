@@ -2401,11 +2401,39 @@ function openAiSolution(uid, qNum, gIdx, e) {
       return;
     }
 
-    const payload = { img_b64: ib64, q_num: qNum, context, ans_b64: ab64 };
+    // 清理 base64 字符串：去除 data URL 前缀、空白、非 base64 字符
+    function _cleanB64(s) {
+      if (!s) return '';
+      // 去除 data:image/...;base64, 前缀
+      s = s.replace(/^data:[^;]+;base64,/, '');
+      // 去除所有空白符
+      s = s.replace(/\s/g, '');
+      // 只保留合法 base64 字符
+      s = s.replace(/[^A-Za-z0-9+/=]/g, '');
+      return s;
+    }
+    ib64 = _cleanB64(ib64);
+    ab64 = _cleanB64(ab64);
+
+    if (!ib64) {
+      const box = document.getElementById('aiSolContent');
+      if (box) box.innerHTML = '<div style="color:#dc2626;padding:20px">❌ 题目图片数据无效，请重新加载后再试。</div>';
+      return;
+    }
+
+    let bodyStr;
+    try {
+      bodyStr = JSON.stringify({ img_b64: ib64, q_num: qNum, context, ans_b64: ab64 });
+    } catch(e) {
+      const box = document.getElementById('aiSolContent');
+      if (box) box.innerHTML = `<div style="color:#dc2626;padding:20px">❌ 图片数据序列化失败：${e.message}</div>`;
+      return;
+    }
+
     fetch('/api/ai_solution', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
+      body: bodyStr
     })
     .then(r => r.json())
     .then(d => {
