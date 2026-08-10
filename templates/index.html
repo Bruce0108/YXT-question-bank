@@ -5763,18 +5763,22 @@ function _applyLoadedWorkbook(d) {
     _wb_title:       d.title,
   };
 
-  // 追加所有题目（前端去重：按 q_num 保留首次出现，防止 manifest 重复数据导致题目翻倍）
-  const _seenQNums = new Set();
+  // 追加所有题目（前端去重：按 seq+img_file 组合键去重，防止 manifest 出现完全相同的条目）
+  // 注意：q_num 在多套试卷组成的题册中是非唯一的（每套卷 q_num 都从 1 开始），
+  // 不能用 q_num 去重，否则会误删大量正常题目。
+  const _seenKeys = new Set();
   const baseSeq = allQuestions.length;
   let _pushIdx = 0;
   for (let i = 0; i < d.questions.length; i++) {
     const q = d.questions[i];
-    const _qn = q.q_num || (baseSeq + i + 1);
-    if (_seenQNums.has(_qn)) {
-      console.warn('[_applyLoadedWorkbook] 跳过重复 q_num:', _qn);
+    // 组合键：seq（后端全局序号）+ img_file（若存在）
+    const _dedupKey = String(q.seq ?? i) + '|' + (q._img_file || '');
+    if (_seenKeys.has(_dedupKey)) {
+      console.warn('[_applyLoadedWorkbook] 跳过重复条目 seq:', q.seq, 'q_num:', q.q_num);
       continue;
     }
-    _seenQNums.add(_qn);
+    _seenKeys.add(_dedupKey);
+    const _qn = q.q_num || (baseSeq + i + 1);
     const qObj = {
       q_num:         _qn,
       difficulty:    q.difficulty,

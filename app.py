@@ -9535,16 +9535,19 @@ def _library_load_impl(wb_id):
 
         q_list = manifest.get('questions', [])
 
-        # ── 去重：按 q_num 保留首次出现，防止 manifest 中存在重复题目 ──
-        _seen_qnums = set()
+        # ── 去重：按 (seq, img_file) 组合键保留首次出现，防止 manifest 中出现完全相同的条目 ──
+        # 注意：q_num 在多套试卷组成的题册中是非唯一的（每套卷 q_num 都从1开始），
+        # 不能用 q_num 去重，否则会误删大量正常题目。
+        # 改用 seq（全局序号）+ img_file（图片文件名）作为唯一标识。
+        _seen_keys = set()
         _deduped = []
         for _q in q_list:
-            _qn = _q.get('q_num')
-            if _qn not in _seen_qnums:
-                _seen_qnums.add(_qn)
+            _key = (_q.get('seq'), _q.get('img_file', ''))
+            if _key not in _seen_keys:
+                _seen_keys.add(_key)
                 _deduped.append(_q)
             else:
-                app.logger.warning(f'[library_load] 跳过重复 q_num={_qn!r} in wb_id={wb_id!r}')
+                app.logger.warning(f'[library_load] 跳过完全重复条目 seq={_q.get("seq")!r} img={_q.get("img_file")!r} in wb_id={wb_id!r}')
         if len(_deduped) < len(q_list):
             app.logger.warning(f'[library_load] 题册 {wb_id!r} 共去除 {len(q_list)-len(_deduped)} 条重复题目')
         q_list = _deduped
@@ -9613,14 +9616,14 @@ def _library_load_impl(wb_id):
             return jsonify({'error': '题册不存在'}), 404
         with open(mfest, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
-        # ── 去重：按 q_num 保留首次出现 ──
+        # ── 去重：按 (seq, img_file) 组合键保留首次出现（q_num 在多套卷题册中非唯一）──
         _local_qs = manifest.get('questions', [])
         _seen_local = set()
         _deduped_local = []
         for _lq in _local_qs:
-            _lqn = _lq.get('q_num')
-            if _lqn not in _seen_local:
-                _seen_local.add(_lqn)
+            _lkey = (_lq.get('seq'), _lq.get('img_file', ''))
+            if _lkey not in _seen_local:
+                _seen_local.add(_lkey)
                 _deduped_local.append(_lq)
         questions_out = []
         for q in _deduped_local:
