@@ -2600,7 +2600,8 @@ async function _saveAiAsAnswer() {
 
   // 获取已渲染好的解析区域（含 KaTeX 渲染结果）
   const solBox = document.getElementById('aiSolContent');
-  if (!solBox || !solBox.querySelector('.ai-sol-body')) {
+  const solBody = solBox && solBox.querySelector('.ai-sol-body');
+  if (!solBox || !solBody) {
     toast('⚠️ 解析内容未加载，请稍后再试', 'warn'); return;
   }
 
@@ -2609,20 +2610,52 @@ async function _saveAiAsAnswer() {
   const sh = document.getElementById('aiSolSavedHint');
   if (sb) { sb.disabled = true; sb.textContent = '⏳ 生成长图…'; }
 
+  // ── 屏幕外克隆容器（关键：不受 overflow/max-height 限制）──
+  const offscreen = document.createElement('div');
+  offscreen.style.cssText = [
+    'position:fixed',
+    'left:-9999px',
+    'top:0',
+    // 与 modal 同款宽度，保证排版一致
+    'width:' + Math.min(760, window.innerWidth - 40) + 'px',
+    'height:auto',           // 自然撑开，不裁剪
+    'overflow:visible',
+    'background:#ffffff',
+    'padding:24px',
+    'font-size:14px',
+    'line-height:1.8',
+    'color:#1f2937',
+    'font-family:inherit',
+    'z-index:-1',
+  ].join(';');
+  // 深度克隆已渲染的内容（含 KaTeX SVG/HTML）
+  offscreen.appendChild(solBody.cloneNode(true));
+  document.body.appendChild(offscreen);
+
   try {
     if (!window.html2canvas) throw new Error('html2canvas 未加载');
 
-    // ① html2canvas 截图（2x 清晰度，白底）
-    const canvas = await html2canvas(solBox, {
+    // 等一帧确保 DOM 已布局
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    // ① 截整个 offscreen div（全高，无滚动截断）
+    const canvas = await html2canvas(offscreen, {
       scale: 2,
       useCORS: true,
       backgroundColor: '#ffffff',
       logging: false,
+      // 明确告知截图区域为完整内容，不使用 window 视口
+      scrollX: 0,
+      scrollY: 0,
+      width:  offscreen.offsetWidth,
+      height: offscreen.scrollHeight,
+      windowWidth:  offscreen.offsetWidth,
+      windowHeight: offscreen.scrollHeight,
     });
 
-    // ② 宽度超过 1400px 则等比压缩（不限高度）
+    // ② 宽度超过 1400px 则等比压缩（长度不限）
     let finalCanvas = canvas;
-    const MAX_W = 1400 * 2;   // 已经是 2x scale，实际像素
+    const MAX_W = 1400 * 2;  // 已是 2x scale
     if (canvas.width > MAX_W) {
       const ratio = MAX_W / canvas.width;
       const c2    = document.createElement('canvas');
@@ -2646,11 +2679,14 @@ async function _saveAiAsAnswer() {
     if (sb) { sb.style.display = 'none'; sb.disabled = false; sb.textContent = '📋 转为参考答案'; }
     if (sh) sh.style.display = 'inline';
 
-    toast('✅ 已渲染为长图，保存题册后永久生效', 'ok');
+    toast('✅ 已渲染为完整长图，保存题册后永久生效', 'ok');
   } catch(err) {
     console.error('[_saveAiAsAnswer]', err);
     if (sb) { sb.disabled = false; sb.textContent = '📋 转为参考答案'; }
     toast('❌ 生成长图失败：' + err.message, 'err');
+  } finally {
+    // 无论成功失败，都清理临时节点
+    document.body.removeChild(offscreen);
   }
 }
 
