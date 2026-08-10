@@ -4969,13 +4969,13 @@ async function loadFromLib(board, subject, wbId, title) {
 
     setLdProgress(65, '解析题目列表…');
 
-    if (!r.ok || !d2.ok) { hideLd(); toast(d2.error || `读取失败（HTTP ${r.status}）`, 'err'); return; }
+    if (!r.ok || !d.ok) { hideLd(); toast(d.error || `读取失败（HTTP ${r.status}）`, 'err'); return; }
 
-    setLdProgress(85, `准备 ${d2.count} 道题目…`);
+    setLdProgress(85, `准备 ${d.count} 道题目…`);
     await new Promise(r => setTimeout(r, 80));
 
     try {
-      _applyLoadedWorkbook(d2);
+      _applyLoadedWorkbook(d);
     } catch(applyErr) {
       console.error('[loadFromLib] _applyLoadedWorkbook 异常:', applyErr.stack || applyErr);
       hideLd();
@@ -4986,7 +4986,7 @@ async function loadFromLib(board, subject, wbId, title) {
     setLdProgress(100, '读取完成！');
     await new Promise(r => setTimeout(r, 300));
     hideLd();
-    toast(`✅ 题册《${d2.title}》已读取，共 ${d2.count} 题，图片后台加载中`, 'ok');
+    toast(`✅ 题册《${d.title}》已读取，共 ${d.count} 题，图片后台加载中`, 'ok');
   } catch(e) {
     console.error('[loadFromLib] 异常:', e.stack || e);
     hideLd(); toast('读取题册失败：' + e.message, 'err');
