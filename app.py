@@ -5985,9 +5985,9 @@ def get_answer():
 @app.route('/api/ai_solution', methods=['POST'])
 def ai_solution():
     """
-    调用 Google Gemini Vision 对题目图片进行解析，返回详细解题过程。
-    模型选择策略：优先 2.5-flash，429时依次降级，404时跳过。
-    需要环境变量: GEMINI_API_KEY
+    调用 AI 视觉模型对题目图片进行解析，返回详细解题过程。
+    优先使用 OpenRouter（OPENROUTER_API_KEY），备用 Gemini（GEMINI_API_KEY）。
+    OpenRouter 兼容 OpenAI Chat Completions 格式，支持 500+ 模型。
     """
     import os as _os
     import json as _json
@@ -5995,15 +5995,18 @@ def ai_solution():
     import urllib.error  as _urllib_err
     import time as _time
 
-    GEMINI_API_KEY = _os.environ.get('GEMINI_API_KEY', '')
-    if not GEMINI_API_KEY:
-        return jsonify({'ok': False, 'error': '未配置 GEMINI_API_KEY，请在 Railway Variables 中添加'}), 400
+    OPENROUTER_API_KEY = _os.environ.get('OPENROUTER_API_KEY', '')
+    GEMINI_API_KEY     = _os.environ.get('GEMINI_API_KEY', '')
 
-    data = request.get_json(force=True, silent=True) or {}
-    img_b64  = data.get('img_b64', '')
-    q_num    = data.get('q_num', '')
-    context  = data.get('context', 'BPhO 物理竞赛')
-    ans_b64  = data.get('ans_b64', '')
+    if not OPENROUTER_API_KEY and not GEMINI_API_KEY:
+        return jsonify({'ok': False,
+                        'error': '未配置 AI API Key。请在 Railway Variables 中添加 OPENROUTER_API_KEY（推荐）或 GEMINI_API_KEY'}), 400
+
+    data    = request.get_json(force=True, silent=True) or {}
+    img_b64 = data.get('img_b64', '')
+    q_num   = data.get('q_num', '')
+    context = data.get('context', 'BPhO 物理竞赛')
+    ans_b64 = data.get('ans_b64', '')
 
     if not img_b64:
         return jsonify({'ok': False, 'error': '缺少题目图片'}), 400
@@ -6029,159 +6032,243 @@ def ai_solution():
         f"注意：所有公式使用LaTeX（行间公式 $$...$$ ，行内公式 $...$），中文解释，内容要完整详尽。"
     )
 
-    parts = [
-        {"text": prompt_text},
-        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
-    ]
-    if ans_b64:
-        parts.append({"text": "\n以下是官方 Mark Scheme（评分标准），请严格按照它核对答案和步骤分："})
-        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": ans_b64}})
-
-    payload = {
-        "contents": [{"parts": parts}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 8192,
-            "topP": 0.95
-        }
-    }
-
-    # ── 2026年 Gemini v1beta 现役模型，按能力/配额排序 ──
-    # 经过验证在 generateContent + vision 上可用的模型名称
-    CANDIDATE_MODELS = [
-        "gemini-2.5-flash-lite-preview-06-17",   # 2.5 lite 稳定预览版，配额宽
-        "gemini-2.5-flash",                       # 2.5 旗舰，推理最强
-        "gemini-2.0-flash",                       # 2.0 flash，稳定
-        "gemini-2.0-flash-lite",                  # 2.0 轻量，配额最宽
-        "gemini-1.5-flash-latest",                # 1.5 latest 别名（部分区域仍有效）
-    ]
-    last_error = ""
     errors_detail = []
 
-    def _call_model(model_name):
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model_name}:generateContent?key={GEMINI_API_KEY}")
-        req_data = _json.dumps(payload).encode('utf-8')
-        req = _urllib_req.Request(
-            url, data=req_data,
-            headers={'Content-Type': 'application/json'},
-            method='POST'
-        )
-        with _urllib_req.urlopen(req, timeout=90) as resp:
-            return _json.loads(resp.read().decode('utf-8'))
+    # ══════════════════════════════════════════════════════
+    # 策略1：OpenRouter（OpenAI Chat Completions 格式）
+    # ══════════════════════════════════════════════════════
+    if OPENROUTER_API_KEY:
+        # OpenRouter 免费视觉模型列表（按能力排序，均支持 image_url）
+        OR_MODELS = [
+            "google/gemini-2.5-flash",               # Gemini 2.5 Flash via OpenRouter
+            "google/gemini-2.5-flash-lite",           # Gemini 2.5 Flash Lite
+            "google/gemini-2.0-flash-exp:free",       # Gemini 2.0 Flash 免费版
+            "meta-llama/llama-3.2-90b-vision-instruct:free",  # Llama3.2 视觉 免费
+            "qwen/qwen2.5-vl-72b-instruct:free",     # Qwen2.5 VL 72B 免费
+        ]
 
-    for model in CANDIDATE_MODELS:
-        try:
-            result = _call_model(model)
-            candidates = result.get('candidates', [])
-            if not candidates:
-                # 可能被安全过滤，检查 promptFeedback
-                fb = result.get('promptFeedback', {})
-                block_reason = fb.get('blockReason', '')
-                last_error = f'{model}: 无候选结果' + (f'，blockReason={block_reason}' if block_reason else '')
-                errors_detail.append(last_error)
+        # 构建消息：把图片用 base64 data URL 传入
+        def _build_or_messages(include_ans):
+            content = [
+                {"type": "text", "text": prompt_text},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+            ]
+            if include_ans and ans_b64:
+                content.append({"type": "text",
+                                 "text": "\n以下是官方 Mark Scheme（评分标准），请严格按照它核对答案和步骤分："})
+                content.append({"type": "image_url",
+                                 "image_url": {"url": f"data:image/jpeg;base64,{ans_b64}"}})
+            return [{"role": "user", "content": content}]
+
+        or_payload = _json.dumps({
+            "model": OR_MODELS[0],   # 每次调用会替换
+            "messages": _build_or_messages(True),
+            "max_tokens": 8192,
+            "temperature": 0.2,
+        }).encode('utf-8')
+
+        for model_id in OR_MODELS:
+            try:
+                body = _json.dumps({
+                    "model": model_id,
+                    "messages": _build_or_messages(True),
+                    "max_tokens": 8192,
+                    "temperature": 0.2,
+                }).encode('utf-8')
+
+                req = _urllib_req.Request(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    data=body,
+                    headers={
+                        'Content-Type': 'application/json',
+                        'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+                        'HTTP-Referer': 'https://yxt-question-bank.railway.app',
+                        'X-Title': 'BPhO Question Bank',
+                    },
+                    method='POST'
+                )
+                with _urllib_req.urlopen(req, timeout=120) as resp:
+                    result = _json.loads(resp.read().decode('utf-8'))
+
+                # OpenAI 格式：choices[0].message.content
+                choices = result.get('choices', [])
+                if not choices:
+                    err = result.get('error', {})
+                    err_msg = f'OR/{model_id}: 无choices，error={err.get("message","")}'
+                    errors_detail.append(err_msg)
+                    app.logger.warning(f'[ai_solution] {err_msg}')
+                    continue
+
+                solution      = choices[0].get('message', {}).get('content', '')
+                finish_reason = choices[0].get('finish_reason', 'UNKNOWN')
+
+                if not solution:
+                    err_msg = f'OR/{model_id}: 返回内容为空'
+                    errors_detail.append(err_msg)
+                    continue
+
+                if finish_reason == 'length':
+                    solution += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
+
+                app.logger.info(f'[ai_solution] OpenRouter 成功 model={model_id} finish={finish_reason} len={len(solution)}')
+                return jsonify({
+                    'ok': True,
+                    'solution': solution,
+                    'model': model_id,
+                    'finish_reason': finish_reason,
+                    'provider': 'openrouter'
+                })
+
+            except _urllib_err.HTTPError as e:
+                err_body = e.read().decode('utf-8', errors='replace')
+                err_msg  = f'OR/{model_id} HTTP {e.code}: {err_body[:200]}'
+                errors_detail.append(err_msg)
+                app.logger.warning(f'[ai_solution] {err_msg}')
+                if e.code in (429, 503):
+                    _time.sleep(1)
+                continue
+            except Exception as e:
+                err_msg = f'OR/{model_id}: {type(e).__name__}: {str(e)}'
+                errors_detail.append(err_msg)
+                app.logger.warning(f'[ai_solution] {err_msg}')
                 continue
 
-            candidate     = candidates[0]
-            finish_reason = candidate.get('finishReason', 'UNKNOWN')
-            parts_out     = candidate.get('content', {}).get('parts', [])
-            solution      = ''.join(p.get('text', '') for p in parts_out if 'text' in p)
+    # ══════════════════════════════════════════════════════
+    # 策略2：Gemini v1beta（备用，原生格式）
+    # ══════════════════════════════════════════════════════
+    if GEMINI_API_KEY:
+        GEMINI_MODELS = [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite-preview-06-17",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+        ]
 
-            if not solution:
-                last_error = f'{model}: 返回文本为空 (finishReason={finish_reason})'
-                errors_detail.append(last_error)
+        gemini_parts = [
+            {"text": prompt_text},
+            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
+        ]
+        if ans_b64:
+            gemini_parts.append({"text": "\n以下是官方 Mark Scheme（评分标准），请严格按照它核对答案和步骤分："})
+            gemini_parts.append({"inline_data": {"mime_type": "image/jpeg", "data": ans_b64}})
+
+        gemini_payload = _json.dumps({
+            "contents": [{"parts": gemini_parts}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192, "topP": 0.95}
+        }).encode('utf-8')
+
+        for model in GEMINI_MODELS:
+            try:
+                url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                       f"{model}:generateContent?key={GEMINI_API_KEY}")
+                req = _urllib_req.Request(url, data=gemini_payload,
+                                          headers={'Content-Type': 'application/json'}, method='POST')
+                with _urllib_req.urlopen(req, timeout=90) as resp:
+                    result = _json.loads(resp.read().decode('utf-8'))
+
+                candidates = result.get('candidates', [])
+                if not candidates:
+                    errors_detail.append(f'Gemini/{model}: 无候选结果')
+                    continue
+
+                finish_reason = candidates[0].get('finishReason', 'UNKNOWN')
+                parts_out     = candidates[0].get('content', {}).get('parts', [])
+                solution      = ''.join(p.get('text', '') for p in parts_out if 'text' in p)
+
+                if not solution:
+                    errors_detail.append(f'Gemini/{model}: 返回文本为空')
+                    continue
+
+                if finish_reason == 'MAX_TOKENS':
+                    solution += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
+
+                app.logger.info(f'[ai_solution] Gemini 成功 model={model} finish={finish_reason}')
+                return jsonify({'ok': True, 'solution': solution, 'model': model,
+                                'finish_reason': finish_reason, 'provider': 'gemini'})
+
+            except _urllib_err.HTTPError as e:
+                err_body = e.read().decode('utf-8', errors='replace')
+                err_msg  = f'Gemini/{model} HTTP {e.code}: {err_body[:200]}'
+                errors_detail.append(err_msg)
+                app.logger.warning(f'[ai_solution] {err_msg}')
+                if e.code == 429:
+                    _time.sleep(1)
+                continue
+            except Exception as e:
+                errors_detail.append(f'Gemini/{model}: {str(e)}')
                 continue
 
-            if finish_reason == 'MAX_TOKENS':
-                solution += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
-
-            app.logger.info(f'[ai_solution] 成功 model={model} finish={finish_reason} len={len(solution)}')
-            return jsonify({
-                'ok': True,
-                'solution': solution,
-                'model': model,
-                'finish_reason': finish_reason
-            })
-
-        except _urllib_err.HTTPError as e:
-            err_body = e.read().decode('utf-8', errors='replace')
-            err_msg  = f'{model} HTTP {e.code}: {err_body[:300]}'
-            errors_detail.append(err_msg)
-            app.logger.warning(f'[ai_solution] {err_msg}')
-            if e.code == 429:
-                _time.sleep(1)   # 限速，稍等换下一个
-                continue
-            if e.code == 404:
-                continue         # 模型不存在，直接跳过
-            continue             # 其他错误也尝试下一个
-
-        except _urllib_err.URLError as e:
-            err_msg = f'{model} URLError: {e.reason}'
-            errors_detail.append(err_msg)
-            app.logger.warning(f'[ai_solution] {err_msg}')
-            continue
-
-        except Exception as e:
-            err_msg = f'{model}: {type(e).__name__}: {str(e)}'
-            errors_detail.append(err_msg)
-            app.logger.warning(f'[ai_solution] {err_msg}')
-            continue
-
-    # 所有模型都失败
-    app.logger.error(f'[ai_solution] 所有模型失败: {errors_detail}')
+    # 全部失败
+    last = errors_detail[-1] if errors_detail else '无详情'
+    app.logger.error(f'[ai_solution] 全部失败: {errors_detail}')
     return jsonify({
         'ok': False,
-        'error': f'所有模型均失败，请检查 GEMINI_API_KEY 或稍后重试。详情：{errors_detail[-1] if errors_detail else "未知"}'
+        'error': f'所有模型均失败，详情：{last}'
     }), 500
 
 
 @app.route('/api/test_gemini', methods=['GET'])
 def test_gemini():
-    """
-    诊断接口：列出所有候选模型的可用状态。
-    访问 /api/test_gemini 即可查看。
-    """
+    """诊断接口：测试 OpenRouter 和 Gemini 模型可用性。访问 /api/test_gemini 查看。"""
     import os as _os
     import json as _json
     import urllib.request as _urllib_req
     import urllib.error  as _urllib_err
 
-    GEMINI_API_KEY = _os.environ.get('GEMINI_API_KEY', '')
-    if not GEMINI_API_KEY:
-        return jsonify({'ok': False, 'error': '未配置 GEMINI_API_KEY'})
-
-    # 用最小 payload 测试 — 纯文本，不含图片，快速
-    test_payload = _json.dumps({
-        "contents": [{"parts": [{"text": "Hello"}]}],
-        "generationConfig": {"maxOutputTokens": 10}
-    }).encode('utf-8')
-
-    MODELS_TO_TEST = [
-        "gemini-2.5-flash-lite-preview-06-17",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash",
-    ]
+    OPENROUTER_API_KEY = _os.environ.get('OPENROUTER_API_KEY', '')
+    GEMINI_API_KEY     = _os.environ.get('GEMINI_API_KEY', '')
     results = []
-    for model in MODELS_TO_TEST:
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model}:generateContent?key={GEMINI_API_KEY}")
-        try:
-            req = _urllib_req.Request(url, data=test_payload,
-                                      headers={'Content-Type': 'application/json'}, method='POST')
-            with _urllib_req.urlopen(req, timeout=15) as resp:
-                body = _json.loads(resp.read().decode('utf-8'))
-                ok = bool(body.get('candidates'))
-                results.append({'model': model, 'status': 'ok' if ok else 'no_candidates', 'code': 200})
-        except _urllib_err.HTTPError as e:
-            results.append({'model': model, 'status': 'error', 'code': e.code,
-                            'detail': e.read().decode('utf-8', errors='replace')[:200]})
-        except Exception as e:
-            results.append({'model': model, 'status': 'error', 'code': 0, 'detail': str(e)})
 
-    return jsonify({'ok': True, 'results': results})
+    # 测试 OpenRouter
+    if OPENROUTER_API_KEY:
+        or_models = ["google/gemini-2.5-flash", "google/gemini-2.0-flash-exp:free",
+                     "meta-llama/llama-3.2-90b-vision-instruct:free"]
+        test_body = _json.dumps({
+            "model": "google/gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 5
+        }).encode('utf-8')
+        for m in or_models:
+            body = _json.dumps({"model": m, "messages": [{"role":"user","content":"Hi"}], "max_tokens": 5}).encode()
+            try:
+                req = _urllib_req.Request("https://openrouter.ai/api/v1/chat/completions",
+                    data=body, headers={'Content-Type':'application/json',
+                    'Authorization':f'Bearer {OPENROUTER_API_KEY}'}, method='POST')
+                with _urllib_req.urlopen(req, timeout=15) as resp:
+                    rb = _json.loads(resp.read())
+                    ok = bool(rb.get('choices'))
+                    results.append({'provider':'openrouter','model':m,'status':'ok' if ok else 'no_choices','code':200})
+            except _urllib_err.HTTPError as e:
+                results.append({'provider':'openrouter','model':m,'status':'error','code':e.code,
+                                 'detail':e.read().decode('utf-8',errors='replace')[:150]})
+            except Exception as e:
+                results.append({'provider':'openrouter','model':m,'status':'error','code':0,'detail':str(e)})
+
+    # 测试 Gemini
+    if GEMINI_API_KEY:
+        gm_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+        test_payload = _json.dumps({"contents":[{"parts":[{"text":"Hello"}]}],"generationConfig":{"maxOutputTokens":5}}).encode()
+        for m in gm_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_API_KEY}"
+            try:
+                req = _urllib_req.Request(url, data=test_payload, headers={'Content-Type':'application/json'}, method='POST')
+                with _urllib_req.urlopen(req, timeout=15) as resp:
+                    rb = _json.loads(resp.read())
+                    ok = bool(rb.get('candidates'))
+                    results.append({'provider':'gemini','model':m,'status':'ok' if ok else 'no_candidates','code':200})
+            except _urllib_err.HTTPError as e:
+                results.append({'provider':'gemini','model':m,'status':'error','code':e.code,
+                                 'detail':e.read().decode('utf-8',errors='replace')[:150]})
+            except Exception as e:
+                results.append({'provider':'gemini','model':m,'status':'error','code':0,'detail':str(e)})
+
+    configured = []
+    if OPENROUTER_API_KEY: configured.append('OPENROUTER_API_KEY ✅')
+    if GEMINI_API_KEY:     configured.append('GEMINI_API_KEY ✅')
+    if not configured:     configured.append('未配置任何 Key ❌')
+
+    return jsonify({'ok': True, 'configured': configured, 'results': results})
 
 
 
