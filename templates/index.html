@@ -2154,10 +2154,20 @@ function renderGrid() {
       // uid 用 _seq（全局唯一序号）确保唯一，避免 workbook 题目同 gIdx 下 q_num 重复
       const uid = q._seq != null ? `s${q._seq}` : `${q.gIdx}_${q.q_num}`;
       // 判断是否 BPHO/竞赛题目（用于决定是否显示 AI 解析按钮）
+      // 涵盖四种来源：
+      //   1. source='bpho' / paper_type='bpho'（直接标记）
+      //   2. board='BPHO'（题册元数据）
+      //   3. _lazy_wb_id 有值 + topics 含 BPhO- 前缀（R2 题册懒加载路径）
+      //   4. .wb 本地文件加载 + _loadedWb.board='BPHO' 或 topics 含 BPhO- 前缀
+      const _bphoTopics = Array.isArray(q.topics) && q.topics.some(
+        t => /^BPhO-/.test(String(t.id || t.parent_id || ''))
+      );
       const _qIsBpho = q.source === 'bpho' || q.paper_type === 'bpho'
-        || (q.board === 'BPHO') || (q._lazy_wb_id && Array.isArray(q.topics) && q.topics.some(
-            t => /^BPhO-/.test(String(t.id || t.parent_id || ''))
-          ));
+        || (q.board === 'BPHO')
+        || (q._lazy_wb_id && _bphoTopics)
+        || (_loadedWb && _loadedWb.board === 'BPHO')
+        || (_loadedWb && /BPhO|竞赛.*物理|Physics.*BPhO/i.test(_loadedWb.subject || ''))
+        || _bphoTopics;
       let pgInfo = q.page_idx != null ? `P${q.page_idx+1}` : '';
       if (st && q.page_idx != null) {
         const allGrpQs = allQuestions.filter(x => x.gIdx === q.gIdx);
@@ -2308,8 +2318,8 @@ function openAiSolution(uid, qNum, gIdx, e) {
   }
   mo.style.display = 'flex';
 
-  // 获取题目图片
-  let imgB64 = qObj ? (qObj._img_b64 || '') : '';
+  // 获取题目图片（_img_b64 是主字段；.wb本地文件也会有 img_bytes_b64 作为兜底）
+  let imgB64 = qObj ? (qObj._img_b64 || qObj.img_bytes_b64 || '') : '';
   let ansB64 = qObj ? (qObj.answer_b64 || '') : '';
   const board   = qObj ? (qObj._lazy_board || (_loadedWb && _loadedWb.board) || '') : '';
   const subject = qObj ? (qObj._lazy_subject || (_loadedWb && _loadedWb.subject) || '') : '';
@@ -2586,6 +2596,30 @@ function openAiSolution(uid, qNum, gIdx, e) {
       .catch(() => {
         const box = document.getElementById('aiSolContent');
         if (box) box.innerHTML = '<div style="color:#dc2626;padding:20px">❌ 网络错误，无法加载题目图片。</div>';
+      });
+  } else if (qObj) {
+    // PDF session 题目（非题册），缩略图可能尚未写入 _img_b64
+    // 通过 /api/preview_b64/ 按需获取高清图
+    const loadingBox3 = document.getElementById('aiSolContent');
+    if (loadingBox3) loadingBox3.innerHTML = '<div style="text-align:center;padding:40px;color:#888">⏳ 正在加载题目图片…</div>';
+    const _pSid  = qObj._append_session_id != null ? qObj._append_session_id : sessionId;
+    const _pFidx = qObj._append_session_id != null ? (qObj._append_file_idx ?? qObj.gIdx) : qObj.gIdx;
+    fetch(`/api/preview_b64/${qNum}?dpi=150&session_id=${_pSid}&file_idx=${_pFidx}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.img_b64) {
+          qObj._img_b64 = d.img_b64;   // 缓存，下次直接用
+          const box3 = document.getElementById('aiSolContent');
+          if (box3) box3.innerHTML = '<div style="text-align:center;padding:40px;color:#888">🤖 正在生成解析，请稍候（约15-30秒）…</div>';
+          _doAI(d.img_b64, ansB64);
+        } else {
+          const box3 = document.getElementById('aiSolContent');
+          if (box3) box3.innerHTML = '<div style="color:#dc2626;padding:20px">❌ 无法加载题目图片，请稍后重试。</div>';
+        }
+      })
+      .catch(err => {
+        const box3 = document.getElementById('aiSolContent');
+        if (box3) box3.innerHTML = `<div style="color:#dc2626;padding:20px">❌ 网络错误：${err.message}</div>`;
       });
   } else {
     document.getElementById('aiSolContent').innerHTML = '<div style="color:#dc2626;padding:20px">❌ 无法获取题目图片（题目对象丢失）</div>';
@@ -5875,8 +5909,18 @@ async function loadWorkbook(file) {
     groups.push(g);
 
     const gIdx = 0;
-    data.questions.forEach(q => {
-      allQuestions.push({ ...q, gIdx, source: 'workbook' });
+    const _wbBaseSeq = allQuestions.length;
+    data.questions.forEach((q, _wi) => {
+      allQuestions.push({
+        ...q,
+        gIdx,
+        source:   'workbook',
+        _seq:     _wbBaseSeq + _wi,   // 全局唯一序号，用于 uid 定位
+        // 把 img_bytes_b64 映射到 _img_b64，openAiSolution / confirmSaveLib 统一读此字段
+        _img_b64: q.img_bytes_b64 || q._img_b64 || '',
+        _img_w:   q.img_w  || 0,
+        _img_h:   q.img_h  || 0,
+      });
     });
 
     renderGrid();
