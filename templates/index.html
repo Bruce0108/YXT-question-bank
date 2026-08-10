@@ -472,7 +472,15 @@
 
   @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
   @keyframes spin{to{transform:rotate(360deg)}}
+  /* KaTeX 行内/块公式样式 */
+  .katex-block { display:block; text-align:center; margin:12px 0; padding:8px; background:#f5f3ff; border-radius:6px; overflow-x:auto; }
+  .katex-inline { display:inline; }
 </style>
+<!-- KaTeX: 快速LaTeX渲染，比MathJax轻量10倍 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="window._katexReady=true"></script>
 </head>
 <body>
 
@@ -2317,8 +2325,8 @@ function openAiSolution(uid, qNum, gIdx, e) {
     function inlineEsc(t) {
       // 先 HTML 转义
       t = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      // 行内数学 $...$（单个$，非紧跟$）
-      t = t.replace(/\$([^$\n]+?)\$/g, (_, m) => `<span class="math-inline">$${m}$</span>`);
+      // 行内数学 $...$（单个$，非紧跟$）— 保留 $ 符号让 KaTeX auto-render 识别
+      t = t.replace(/\$([^$\n]+?)\$/g, (_, m) => `<span class="katex-inline">$${m}$</span>`);
       // 粗体 **...** 和 __...__
       t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
       t = t.replace(/__(.+?)__/g, '<strong>$1</strong>');
@@ -2381,12 +2389,11 @@ function openAiSolution(uid, qNum, gIdx, e) {
     }
     closeList();
 
-    // 3. 还原数学块占位符为带样式的 span
+    // 3. 还原数学块占位符为 KaTeX 块公式（保留 $$ 分隔符让 auto-render 识别）
     let html = out.join('\n');
     html = html.replace(/@@MATHBLOCK(\d+)@@/g, (_, idx) => {
-      const formula = mathBlocks[parseInt(idx)]
-        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      return `<div class="math-block" style="text-align:center;margin:12px 0;padding:8px;background:#f5f3ff;border-radius:6px;font-family:monospace;font-size:0.95em;overflow-x:auto">$$${formula}$$</div>`;
+      const formula = mathBlocks[parseInt(idx)];
+      return `<div class="katex-block">$$${formula}$$</div>`;
     });
 
     return html;
@@ -2448,10 +2455,22 @@ function openAiSolution(uid, qNum, gIdx, e) {
         const modelBadge = document.getElementById('aiSolModelBadge');
         if (modelBadge) modelBadge.textContent = modelLabel + '，仅供参考';
         box.innerHTML = `${truncWarn}<div class="ai-sol-body" style="font-size:0.95em;color:#1f2937">${_renderAiMd(d.solution)}</div>`;
-        // 触发 KaTeX/MathJax 渲染（若页面有加载）
-        if (window.MathJax && window.MathJax.typesetPromise) {
-          window.MathJax.typesetPromise([box]).catch(()=>{});
+        // 触发 KaTeX auto-render 渲染所有 $...$ 和 $$...$$ 公式
+        function _runKatex() {
+          if (window.renderMathInElement) {
+            renderMathInElement(box, {
+              delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$',  right: '$',  display: false}
+              ],
+              throwOnError: false,
+              output: 'html'
+            });
+          }
         }
+        if (window._katexReady) { _runKatex(); }
+        else { window.addEventListener('_katexLoaded', _runKatex, {once:true});
+               setTimeout(_runKatex, 2000); }  // 兜底2秒后强制渲染
       } else {
         // 显示所有模型的错误详情，方便排查
         const allErrs = d.all_errors ? d.all_errors.join('<br>• ') : '';

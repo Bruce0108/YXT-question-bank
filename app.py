@@ -6065,14 +6065,14 @@ def ai_solution():
                                  "image_url": {"url": f"data:image/jpeg;base64,{ans_b64}"}})
             return [{"role": "user", "content": content}]
 
-        or_payload = _json.dumps({
-            "model": OR_MODELS[0],   # 每次调用会替换
-            "messages": _build_or_messages(True),
-            "max_tokens": 8192,
-            "temperature": 0.2,
-        }).encode('utf-8')
+        # ── 并发竞速：同时向所有模型发请求，取最快成功的那个 ──
+        import queue as _queue
+        from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
 
-        for model_id in OR_MODELS:
+        result_queue = _queue.Queue()
+
+        def _call_one_model(model_id):
+            """向单个 OpenRouter 模型发请求，成功则放入 result_queue"""
             try:
                 body = _json.dumps({
                     "model": model_id,
@@ -6080,7 +6080,6 @@ def ai_solution():
                     "max_tokens": 8192,
                     "temperature": 0.2,
                 }).encode('utf-8')
-
                 req = _urllib_req.Request(
                     "https://openrouter.ai/api/v1/chat/completions",
                     data=body,
@@ -6092,51 +6091,56 @@ def ai_solution():
                     },
                     method='POST'
                 )
-                with _urllib_req.urlopen(req, timeout=120) as resp:
+                with _urllib_req.urlopen(req, timeout=90) as resp:
                     result = _json.loads(resp.read().decode('utf-8'))
 
-                # OpenAI 格式：choices[0].message.content
                 choices = result.get('choices', [])
                 if not choices:
                     err = result.get('error', {})
-                    err_msg = f'OR/{model_id}: 无choices，error={err.get("message","")}'
-                    errors_detail.append(err_msg)
-                    app.logger.warning(f'[ai_solution] {err_msg}')
-                    continue
+                    return {'ok': False, 'model': model_id,
+                            'error': f'无choices: {err.get("message","")}'}
 
                 solution      = choices[0].get('message', {}).get('content', '')
                 finish_reason = choices[0].get('finish_reason', 'UNKNOWN')
-
                 if not solution:
-                    err_msg = f'OR/{model_id}: 返回内容为空'
-                    errors_detail.append(err_msg)
-                    continue
+                    return {'ok': False, 'model': model_id, 'error': '返回内容为空'}
 
-                if finish_reason == 'length':
-                    solution += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
-
-                app.logger.info(f'[ai_solution] OpenRouter 成功 model={model_id} finish={finish_reason} len={len(solution)}')
-                return jsonify({
-                    'ok': True,
-                    'solution': solution,
-                    'model': model_id,
-                    'finish_reason': finish_reason,
-                    'provider': 'openrouter'
-                })
+                return {'ok': True, 'model': model_id,
+                        'solution': solution, 'finish_reason': finish_reason}
 
             except _urllib_err.HTTPError as e:
                 err_body = e.read().decode('utf-8', errors='replace')
-                err_msg  = f'OR/{model_id} HTTP {e.code}: {err_body[:200]}'
-                errors_detail.append(err_msg)
-                app.logger.warning(f'[ai_solution] {err_msg}')
-                if e.code in (429, 503):
-                    _time.sleep(1)
-                continue
+                return {'ok': False, 'model': model_id,
+                        'error': f'HTTP {e.code}: {err_body[:200]}'}
             except Exception as e:
-                err_msg = f'OR/{model_id}: {type(e).__name__}: {str(e)}'
-                errors_detail.append(err_msg)
-                app.logger.warning(f'[ai_solution] {err_msg}')
-                continue
+                return {'ok': False, 'model': model_id,
+                        'error': f'{type(e).__name__}: {str(e)}'}
+
+        # 并发发射所有模型请求，等待最快成功的一个
+        with _TPE(max_workers=len(OR_MODELS)) as executor:
+            futures = {executor.submit(_call_one_model, m): m for m in OR_MODELS}
+            first_success = None
+            for fut in _as_completed(futures):
+                res = fut.result()
+                if res['ok']:
+                    first_success = res
+                    # 取消其余请求（Python 中只能标记取消，已发出的网络请求无法中断）
+                    for f in futures:
+                        f.cancel()
+                    break
+                else:
+                    errors_detail.append(f"OR/{res['model']}: {res['error']}")
+                    app.logger.warning(f"[ai_solution] {errors_detail[-1]}")
+
+        if first_success:
+            sol      = first_success['solution']
+            fin      = first_success['finish_reason']
+            mid      = first_success['model']
+            if fin == 'length':
+                sol += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
+            app.logger.info(f'[ai_solution] OpenRouter 并发成功 model={mid} finish={fin} len={len(sol)}')
+            return jsonify({'ok': True, 'solution': sol, 'model': mid,
+                            'finish_reason': fin, 'provider': 'openrouter'})
 
     # ══════════════════════════════════════════════════════
     # 策略2：Gemini v1beta（备用，原生格式）
