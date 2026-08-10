@@ -8784,18 +8784,29 @@ def library_list():
         manifest_tasks = []
         for board in _EXAM_BOARDS:
             for subject in _SUBJECTS_MAP.get(board, []):
-                safe_board   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', board).strip()
-                safe_subject = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', subject).strip()
-                prefix = f'library/{safe_board}/{safe_subject}/'
-                keys   = storage.list_prefix(prefix)
+                # 新路径（含括号，当前版本）
+                safe_board_new   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', board).strip()
+                safe_subject_new = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ()]', '', subject).strip()
+                # 旧路径（无括号，旧版本保存的题册）
+                safe_board_old   = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', board).strip()
+                safe_subject_old = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', subject).strip()
+
                 seen_wb = set()
-                for k in keys:
-                    parts = k.split('/')
-                    if len(parts) >= 5 and parts[-1] == 'manifest.json':
-                        wb_id = parts[3]
-                        if wb_id not in seen_wb:
-                            seen_wb.add(wb_id)
-                            manifest_tasks.append((board, subject, prefix, wb_id))
+                # 扫描所有可能的路径（新路径 + 旧路径，去重）
+                prefixes_to_scan = [f'library/{safe_board_new}/{safe_subject_new}/']
+                old_prefix = f'library/{safe_board_old}/{safe_subject_old}/'
+                if old_prefix != prefixes_to_scan[0]:
+                    prefixes_to_scan.append(old_prefix)
+
+                for prefix in prefixes_to_scan:
+                    keys = storage.list_prefix(prefix)
+                    for k in keys:
+                        parts = k.split('/')
+                        if len(parts) >= 5 and parts[-1] == 'manifest.json':
+                            wb_id = parts[3]
+                            if wb_id not in seen_wb:
+                                seen_wb.add(wb_id)
+                                manifest_tasks.append((board, subject, prefix, wb_id))
 
         # Step2：并发读取所有 manifest（最多16线程）
         results_map = {}  # (board, subject) -> [wb_info, ...]
@@ -9216,13 +9227,21 @@ def _library_load_impl(wb_id):
             else:
                 return jsonify({'error': '题册不存在'}), 404
         else:
-            # R2 模式：遍历已知 board/subject 组合查找
+            # R2 模式：遍历已知 board/subject 组合查找（同时尝试新旧两种路径）
             found_prefix = None
             for b in _EXAM_BOARDS:
                 for s in _SUBJECTS_MAP.get(b, []):
-                    pf = _lib_key_prefix(b, s, wb_id)
-                    if storage.load_json(f'{pf}/manifest.json') is not None:
-                        found_prefix = pf
+                    # 新路径（含括号）
+                    pf_new = _lib_key_prefix(b, s, wb_id)
+                    if storage.load_json(f'{pf_new}/manifest.json') is not None:
+                        found_prefix = pf_new
+                        break
+                    # 旧路径（无括号）
+                    sb_old = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', b).strip()
+                    ss_old = re.sub(r'[^A-Za-z0-9_\-\u4e00-\u9fff ]', '', s).strip()
+                    pf_old = f'library/{sb_old}/{ss_old}/{wb_id}'
+                    if pf_old != pf_new and storage.load_json(f'{pf_old}/manifest.json') is not None:
+                        found_prefix = pf_old
                         break
                 if found_prefix: break
             if found_prefix:
