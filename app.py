@@ -5986,7 +5986,7 @@ def get_answer():
 def ai_solution():
     """
     调用 Google Gemini Vision 对题目图片进行解析，返回详细解题过程。
-    自动降级：gemini-2.5-flash -> gemini-2.5-flash-lite -> gemini-2.0-flash-lite -> gemini-2.0-flash
+    模型选择策略：优先 2.5-flash，429时依次降级，404时跳过。
     需要环境变量: GEMINI_API_KEY
     """
     import os as _os
@@ -6046,59 +6046,142 @@ def ai_solution():
         }
     }
 
-    # 自动降级模型列表（均为 v1beta 2026年现役模型，按能力/配额从优到稳排序）
-    # gemini-2.5-flash       — 最强推理，免费 tier 10 RPM
-    # gemini-2.5-flash-lite  — 轻量快速，免费 tier 30 RPM
-    # gemini-2.0-flash-lite  — 更稳定的免费配额
-    # gemini-2.0-flash       — 备用
-    models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.0-flash"]
+    # ── 2026年 Gemini v1beta 现役模型，按能力/配额排序 ──
+    # 经过验证在 generateContent + vision 上可用的模型名称
+    CANDIDATE_MODELS = [
+        "gemini-2.5-flash-lite-preview-06-17",   # 2.5 lite 稳定预览版，配额宽
+        "gemini-2.5-flash",                       # 2.5 旗舰，推理最强
+        "gemini-2.0-flash",                       # 2.0 flash，稳定
+        "gemini-2.0-flash-lite",                  # 2.0 轻量，配额最宽
+        "gemini-1.5-flash-latest",                # 1.5 latest 别名（部分区域仍有效）
+    ]
     last_error = ""
+    errors_detail = []
 
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    def _call_model(model_name):
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{model_name}:generateContent?key={GEMINI_API_KEY}")
+        req_data = _json.dumps(payload).encode('utf-8')
+        req = _urllib_req.Request(
+            url, data=req_data,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with _urllib_req.urlopen(req, timeout=90) as resp:
+            return _json.loads(resp.read().decode('utf-8'))
+
+    for model in CANDIDATE_MODELS:
         try:
-            req_data = _json.dumps(payload).encode('utf-8')
-            req = _urllib_req.Request(
-                url, data=req_data,
-                headers={'Content-Type': 'application/json'},
-                method='POST'
-            )
-            with _urllib_req.urlopen(req, timeout=90) as resp:
-                result = _json.loads(resp.read().decode('utf-8'))
-
+            result = _call_model(model)
             candidates = result.get('candidates', [])
             if not candidates:
-                last_error = f'{model}: 无候选结果'
+                # 可能被安全过滤，检查 promptFeedback
+                fb = result.get('promptFeedback', {})
+                block_reason = fb.get('blockReason', '')
+                last_error = f'{model}: 无候选结果' + (f'，blockReason={block_reason}' if block_reason else '')
+                errors_detail.append(last_error)
                 continue
 
-            candidate   = candidates[0]
+            candidate     = candidates[0]
             finish_reason = candidate.get('finishReason', 'UNKNOWN')
-            solution    = candidate.get('content', {}).get('parts', [{}])[0].get('text', '')
+            parts_out     = candidate.get('content', {}).get('parts', [])
+            solution      = ''.join(p.get('text', '') for p in parts_out if 'text' in p)
 
             if not solution:
-                last_error = f'{model}: 返回内容为空 (finishReason={finish_reason})'
+                last_error = f'{model}: 返回文本为空 (finishReason={finish_reason})'
+                errors_detail.append(last_error)
                 continue
 
-            # 如果因 MAX_TOKENS 截断，在末尾追加提示
             if finish_reason == 'MAX_TOKENS':
                 solution += '\n\n> ⚠️ *（内容较长，已达到输出上限，解析可能不完整）*'
 
-            return jsonify({'ok': True, 'solution': solution, 'model': model, 'finish_reason': finish_reason})
+            app.logger.info(f'[ai_solution] 成功 model={model} finish={finish_reason} len={len(solution)}')
+            return jsonify({
+                'ok': True,
+                'solution': solution,
+                'model': model,
+                'finish_reason': finish_reason
+            })
 
         except _urllib_err.HTTPError as e:
             err_body = e.read().decode('utf-8', errors='replace')
-            last_error = f'{model} HTTP {e.code}: {err_body[:200]}'
+            err_msg  = f'{model} HTTP {e.code}: {err_body[:300]}'
+            errors_detail.append(err_msg)
+            app.logger.warning(f'[ai_solution] {err_msg}')
             if e.code == 429:
-                # 配额超限，换下一个模型，稍等一下
-                _time.sleep(2)
+                _time.sleep(1)   # 限速，稍等换下一个
                 continue
-            # 其他HTTP错误也尝试下一个
-            continue
-        except Exception as e:
-            last_error = f'{model}: {str(e)}'
+            if e.code == 404:
+                continue         # 模型不存在，直接跳过
+            continue             # 其他错误也尝试下一个
+
+        except _urllib_err.URLError as e:
+            err_msg = f'{model} URLError: {e.reason}'
+            errors_detail.append(err_msg)
+            app.logger.warning(f'[ai_solution] {err_msg}')
             continue
 
-    return jsonify({'ok': False, 'error': f'所有模型均失败：{last_error}'}), 500
+        except Exception as e:
+            err_msg = f'{model}: {type(e).__name__}: {str(e)}'
+            errors_detail.append(err_msg)
+            app.logger.warning(f'[ai_solution] {err_msg}')
+            continue
+
+    # 所有模型都失败
+    app.logger.error(f'[ai_solution] 所有模型失败: {errors_detail}')
+    return jsonify({
+        'ok': False,
+        'error': f'所有模型均失败，请检查 GEMINI_API_KEY 或稍后重试。详情：{errors_detail[-1] if errors_detail else "未知"}'
+    }), 500
+
+
+@app.route('/api/test_gemini', methods=['GET'])
+def test_gemini():
+    """
+    诊断接口：列出所有候选模型的可用状态。
+    访问 /api/test_gemini 即可查看。
+    """
+    import os as _os
+    import json as _json
+    import urllib.request as _urllib_req
+    import urllib.error  as _urllib_err
+
+    GEMINI_API_KEY = _os.environ.get('GEMINI_API_KEY', '')
+    if not GEMINI_API_KEY:
+        return jsonify({'ok': False, 'error': '未配置 GEMINI_API_KEY'})
+
+    # 用最小 payload 测试 — 纯文本，不含图片，快速
+    test_payload = _json.dumps({
+        "contents": [{"parts": [{"text": "Hello"}]}],
+        "generationConfig": {"maxOutputTokens": 10}
+    }).encode('utf-8')
+
+    MODELS_TO_TEST = [
+        "gemini-2.5-flash-lite-preview-06-17",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+    ]
+    results = []
+    for model in MODELS_TO_TEST:
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{model}:generateContent?key={GEMINI_API_KEY}")
+        try:
+            req = _urllib_req.Request(url, data=test_payload,
+                                      headers={'Content-Type': 'application/json'}, method='POST')
+            with _urllib_req.urlopen(req, timeout=15) as resp:
+                body = _json.loads(resp.read().decode('utf-8'))
+                ok = bool(body.get('candidates'))
+                results.append({'model': model, 'status': 'ok' if ok else 'no_candidates', 'code': 200})
+        except _urllib_err.HTTPError as e:
+            results.append({'model': model, 'status': 'error', 'code': e.code,
+                            'detail': e.read().decode('utf-8', errors='replace')[:200]})
+        except Exception as e:
+            results.append({'model': model, 'status': 'error', 'code': 0, 'detail': str(e)})
+
+    return jsonify({'ok': True, 'results': results})
 
 
 
