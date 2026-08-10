@@ -4811,14 +4811,15 @@ async function openSaveLibDialog() {
     _libSubjects = d.subjects|| {};
   } catch(e) {
     // 降级处理：使用内置默认列表，不阻断用户操作
-    _libBoards   = ['Edexcel','CAIE','AQA','OCR','IB','AP','竞赛 Competition'];
+    _libBoards   = ['Edexcel','CAIE','AQA','OCR','IB','AP','BPHO','竞赛 Competition'];
     _libSubjects = {
       'Edexcel': ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
       'CAIE':    ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
       'AQA':     ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
-      'OCR':     ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
-      'IB':      ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
-      'AP':      ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology'],
+      'OCR':     ['数学 Maths','高数 Further Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business','会计 Accounting'],
+      'IB':      ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business'],
+      'AP':      ['数学 Maths','物理 Physics','化学 Chemistry','生物 Biology','经济 Economics','商业 Business'],
+      'BPHO':    ['竞赛物理 Physics (BPhO)','其他 Other'],
       '竞赛 Competition': ['物理竞赛 Physics (BPhO)','数学竞赛 Maths (BMO)','化学竞赛 Chemistry','生物竞赛 Biology','其他 Other'],
     };
     console.warn('library/boards 加载失败，使用默认列表：', e.message);
@@ -4849,10 +4850,26 @@ async function openSaveLibDialog() {
 
     // 默认考试局推断
     const src = (activeG.source || '').toLowerCase();
-    if (src.includes('edexcel') || src.includes('edexcel_maths')) boardSel.value = 'Edexcel';
-    else if (src.includes('cambridge') || src === 'caie') boardSel.value = 'CAIE';
-    else if (src.includes('aqa')) boardSel.value = 'AQA';
-    _onSaveBoardChange();
+    const pt  = (activeG.paper_type || '').toLowerCase();
+    if (src === 'bpho' || pt === 'bpho') {
+      boardSel.value = 'BPHO';
+      _onSaveBoardChange();
+      // 自动选"竞赛物理 Physics (BPhO)"
+      const subjSel2 = document.getElementById('libSaveSubject');
+      const bphoOpt = Array.from(subjSel2.options).find(o => o.value.includes('BPhO') || o.value.includes('Physics'));
+      if (bphoOpt) subjSel2.value = bphoOpt.value;
+    } else if (src.includes('edexcel') || src.includes('edexcel_maths')) {
+      boardSel.value = 'Edexcel';
+      _onSaveBoardChange();
+    } else if (src.includes('cambridge') || src === 'caie') {
+      boardSel.value = 'CAIE';
+      _onSaveBoardChange();
+    } else if (src.includes('aqa')) {
+      boardSel.value = 'AQA';
+      _onSaveBoardChange();
+    } else {
+      _onSaveBoardChange();
+    }
   }
 
   // 显示题目数量

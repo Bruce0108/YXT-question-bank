@@ -8903,7 +8903,7 @@ if not storage.is_r2_mode():
 else:
     _LIBRARY_DIR = None  # R2 模式不使用本地 library 目录
 
-_EXAM_BOARDS  = ['Edexcel', 'CAIE', 'AQA', '竞赛 Competition']
+_EXAM_BOARDS  = ['Edexcel', 'CAIE', 'AQA', 'OCR', 'IB', 'AP', 'BPHO', '竞赛 Competition']
 _SUBJECTS_MAP = {
     'Edexcel': ['数学 Maths',    '高数 Further Maths', '物理 Physics',
                 '化学 Chemistry','生物 Biology',        '经济 Economics',
@@ -8914,6 +8914,14 @@ _SUBJECTS_MAP = {
     'AQA':     ['数学 Maths',    '高数 Further Maths', '物理 Physics',
                 '化学 Chemistry','生物 Biology',        '经济 Economics',
                 '商业 Business', '会计 Accounting'],
+    'OCR':     ['数学 Maths',    '高数 Further Maths', '物理 Physics',
+                '化学 Chemistry','生物 Biology',        '经济 Economics',
+                '商业 Business', '会计 Accounting'],
+    'IB':      ['数学 Maths',    '物理 Physics',        '化学 Chemistry',
+                '生物 Biology',  '经济 Economics',      '商业 Business'],
+    'AP':      ['数学 Maths',    '物理 Physics',        '化学 Chemistry',
+                '生物 Biology',  '经济 Economics',      '商业 Business'],
+    'BPHO':    ['竞赛物理 Physics (BPhO)', '其他 Other'],
     '竞赛 Competition': ['物理竞赛 Physics (BPhO)', '数学竞赛 Maths (BMO)',
                          '化学竞赛 Chemistry', '生物竞赛 Biology', '其他 Other'],
 }
