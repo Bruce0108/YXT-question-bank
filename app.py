@@ -9513,23 +9513,24 @@ def _library_load_impl(wb_id):
 
         q_list = manifest.get('questions', [])
 
-        # ── 去重：按 (exam_date, q_num) 组合键保留首次出现 ──
-        # 场景：用户重复追加同一套 PDF，manifest 中会存在 exam_date+q_num 完全相同的条目。
-        # 注意：只有当 exam_date 非空时才启用去重，否则退化为保留全部（不同套卷可能都没有年份）。
-        _seen_keys = set()
+        # ── 去重：按 img_file 保留首次出现，img_file 在整个题册内全局唯一（q_001.jpg…）──
+        # 用 img_file 而非 (exam_date, q_num)：
+        #   • 数学/经济多套卷每套 q_num 都从 1 开始，同 exam_date 内也可有多道子题
+        #   • img_file 是保存时按顺序编号的，题册内永不重复，是唯一可靠的去重键
+        # 对于 img_file 为空的条目（图片获取失败），用 seq 作后备键防止全部被保留
+        _seen_imgfiles = set()
         _deduped = []
-        _has_dates = any(_q.get('exam_date') for _q in q_list)   # 题册是否含年份信息
         for _q in q_list:
-            if _has_dates:
-                _key = (str(_q.get('exam_date') or '').strip(),
-                        str(_q.get('q_num')     or '').strip())
-                if _key in _seen_keys:
-                    app.logger.warning(
-                        f'[library_load] 跳过重复 exam_date={_q.get("exam_date")!r} '
-                        f'q_num={_q.get("q_num")!r} in wb_id={wb_id!r}'
-                    )
-                    continue
-                _seen_keys.add(_key)
+            _imgf = _q.get('img_file', '').strip()
+            _key  = _imgf if _imgf else f'__seq_{_q.get("seq", id(_q))}'
+            if _key in _seen_imgfiles:
+                app.logger.warning(
+                    f'[library_load] 跳过重复 img_file={_imgf!r} '
+                    f'(exam_date={_q.get("exam_date")!r}, q_num={_q.get("q_num")!r}) '
+                    f'in wb_id={wb_id!r}'
+                )
+                continue
+            _seen_imgfiles.add(_key)
             _deduped.append(_q)
         if len(_deduped) < len(q_list):
             app.logger.warning(f'[library_load] 题册 {wb_id!r} 共去除 {len(q_list)-len(_deduped)} 条重复题目')
@@ -9592,6 +9593,7 @@ def _library_load_impl(wb_id):
                     'img_h':         q.get('img_h', 0),
                     'answer_b64':    imgs['ans_b64'],
                     'has_answer':    bool(imgs['ans_b64']),
+                    '_img_file':     q.get('img_file', ''),   # 全局唯一，用于前端去重
                 })
     else:
         mfest = os.path.join(wb_prefix, 'manifest.json')
@@ -9599,18 +9601,16 @@ def _library_load_impl(wb_id):
             return jsonify({'error': '题册不存在'}), 404
         with open(mfest, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
-        # ── 去重：按 (exam_date, q_num) 保留首次出现（本地模式同 R2）──
+        # ── 去重：按 img_file 保留首次出现（本地模式同 R2）──
         _local_qs = manifest.get('questions', [])
         _seen_local = set()
         _deduped_local = []
-        _has_dates_local = any(_lq.get('exam_date') for _lq in _local_qs)
         for _lq in _local_qs:
-            if _has_dates_local:
-                _lkey = (str(_lq.get('exam_date') or '').strip(),
-                         str(_lq.get('q_num')     or '').strip())
-                if _lkey in _seen_local:
-                    continue
-                _seen_local.add(_lkey)
+            _limgf = _lq.get('img_file', '').strip()
+            _lkey  = _limgf if _limgf else f'__seq_{_lq.get("seq", id(_lq))}'
+            if _lkey in _seen_local:
+                continue
+            _seen_local.add(_lkey)
             _deduped_local.append(_lq)
         questions_out = []
         for q in _deduped_local:
@@ -9641,6 +9641,7 @@ def _library_load_impl(wb_id):
                 'img_h':          q.get('img_h', 0),
                 'answer_b64':     ans_b64,
                 'ai_text_answer': q.get('ai_text_answer', ''),   # AI解析文字答案
+                '_img_file':      q.get('img_file', ''),         # 全局唯一，用于前端去重
             })
 
     return jsonify({
@@ -9803,27 +9804,44 @@ def library_append(wb_id):
     # ── 计算新图片的起始序号（在旧题目后面接续编号）──
     existing_qs = manifest.get('questions', [])
 
-    # ── 去重：过滤掉已存在于题册中的题目（按 exam_date+q_num 组合键判断）──
-    # 防止用户重复追加同一套 PDF 导致题目翻倍
+    # ── 去重：过滤掉已存在于题册中的题目（按 img_file 内容去重）──
+    # 防止用户重复追加同一套 PDF 导致题目翻倍。
+    # 策略：对 existing_qs 里所有 img_file 建立集合；新题目的 img_bytes_b64
+    # 做 MD5 哈希，与已有图片哈希比对，相同则跳过。
+    # 降级方案（无 img_bytes_b64 时）：用 (exam_date, q_num) 作辅助判断。
+    import hashlib as _hashlib
+    import base64 as _b64_dedup
+
+    # 构建已有图片哈希集合（需下载 R2 图片才能比较，代价较高）
+    # 改用轻量方案：对已有 manifest 里的 (exam_date, file_idx, q_num) 三元组去重
+    # 比 (exam_date, q_num) 更精准：加上 file_idx 区分同一套卷内的不同子题
     existing_keys = set()
     for _eq in existing_qs:
-        _edate = str(_eq.get('exam_date') or '').strip()
-        _eqnum = str(_eq.get('q_num') or '').strip()
-        if _edate or _eqnum:               # 至少有一个字段才建立去重键
-            existing_keys.add((_edate, _eqnum))
+        _edate  = str(_eq.get('exam_date')  or '').strip()
+        _eqnum  = str(_eq.get('q_num')      or '').strip()
+        _efidx  = str(_eq.get('file_idx')   or '').strip()
+        # 三元组必须全部相同才认定为重复（防止不同套卷的同 q_num 被误删）
+        if _edate and _eqnum:
+            existing_keys.add((_edate, _efidx, _eqnum))
 
     if existing_keys:
         orig_count = len(questions)
         questions = [
             q for q in questions
-            if (str(q.get('exam_date') or '').strip(),
-                str(q.get('q_num')     or '').strip()) not in existing_keys
+            if not (
+                str(q.get('exam_date') or '').strip()
+                and (
+                    str(q.get('exam_date') or '').strip(),
+                    str(q.get('file_idx',  q.get('gIdx', '')) or '').strip(),
+                    str(q.get('q_num')     or '').strip()
+                ) in existing_keys
+            )
         ]
         skipped = orig_count - len(questions)
         if skipped:
             app.logger.warning(
                 f'[library/append] wb_id={wb_id!r} 跳过 {skipped} 道已存在的重复题目'
-                f'（按 exam_date+q_num 判断），剩余 {len(questions)} 道新题'
+                f'（按 exam_date+file_idx+q_num 判断），剩余 {len(questions)} 道新题'
             )
         if not questions:
             return jsonify({

@@ -5763,23 +5763,24 @@ function _applyLoadedWorkbook(d) {
     _wb_title:       d.title,
   };
 
-  // 追加所有题目（前端去重：按 exam_date+q_num 组合键去重）
-  // 场景：用户重复追加同一套 PDF → manifest 里会有 exam_date+q_num 完全相同的条目
-  // 注意：只有当题目包含 exam_date 时才启用去重，避免误删正常题目
-  const _hasExamDates = d.questions.some(q => q.exam_date);
-  const _seenKeys = new Set();
+  // 追加所有题目（前端去重：按 _img_file 去重，该字段在题册内全局唯一）
+  // 用 _img_file（如 "q_001.jpg"）而非 exam_date+q_num：
+  //   • 数学/经济多套卷每套 q_num 都从 1 开始，同 exam_date 内可有多道子题
+  //   • _img_file 是保存时按全局顺序编号的，永不重复，是唯一可靠的去重键
+  const _seenImgFiles = new Set();
   const baseSeq = allQuestions.length;
   let _pushIdx = 0;
   for (let i = 0; i < d.questions.length; i++) {
     const q = d.questions[i];
-    if (_hasExamDates && q.exam_date) {
-      const _dedupKey = String(q.exam_date || '') + '|' + String(q.q_num ?? '');
-      if (_seenKeys.has(_dedupKey)) {
-        console.warn('[_applyLoadedWorkbook] 跳过重复条目 exam_date:', q.exam_date, 'q_num:', q.q_num);
-        continue;
-      }
-      _seenKeys.add(_dedupKey);
+    // _img_file 由后端 lazy 模式返回（"q_001.jpg" 等）；非 lazy 模式为空字符串
+    // 为空时用 seq 作后备键（seq 在 manifest 内也是唯一的）
+    const _imgFile = q._img_file || '';
+    const _dedupKey = _imgFile || `__seq_${q.seq ?? i}`;
+    if (_seenImgFiles.has(_dedupKey)) {
+      console.warn('[_applyLoadedWorkbook] 跳过重复条目 _img_file:', _imgFile, 'q_num:', q.q_num);
+      continue;
     }
+    _seenImgFiles.add(_dedupKey);
     const _qn = q.q_num || (baseSeq + i + 1);
     const qObj = {
       q_num:         _qn,
