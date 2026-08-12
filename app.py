@@ -9934,6 +9934,7 @@ def library_img_lazy(wb_id, q_num_str):
 
 
 
+@app.route('/api/library/delete/<wb_id>', methods=['DELETE'])
 def library_delete(wb_id):
     """删除图书馆中的一个题册。"""
     board   = request.args.get('board', '')

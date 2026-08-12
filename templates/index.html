@@ -3852,16 +3852,28 @@ async function doExportPdf() {
   // 构建 per-question 答案可见性映射：key = "${gIdx}_{q_num}" 和 "${session_id}::${file_idx}_${q_num}"
   const exportMode = document.querySelector('input[name="pdfExportMode"]:checked')?.value || 'question_only';
   const includeAnswerMode = exportMode === 'question_markscheme';
+
+  // ★ 关键修复：
+  // 当选择"题目+答案"时，直接用全局 include_answer=true，不传 answer_visible_map。
+  // 之前用 answer_visible_map 控制，但懒加载题目 answer_b64 为空（has_answer=true），
+  // 导致 hasAns=false，answer_visible_map 里该题被标为 false，后端清除了 answer_b64。
+  //
+  // 当选择"仅题目"时，传 include_answer=false，后端清除所有答案。
+  // answer_visible_map 只在"混合模式"（部分题有答案、部分无）时才有意义——
+  // 此时仍需按 has_answer 判断（但要用 has_answer 而不仅是 answer_b64）。
   const answer_visible_map = {};
-  exportItems.forEach(q => {
-    const sid  = q._append_session_id != null ? q._append_session_id : sessionId;
-    const fidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
-    const uid  = `${q.gIdx}_${q.q_num}`;        // 旧 key 格式兼容
-    const uid2 = `${sid}::${fidx}_${q.q_num}`;  // 新 key 格式
-    const hasAns = !!(q.answer_b64);
-    answer_visible_map[uid]  = includeAnswerMode ? hasAns : false;
-    answer_visible_map[uid2] = includeAnswerMode ? hasAns : false;
-  });
+  if (!includeAnswerMode) {
+    // 仅题目模式：全部标为 false（也可以直接用 include_answer=false，二选一）
+    exportItems.forEach(q => {
+      const sid  = q._append_session_id != null ? q._append_session_id : sessionId;
+      const fidx = q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : q.gIdx;
+      const uid  = `${q.gIdx}_${q.q_num}`;
+      const uid2 = `${sid}::${fidx}_${q.q_num}`;
+      answer_visible_map[uid]  = false;
+      answer_visible_map[uid2] = false;
+    });
+  }
+  // includeAnswerMode=true 时 answer_visible_map 为空 {}，后端走全局 include_answer=true 分支
 
   showLdProgress(`正在生成合并 PDF（共 ${totalQ} 道题）…`, 0, '提交任务中…');
 
