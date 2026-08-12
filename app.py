@@ -9323,8 +9323,23 @@ def library_save():
 
 
     # ── 步骤3：构建 manifest ──
+    import hashlib as _hl_save
     for i, q in enumerate(questions):
         img_file, img_w, img_h, ans_file = img_results.get(i, ('', 0, 0, ''))
+        # 计算图片内容 MD5 哈希，用于后续读取时内容级去重
+        img_hash = ''
+        if img_file:
+            try:
+                if storage.is_r2_mode():
+                    _raw_for_hash = storage.load_bytes(f'{wb_prefix}/{img_file}')
+                else:
+                    _img_fpath = os.path.join(wb_prefix, img_file)
+                    with open(_img_fpath, 'rb') as _fh:
+                        _raw_for_hash = _fh.read()
+                if _raw_for_hash:
+                    img_hash = _hl_save.md5(_raw_for_hash).hexdigest()
+            except Exception:
+                img_hash = ''
         saved_q.append({
             'seq':        i + 1,
             'q_num':      q.get('q_num', i + 1),
@@ -9334,6 +9349,7 @@ def library_save():
             'exam_date':  q.get('exam_date', ''),
             'source':     q.get('source', ''),
             'img_file':   img_file,
+            'img_hash':   img_hash,   # 图片内容 MD5，用于内容级去重
             'img_w':      img_w,
             'img_h':      img_h,
             'ans_file':   ans_file,   # Task1: 答案图片文件名
@@ -9381,15 +9397,69 @@ def library_save():
 
 
 
-def _register_workbook_session(wb_id: str, manifest: dict, questions_out: list) -> str:
+def _register_workbook_session(wb_id: str, manifest: dict, questions_out: list,
+                               wb_prefix: str = '') -> str:
     """
     将已加载的题册注册为一个虚拟 session，使 export_pdf 等接口可以使用。
     每道题的图片以 img_bytes_b64 存入 questions，
     export_pdf / preview_b64 会优先读取这个字段而不尝试打开 PDF。
     返回新的 session_id（'wb_' + wb_id）。
+
+    wb_prefix: 存储前缀（如 'library/Edexcel/...'），用于 lazy 模式下按需下载图片。
+               lazy 模式下 questions_out 里 img_bytes_b64=''，需要从 R2/本地补充下载。
     """
     import base64 as _b64
+    from concurrent.futures import ThreadPoolExecutor as _RWS_TPE, as_completed as _rws_ac
+
     sess_id = f'wb_{wb_id}'
+
+    # ── lazy 模式补充下载：并发从 R2/本地下载所有图片 ──
+    # 只对 img_bytes_b64='' 且有 _img_file 的条目下载（非 lazy 条目跳过）
+    need_download = []
+    for i, q in enumerate(questions_out):
+        if not q.get('img_bytes_b64') and wb_prefix:
+            img_file = q.get('_img_file', '') or q.get('img_file', '')
+            if img_file:
+                need_download.append((i, img_file, q.get('_ans_file', '') or q.get('ans_file', '')))
+
+    if need_download:
+        def _dl_one(args):
+            idx, img_f, ans_f = args
+            result = {'idx': idx, 'b64': '', 'ans_b64': ''}
+            try:
+                raw = storage.load_bytes(f'{wb_prefix}/{img_f}')
+                if raw:
+                    result['b64'] = _b64.b64encode(raw).decode('ascii')
+            except Exception:
+                pass
+            try:
+                if ans_f:
+                    raw_ans = storage.load_bytes(f'{wb_prefix}/{ans_f}')
+                    if raw_ans:
+                        result['ans_b64'] = _b64.b64encode(raw_ans).decode('ascii')
+            except Exception:
+                pass
+            return result
+
+        dl_map = {}
+        with _RWS_TPE(max_workers=20) as _ex:
+            for fut in _rws_ac([_ex.submit(_dl_one, t) for t in need_download]):
+                r = fut.result()
+                dl_map[r['idx']] = r
+        app.logger.info(f'[_register_workbook_session] lazy 补充下载 {len(need_download)} 张图片，'
+                        f'成功 {sum(1 for v in dl_map.values() if v["b64"])} 张 wb_id={wb_id!r}')
+
+        # 将下载结果回填到 questions_out（避免修改原始列表，用 index 映射）
+        # 注意：questions_out 可能是共享列表，复制一份防止副作用
+        questions_out = list(questions_out)
+        for i, q in enumerate(questions_out):
+            if i in dl_map and dl_map[i]['b64']:
+                q = dict(q)  # 浅复制，不修改原字典
+                q['img_bytes_b64'] = dl_map[i]['b64']
+                if dl_map[i]['ans_b64']:
+                    q['answer_b64'] = dl_map[i]['ans_b64']
+                questions_out[i] = q
+
     # 构建虚拟 group（没有真实 PDF 路径，只有图片 base64）
     virt_questions = []
     for i, q in enumerate(questions_out):
@@ -9513,24 +9583,36 @@ def _library_load_impl(wb_id):
 
         q_list = manifest.get('questions', [])
 
-        # ── 去重：按 img_file 保留首次出现，img_file 在整个题册内全局唯一（q_001.jpg…）──
-        # 用 img_file 而非 (exam_date, q_num)：
-        #   • 数学/经济多套卷每套 q_num 都从 1 开始，同 exam_date 内也可有多道子题
-        #   • img_file 是保存时按顺序编号的，题册内永不重复，是唯一可靠的去重键
-        # 对于 img_file 为空的条目（图片获取失败），用 seq 作后备键防止全部被保留
-        _seen_imgfiles = set()
+        # ── 去重：优先按 img_hash（图片内容MD5）去重，无 hash 时降级用 img_file ──
+        # img_hash 方案可识别内容相同但文件名不同的重复（如重复追加同套PDF）
+        # img_file 降级可兼容旧版 manifest（无 img_hash 字段）
+        _seen_hashes   = set()   # 已见 img_hash
+        _seen_imgfiles = set()   # 已见 img_file（降级用）
         _deduped = []
         for _q in q_list:
+            _hash = _q.get('img_hash', '').strip()
             _imgf = _q.get('img_file', '').strip()
-            _key  = _imgf if _imgf else f'__seq_{_q.get("seq", id(_q))}'
-            if _key in _seen_imgfiles:
-                app.logger.warning(
-                    f'[library_load] 跳过重复 img_file={_imgf!r} '
-                    f'(exam_date={_q.get("exam_date")!r}, q_num={_q.get("q_num")!r}) '
-                    f'in wb_id={wb_id!r}'
-                )
-                continue
-            _seen_imgfiles.add(_key)
+            if _hash:
+                # 有哈希：按哈希去重（内容级）
+                if _hash in _seen_hashes:
+                    app.logger.warning(
+                        f'[library_load] 跳过重复 img_hash={_hash!r} '
+                        f'img_file={_imgf!r} (exam_date={_q.get("exam_date")!r}, '
+                        f'q_num={_q.get("q_num")!r}) in wb_id={wb_id!r}'
+                    )
+                    continue
+                _seen_hashes.add(_hash)
+            else:
+                # 无哈希：按 img_file 去重（兼容旧 manifest）
+                _key = _imgf if _imgf else f'__seq_{_q.get("seq", id(_q))}'
+                if _key in _seen_imgfiles:
+                    app.logger.warning(
+                        f'[library_load] 跳过重复 img_file={_imgf!r} '
+                        f'(exam_date={_q.get("exam_date")!r}, q_num={_q.get("q_num")!r}) '
+                        f'in wb_id={wb_id!r}'
+                    )
+                    continue
+                _seen_imgfiles.add(_key)
             _deduped.append(_q)
         if len(_deduped) < len(q_list):
             app.logger.warning(f'[library_load] 题册 {wb_id!r} 共去除 {len(q_list)-len(_deduped)} 条重复题目')
@@ -9554,6 +9636,7 @@ def _library_load_impl(wb_id):
                     'has_answer': bool(q.get('ans_file', '')),
                     '_wb_id':     wb_id,
                     '_img_file':  q.get('img_file', ''),
+                    '_img_hash':  q.get('img_hash', ''),   # 内容MD5，用于前端去重
                     '_ans_file':  q.get('ans_file', ''),
                 })
         else:
@@ -9594,6 +9677,7 @@ def _library_load_impl(wb_id):
                     'answer_b64':    imgs['ans_b64'],
                     'has_answer':    bool(imgs['ans_b64']),
                     '_img_file':     q.get('img_file', ''),   # 全局唯一，用于前端去重
+                    '_img_hash':     q.get('img_hash', ''),   # 内容MD5，用于前端去重
                 })
     else:
         mfest = os.path.join(wb_prefix, 'manifest.json')
@@ -9601,16 +9685,23 @@ def _library_load_impl(wb_id):
             return jsonify({'error': '题册不存在'}), 404
         with open(mfest, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
-        # ── 去重：按 img_file 保留首次出现（本地模式同 R2）──
+        # ── 去重：优先按 img_hash（内容MD5）去重，无 hash 时降级用 img_file（本地模式）──
         _local_qs = manifest.get('questions', [])
-        _seen_local = set()
+        _seen_local_hashes   = set()
+        _seen_local_imgfiles = set()
         _deduped_local = []
         for _lq in _local_qs:
+            _lhash = _lq.get('img_hash', '').strip()
             _limgf = _lq.get('img_file', '').strip()
-            _lkey  = _limgf if _limgf else f'__seq_{_lq.get("seq", id(_lq))}'
-            if _lkey in _seen_local:
-                continue
-            _seen_local.add(_lkey)
+            if _lhash:
+                if _lhash in _seen_local_hashes:
+                    continue
+                _seen_local_hashes.add(_lhash)
+            else:
+                _lkey = _limgf if _limgf else f'__seq_{_lq.get("seq", id(_lq))}'
+                if _lkey in _seen_local_imgfiles:
+                    continue
+                _seen_local_imgfiles.add(_lkey)
             _deduped_local.append(_lq)
         questions_out = []
         for q in _deduped_local:
@@ -9642,12 +9733,13 @@ def _library_load_impl(wb_id):
                 'answer_b64':     ans_b64,
                 'ai_text_answer': q.get('ai_text_answer', ''),   # AI解析文字答案
                 '_img_file':      q.get('img_file', ''),         # 全局唯一，用于前端去重
+                '_img_hash':      q.get('img_hash', ''),         # 内容MD5，用于前端去重
             })
 
     return jsonify({
         'ok':           True,
         'id':           wb_id,
-        'session_id':   _register_workbook_session(wb_id, manifest, questions_out),
+        'session_id':   _register_workbook_session(wb_id, manifest, questions_out, wb_prefix=wb_prefix),
         'title':        manifest.get('title', ''),
         'board':        manifest.get('board', board),
         'subject':      manifest.get('subject', subject),
@@ -10005,19 +10097,50 @@ def library_append(wb_id):
                 for (i, q) in items:
                     img_results[i] = ('', 0, 0, '')
 
-    # ── 构建新增题目条目，追加到 existing_qs ──
+    # ── 构建新增题目条目，并计算 img_hash 用于内容级去重 ──
+    import hashlib as _hl_append
+    # 收集已有题目的 img_hash（有哈希值的），用于去重新题目
+    existing_hashes = set(
+        _eq['img_hash'] for _eq in existing_qs
+        if _eq.get('img_hash')
+    )
+
     new_qs = []
     for i, q in enumerate(questions):
         img_file, img_w, img_h, ans_file = img_results.get(i, ('', 0, 0, ''))
+        # 计算新题目图片的 MD5 哈希
+        img_hash = ''
+        if img_file:
+            try:
+                if storage.is_r2_mode():
+                    _raw_h = storage.load_bytes(f'{wb_prefix}/{img_file}')
+                else:
+                    _img_hp = os.path.join(wb_prefix, img_file)
+                    with open(_img_hp, 'rb') as _fh2:
+                        _raw_h = _fh2.read()
+                if _raw_h:
+                    img_hash = _hl_append.md5(_raw_h).hexdigest()
+            except Exception:
+                img_hash = ''
+        # 哈希去重：如果新题目图片内容与已有题目完全相同，跳过
+        if img_hash and img_hash in existing_hashes:
+            app.logger.warning(
+                f'[library/append] 跳过内容重复题目 img_file={img_file!r} '
+                f'img_hash={img_hash!r} (q_num={q.get("q_num")!r})'
+            )
+            continue
+        if img_hash:
+            existing_hashes.add(img_hash)  # 避免同批次内重复
         new_qs.append({
-            'seq':            start_idx + i + 1,
-            'q_num':          q.get('q_num', start_idx + i + 1),
+            'seq':            start_idx + len(new_qs) + 1,
+            'q_num':          q.get('q_num', start_idx + len(new_qs) + 1),
             'file_idx':       int(q.get('file_idx', q.get('gIdx', 0))),
             'difficulty':     q.get('difficulty'),
             'topics':         q.get('topics', []),
             'exam_date':      q.get('exam_date', ''),
             'source':         q.get('source', ''),
             'img_file':       img_file,
+            'img_hash':       img_hash,   # 图片内容 MD5，用于内容级去重
             'img_w':          img_w,
             'img_h':          img_h,
             'ans_file':       ans_file,

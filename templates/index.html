@@ -5763,24 +5763,33 @@ function _applyLoadedWorkbook(d) {
     _wb_title:       d.title,
   };
 
-  // 追加所有题目（前端去重：按 _img_file 去重，该字段在题册内全局唯一）
-  // 用 _img_file（如 "q_001.jpg"）而非 exam_date+q_num：
-  //   • 数学/经济多套卷每套 q_num 都从 1 开始，同 exam_date 内可有多道子题
-  //   • _img_file 是保存时按全局顺序编号的，永不重复，是唯一可靠的去重键
-  const _seenImgFiles = new Set();
+  // 追加所有题目（前端去重：优先按 _img_hash（内容MD5）去重，无 hash 时降级 _img_file）
+  // img_hash 可识别内容相同但文件名不同的重复（如重复追加同套PDF）
+  // _img_file 降级兼容旧版 manifest（无 img_hash 字段）
+  const _seenHashes   = new Set();  // 已见 img_hash
+  const _seenImgFiles = new Set();  // 已见 img_file（降级用）
   const baseSeq = allQuestions.length;
   let _pushIdx = 0;
   for (let i = 0; i < d.questions.length; i++) {
     const q = d.questions[i];
-    // _img_file 由后端 lazy 模式返回（"q_001.jpg" 等）；非 lazy 模式为空字符串
-    // 为空时用 seq 作后备键（seq 在 manifest 内也是唯一的）
-    const _imgFile = q._img_file || '';
-    const _dedupKey = _imgFile || `__seq_${q.seq ?? i}`;
-    if (_seenImgFiles.has(_dedupKey)) {
-      console.warn('[_applyLoadedWorkbook] 跳过重复条目 _img_file:', _imgFile, 'q_num:', q.q_num);
-      continue;
+    const _imgHash = (q._img_hash || '').trim();
+    const _imgFile = (q._img_file || '').trim();
+    if (_imgHash) {
+      // 有哈希：按内容去重
+      if (_seenHashes.has(_imgHash)) {
+        console.warn('[_applyLoadedWorkbook] 跳过重复条目 img_hash:', _imgHash, 'img_file:', _imgFile, 'q_num:', q.q_num);
+        continue;
+      }
+      _seenHashes.add(_imgHash);
+    } else {
+      // 无哈希：降级按 img_file 去重（兼容旧 manifest）
+      const _dedupKey = _imgFile || `__seq_${q.seq ?? i}`;
+      if (_seenImgFiles.has(_dedupKey)) {
+        console.warn('[_applyLoadedWorkbook] 跳过重复条目 _img_file:', _imgFile, 'q_num:', q.q_num);
+        continue;
+      }
+      _seenImgFiles.add(_dedupKey);
     }
-    _seenImgFiles.add(_dedupKey);
     const _qn = q.q_num || (baseSeq + i + 1);
     const qObj = {
       q_num:         _qn,
