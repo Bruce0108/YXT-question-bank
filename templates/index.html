@@ -5115,10 +5115,11 @@ async function confirmSaveLib() {
   try {
     const activeG = groups[activeGIdx] || {};
 
-    // ── 步骤0：预加载懒加载题目的图片（并发，8并发）──
-    // 题册加载使用 lazy=1，图片初始为空；保存前需确保所有题目 _img_b64 已填充
+    // ── 步骤0：预加载懒加载题目的图片（仅针对没有 _img_file 的题目）──
+    // 有 _img_file 的题库题目，后端直读 R2，无需前端预加载
     const lazyQ = visibles.filter(q =>
-      (q._lazy_wb_id || q.source === 'workbook' || q.source === 'cloud') && !q._img_b64
+      (q._lazy_wb_id || q.source === 'workbook' || q.source === 'cloud') &&
+      !q._img_b64 && !q._img_file  // ← 有 _img_file 的跳过（后端直读）
     );
     if (lazyQ.length > 0) {
       setLdProgress(5, `预加载图片 0/${lazyQ.length}…`);
@@ -5173,22 +5174,25 @@ async function confirmSaveLib() {
       const _fromWorkbook = q._lazy_wb_id || q.source === 'workbook' || q.source === 'cloud';
 
       if (_fromWorkbook) {
-        // 题册/云端/二次加载题目（含 bpho 题册等）：直接用内存中的 _img_b64
-        if (q._img_b64) {
-          entry.img_bytes_b64 = q._img_b64;
-          entry.img_w         = q._img_w || 0;
-          entry.img_h         = q._img_h || 0;
-        }
-        // ★ 传 _img_file：后端 library_save 收到后，如果 img_bytes_b64 为空，
-        // 可直接按文件名从 R2/本地读图，彻底绕开 q_num 歧义
+        // ★ 题库来源题目：优先传 _img_file 让后端直读 R2，避免大 payload
+        // 只有没有 _img_file 时才传 img_bytes_b64（兜底）
         if (q._img_file) {
+          // 有精确文件名 → 后端直读 R2，不传图片 base64（节省几十MB传输）
           entry._src_img_file  = q._img_file;
           entry._src_wb_id     = q._lazy_wb_id || '';
           entry._src_board     = q._lazy_board  || '';
           entry._src_subject   = q._lazy_subject || '';
+        } else if (q._img_b64) {
+          // 没有 _img_file（如手动导入的 .wb 文件）：回退传 base64
+          entry.img_bytes_b64 = q._img_b64;
+          entry.img_w         = q._img_w || 0;
+          entry.img_h         = q._img_h || 0;
         }
         if (q._ans_file) {
           entry._src_ans_file = q._ans_file;
+        } else if (q.answer_b64 && !q._img_file) {
+          // 答案同理：有 ans_file 的走后端直读，否则传 b64
+          entry.answer_b64 = q.answer_b64;
         }
       } else if (q._img_replaced) {
         // 用户已手动替换图片：直接用替换后的 _img_b64，不走 PDF 抓图（否则覆盖用户图片）
@@ -5254,7 +5258,7 @@ async function confirmSaveLib() {
           catch(e) { reject(new Error(`HTTP ${xhr.status}`)); }
         }
       };
-      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.onerror = () => reject(new Error(`网络错误（连接中断，HTTP ${xhr.status}）`));
       xhr.timeout = 300000;  // 5分钟：后端可能需要批量裁图
       xhr.ontimeout = () => reject(new Error('请求超时（服务端处理超过5分钟）'));
       xhr.send(payload);

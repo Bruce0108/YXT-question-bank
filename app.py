@@ -9090,6 +9090,14 @@ def library_save():
         questions: [{q_num, img_bytes_b64, img_w, img_h, ...}]
       }
     """
+    try:
+        return _library_save_impl()
+    except Exception as _top_e:
+        import traceback as _tb
+        app.logger.error(f'[library_save] 未捕获异常: {_tb.format_exc()}')
+        return jsonify({'error': f'服务端错误: {str(_top_e)}'}), 500
+
+def _library_save_impl():
     import base64 as _b64
     data = request.json or {}
     session_id    = data.get('session_id', '')
