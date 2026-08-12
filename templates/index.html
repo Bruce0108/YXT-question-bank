@@ -5903,6 +5903,9 @@ function _applyLoadedWorkbook(d) {
   // 显示 toolbar「追加套题」按钮
   const appendBtn = document.getElementById('btnAppendPdf');
   if (appendBtn) appendBtn.style.display = '';
+
+  // 更新「显示/隐藏所有答案」按钮可见性（题库题目用 has_answer 标记）
+  _updatePdfAnswerToggle();
 }
 
 function closeLoadLibDialog() {
