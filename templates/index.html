@@ -5104,13 +5104,15 @@ async function confirmSaveLib() {
           const subj  = encodeURIComponent(q._lazy_subject || '');
           if (!wbId) return;
           try {
-            const r = await fetch(`/api/library/img/${wbId}/${q.q_num}?board=${board}&subject=${subj}&type=q`);
+            // ★ 优先用 _img_file（唯一文件名）精确定位，避免 q_num 多套卷冲突
+            const imgFileParam = q._img_file ? `&img_file=${encodeURIComponent(q._img_file)}` : '';
+            const r = await fetch(`/api/library/img/${wbId}/${q.q_num}?board=${board}&subject=${subj}&type=q${imgFileParam}`);
             if (r.ok) {
               const d = await r.json();
               if (d.ok && d.b64) {
                 q._img_b64 = d.b64;
-                q._img_w   = d.img_w || 0;
-                q._img_h   = d.img_h || 0;
+                q._img_w   = d.img_w || d.w || 0;
+                q._img_h   = d.img_h || d.h || 0;
               }
             }
           } catch(_) {}
@@ -5148,6 +5150,17 @@ async function confirmSaveLib() {
           entry.img_bytes_b64 = q._img_b64;
           entry.img_w         = q._img_w || 0;
           entry.img_h         = q._img_h || 0;
+        }
+        // ★ 传 _img_file：后端 library_save 收到后，如果 img_bytes_b64 为空，
+        // 可直接按文件名从 R2/本地读图，彻底绕开 q_num 歧义
+        if (q._img_file) {
+          entry._src_img_file  = q._img_file;
+          entry._src_wb_id     = q._lazy_wb_id || '';
+          entry._src_board     = q._lazy_board  || '';
+          entry._src_subject   = q._lazy_subject || '';
+        }
+        if (q._ans_file) {
+          entry._src_ans_file = q._ans_file;
         }
       } else if (q._img_replaced) {
         // 用户已手动替换图片：直接用替换后的 _img_b64，不走 PDF 抓图（否则覆盖用户图片）
@@ -5815,6 +5828,10 @@ function _applyLoadedWorkbook(d) {
       _lazy_wb_id:   q._wb_id || d.id,
       _lazy_board:   d.board || '',
       _lazy_subject: d.subject || '',
+      // ★ 关键：记录 manifest 里的唯一文件名，懒加载/保存时按文件名精确定位
+      // 避免用 q_num 查找（多套卷同 q_num 会冲突，导致图片张冠李戴）
+      _img_file:     q._img_file || '',
+      _ans_file:     q._ans_file || '',
     };
     allQuestions.push(qObj);
     g.questions.push(qObj);

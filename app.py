@@ -9147,6 +9147,68 @@ def library_save():
         b64 = q.get('img_bytes_b64', '')
         if b64:
             q_has_b64[i] = True
+        elif q.get('_src_img_file'):
+            # ★ 题册来源题目：前端传来了精确文件名，直接从原题册 R2/本地读图
+            # 这条路径完全绕开 q_num 歧义，且无需 session，100% 准确
+            q_has_b64[i] = True   # 标记为"有图"，走 _encode_and_store
+            # 同步读取图片内容填入 img_bytes_b64（_encode_and_store 会用它）
+            try:
+                src_wb_id   = q.get('_src_wb_id', '')
+                src_board   = q.get('_src_board', '')
+                src_subject = q.get('_src_subject', '')
+                src_prefix  = _lib_key_prefix(src_board, src_subject, src_wb_id) if src_wb_id else ''
+                if not src_prefix:
+                    # 没有来源信息，遍历已知路径查找
+                    src_img_file = q['_src_img_file']
+                    _found_raw = None
+                    for _b in _EXAM_BOARDS:
+                        for _s in _SUBJECTS_MAP.get(_b, []):
+                            _pf = _lib_key_prefix(_b, _s, src_wb_id) if src_wb_id else ''
+                            if _pf:
+                                _raw_try = storage.load_bytes(f'{_pf}/{src_img_file}') if storage.is_r2_mode() else (
+                                    open(os.path.join(_pf, src_img_file), 'rb').read()
+                                    if os.path.isfile(os.path.join(_pf, src_img_file)) else None
+                                )
+                                if _raw_try:
+                                    _found_raw = _raw_try
+                                    break
+                        if _found_raw:
+                            break
+                    raw_img = _found_raw
+                else:
+                    src_img_file = q['_src_img_file']
+                    if storage.is_r2_mode():
+                        raw_img = storage.load_bytes(f'{src_prefix}/{src_img_file}')
+                    else:
+                        _fp = os.path.join(src_prefix, src_img_file)
+                        raw_img = open(_fp, 'rb').read() if os.path.isfile(_fp) else None
+                if raw_img:
+                    import base64 as _b64_pre
+                    q['img_bytes_b64'] = _b64_pre.b64encode(raw_img).decode('ascii')
+                    # 答案图片同理
+                    src_ans_file = q.get('_src_ans_file', '')
+                    if src_ans_file and src_prefix:
+                        if storage.is_r2_mode():
+                            raw_ans = storage.load_bytes(f'{src_prefix}/{src_ans_file}')
+                        else:
+                            _afp = os.path.join(src_prefix, src_ans_file)
+                            raw_ans = open(_afp, 'rb').read() if os.path.isfile(_afp) else None
+                        if raw_ans:
+                            q['answer_b64'] = _b64_pre.b64encode(raw_ans).decode('ascii')
+                else:
+                    # 读取失败，降级走裁图流程
+                    q_has_b64[i] = False
+                    q_sid = q.get('session_id_override', '') or session_id
+                    q_sess = _get_sess_cached(q_sid)
+                    file_idx = int(q.get('file_idx_override', q.get('file_idx', q.get('gIdx', 0))))
+                    file_idx_map[(q_sid, file_idx)].append((i, q, q_sess))
+            except Exception as _src_e:
+                app.logger.warning(f'[library_save] _src_img_file 直读失败: {_src_e}, 降级裁图')
+                q_has_b64[i] = False
+                q_sid = q.get('session_id_override', '') or session_id
+                q_sess = _get_sess_cached(q_sid)
+                file_idx = int(q.get('file_idx_override', q.get('file_idx', q.get('gIdx', 0))))
+                file_idx_map[(q_sid, file_idx)].append((i, q, q_sess))
         else:
             # 支持追加题目的 session_id_override（不同来源的题目）
             q_sid = q.get('session_id_override', '') or session_id
@@ -9756,20 +9818,39 @@ def _library_load_impl(wb_id):
 @app.route('/api/library/img/<wb_id>/<q_num_str>', methods=['GET'])
 def library_img_lazy(wb_id, q_num_str):
     """
-    懒加载单题图片。GET /api/library/img/<wb_id>/<q_num>?board=&subject=&type=q|a
+    懒加载单题图片。GET /api/library/img/<wb_id>/<q_num>?board=&subject=&type=q|a&img_file=xxx
     type=q: 返回题目图片; type=a: 返回答案图片
+    img_file: 可选，manifest 里的唯一文件名（如 q_005.jpg）。
+              ★ 优先用 img_file 精确定位，避免多套卷同 q_num 冲突导致图片张冠李戴。
+              无 img_file 时降级用 q_num（兼容旧调用）。
     返回: {ok, b64, w, h}
     """
     import base64 as _b64
-    board   = request.args.get('board', '')
-    subject = request.args.get('subject', '')
-    img_type = request.args.get('type', 'q')   # 'q' or 'a'
+    board    = request.args.get('board', '')
+    subject  = request.args.get('subject', '')
+    img_type = request.args.get('type', 'q')      # 'q' or 'a'
+    img_file_hint = request.args.get('img_file', '').strip()  # ★ 精确文件名
     try:
         q_num = int(q_num_str)
     except ValueError:
         return jsonify({'ok': False, 'error': 'invalid q_num'}), 400
 
     wb_prefix = _lib_key_prefix(board, subject, wb_id)
+
+    def _find_q_obj(q_list):
+        """按 img_file 精确匹配（首选），降级按 q_num 模糊匹配（兼容旧调用）"""
+        if img_file_hint:
+            # img_file 是 manifest 内全局唯一文件名，精确匹配不会冲突
+            target_field = 'ans_file' if img_type == 'a' else 'img_file'
+            obj = next((q for q in q_list if q.get(target_field, '') == img_file_hint), None)
+            if obj:
+                return obj
+            # img_file_hint 传的是题目图片名但 type=a，尝试用 img_file 锁定行再取 ans_file
+            obj = next((q for q in q_list if q.get('img_file', '') == img_file_hint), None)
+            if obj:
+                return obj
+        # 降级：按 q_num（旧逻辑，多套卷可能冲突）
+        return next((q for q in q_list if q.get('q_num') == q_num), None)
 
     # 从 manifest 找到对应题目的文件名
     if storage.is_r2_mode():
@@ -9786,7 +9867,7 @@ def library_img_lazy(wb_id, q_num_str):
         if not manifest:
             return jsonify({'ok': False, 'error': '题册不存在'}), 404
         q_list = manifest.get('questions', [])
-        q_obj  = next((q for q in q_list if q.get('q_num') == q_num), None)
+        q_obj  = _find_q_obj(q_list)
         if not q_obj:
             return jsonify({'ok': False, 'error': '题目不存在'}), 404
 
@@ -9812,7 +9893,7 @@ def library_img_lazy(wb_id, q_num_str):
             return jsonify({'ok': False, 'error': '题册不存在'}), 404
         with open(mfest, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
-        q_obj = next((q for q in manifest.get('questions', []) if q.get('q_num') == q_num), None)
+        q_obj = _find_q_obj(manifest.get('questions', []))
         if not q_obj:
             return jsonify({'ok': False, 'error': '题目不存在'}), 404
         file_name = q_obj.get('ans_file' if img_type == 'a' else 'img_file', '')
