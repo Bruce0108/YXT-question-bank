@@ -9201,8 +9201,13 @@ def _library_save_impl():
     saved_q = []
     # 按 (session_obj, file_idx) 分组，批量打开 PDF（避免同一文件反复 open/close）
     from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor as _SaveTPE, as_completed as _save_ac
+    import hashlib as _hl_save
+    import base64 as _b64
+
     file_idx_map = defaultdict(list)   # (sess_id_key, file_idx) -> [(list_pos, q_dict, sess_obj)]
-    q_has_b64    = {}                  # list_pos -> True/False（是否已有图片）
+    img_results  = {}                  # list_pos -> (img_file, img_w, img_h, ans_file, img_hash)
+    q_has_b64    = {}                  # list_pos -> True（步骤2降级时标记，供 late_b64_tasks 使用）
 
     # 构建 session_id -> sess 映射（支持 session_id_override）
     _sess_cache = {}
@@ -9211,136 +9216,152 @@ def _library_save_impl():
             _sess_cache[sid] = _get_session(sid) if sid else None
         return _sess_cache[sid]
 
+    # ── 任务分类 ──
+    # type-A: 已有 img_bytes_b64（直接压缩写入）
+    # type-B: 有 _src_img_file（并发从 R2/本地读图，再压缩写入）
+    # type-C: 走 PDF 裁图（session 裁图，保持原有串行逻辑）
+    type_a_tasks = []   # [(i, q)]
+    type_b_tasks = []   # [(i, q, src_prefix, src_img_file, src_ans_file)]
+
     for i, q in enumerate(questions):
         b64 = q.get('img_bytes_b64', '')
         if b64:
-            q_has_b64[i] = True
+            type_a_tasks.append((i, q))
         elif q.get('_src_img_file') and not q.get('_img_replaced'):
-            # ★ 题册来源题目且未手动替换：前端传来了精确文件名，直接从原题册 R2/本地读图
-            # 若 _img_replaced=True 则跳过此分支，使用前端传来的 img_bytes_b64
-            # 这条路径完全绕开 q_num 歧义，且无需 session，100% 准确
-            q_has_b64[i] = True   # 标记为"有图"，走 _encode_and_store
-            # 同步读取图片内容填入 img_bytes_b64（_encode_and_store 会用它）
-            try:
-                src_wb_id   = q.get('_src_wb_id', '')
-                src_board   = q.get('_src_board', '')
-                src_subject = q.get('_src_subject', '')
-                src_prefix  = _lib_key_prefix(src_board, src_subject, src_wb_id) if src_wb_id else ''
-                if not src_prefix:
-                    # 没有来源信息，遍历已知路径查找
-                    src_img_file = q['_src_img_file']
-                    _found_raw = None
-                    for _b in _EXAM_BOARDS:
-                        for _s in _SUBJECTS_MAP.get(_b, []):
-                            _pf = _lib_key_prefix(_b, _s, src_wb_id) if src_wb_id else ''
-                            if _pf:
-                                _raw_try = storage.load_bytes(f'{_pf}/{src_img_file}') if storage.is_r2_mode() else (
-                                    open(os.path.join(_pf, src_img_file), 'rb').read()
-                                    if os.path.isfile(os.path.join(_pf, src_img_file)) else None
-                                )
-                                if _raw_try:
-                                    _found_raw = _raw_try
-                                    break
-                        if _found_raw:
-                            break
-                    raw_img = _found_raw
-                else:
-                    src_img_file = q['_src_img_file']
-                    if storage.is_r2_mode():
-                        raw_img = storage.load_bytes(f'{src_prefix}/{src_img_file}')
-                    else:
-                        _fp = os.path.join(src_prefix, src_img_file)
-                        raw_img = open(_fp, 'rb').read() if os.path.isfile(_fp) else None
-                if raw_img:
-                    import base64 as _b64_pre
-                    q['img_bytes_b64'] = _b64_pre.b64encode(raw_img).decode('ascii')
-                    # 答案图片：仅在未手动替换时从 R2 读原始答案
-                    # 若 _answer_replaced=True，前端已传 answer_b64，保持不动
-                    if not q.get('_answer_replaced'):
-                        src_ans_file = q.get('_src_ans_file', '')
-                        if src_ans_file and src_prefix:
-                            if storage.is_r2_mode():
-                                raw_ans = storage.load_bytes(f'{src_prefix}/{src_ans_file}')
-                            else:
-                                _afp = os.path.join(src_prefix, src_ans_file)
-                                raw_ans = open(_afp, 'rb').read() if os.path.isfile(_afp) else None
-                            if raw_ans:
-                                q['answer_b64'] = _b64_pre.b64encode(raw_ans).decode('ascii')
-                else:
-                    # 读取失败，降级走裁图流程
-                    q_has_b64[i] = False
-                    q_sid = q.get('session_id_override', '') or session_id
-                    q_sess = _get_sess_cached(q_sid)
-                    file_idx = int(q.get('file_idx_override', q.get('file_idx', q.get('gIdx', 0))))
-                    file_idx_map[(q_sid, file_idx)].append((i, q, q_sess))
-            except Exception as _src_e:
-                app.logger.warning(f'[library_save] _src_img_file 直读失败: {_src_e}, 降级裁图')
-                q_has_b64[i] = False
-                q_sid = q.get('session_id_override', '') or session_id
-                q_sess = _get_sess_cached(q_sid)
-                file_idx = int(q.get('file_idx_override', q.get('file_idx', q.get('gIdx', 0))))
-                file_idx_map[(q_sid, file_idx)].append((i, q, q_sess))
+            # 题库来源且未替换：并发从 R2 读图
+            src_wb_id   = q.get('_src_wb_id', '')
+            src_board   = q.get('_src_board', '')
+            src_subject = q.get('_src_subject', '')
+            src_prefix  = _lib_key_prefix(src_board, src_subject, src_wb_id) if src_wb_id else ''
+            src_ans_file = q.get('_src_ans_file', '') if not q.get('_answer_replaced') else ''
+            type_b_tasks.append((i, q, src_prefix, q['_src_img_file'], src_ans_file))
         else:
-            # 支持追加题目的 session_id_override（不同来源的题目）
+            # PDF 裁图路径（type-C）
             q_sid = q.get('session_id_override', '') or session_id
             q_sess = _get_sess_cached(q_sid)
-            # 支持 file_idx_override（追加题目可能 file_idx 不同）
             file_idx = int(q.get('file_idx_override', q.get('file_idx', q.get('gIdx', 0))))
             file_idx_map[(q_sid, file_idx)].append((i, q, q_sess))
 
-    # ── 步骤1：处理已有 b64 的题目（直接写图片文件）── 并发上传加速
-    from concurrent.futures import ThreadPoolExecutor as _SaveTPE, as_completed as _save_ac
-    import hashlib as _hl_save
-    img_results = {}   # list_pos -> (img_file, img_w, img_h, ans_file, img_hash)
-
-    def _encode_and_store(args):
-        """将 base64 图片转 JPEG 并写入存储，返回 (i, img_fname, w, h, ans_fname, img_hash)"""
-        i, q = args
+    # ── 统一并发任务函数（type-A 和 type-B 共用）──
+    def _process_one(task_type, i, q,
+                     src_prefix='', src_img_file='', src_ans_file=''):
+        """
+        读取/解码图片 → 压缩 JPEG → 写入 R2/本地。
+        返回 (i, img_fname, w, h, ans_fname, img_hash)
+        task_type: 'a'=已有b64  'b'=从R2读取
+        """
         img_fname = f'q_{i+1:03d}.jpg'
         ans_fname = ''
         img_hash  = ''
         try:
-            raw = _b64.b64decode(q.get('img_bytes_b64', ''))
+            # ── 获取题目图片原始字节 ──
+            if task_type == 'a':
+                raw_img = _b64.b64decode(q.get('img_bytes_b64', ''))
+            else:
+                # type-b: 从 R2/本地读取
+                raw_img = None
+                if src_prefix:
+                    if storage.is_r2_mode():
+                        raw_img = storage.load_bytes(f'{src_prefix}/{src_img_file}')
+                    else:
+                        _fp = os.path.join(src_prefix, src_img_file)
+                        if os.path.isfile(_fp):
+                            with open(_fp, 'rb') as _fh:
+                                raw_img = _fh.read()
+                else:
+                    # 没有 src_prefix，遍历已知路径查找
+                    for _b2 in _EXAM_BOARDS:
+                        for _s2 in _SUBJECTS_MAP.get(_b2, []):
+                            src_wb_id2 = q.get('_src_wb_id', '')
+                            if not src_wb_id2:
+                                continue
+                            _pf = _lib_key_prefix(_b2, _s2, src_wb_id2)
+                            _raw_try = (storage.load_bytes(f'{_pf}/{src_img_file}')
+                                        if storage.is_r2_mode() else
+                                        (open(os.path.join(_pf, src_img_file), 'rb').read()
+                                         if os.path.isfile(os.path.join(_pf, src_img_file)) else None))
+                            if _raw_try:
+                                raw_img = _raw_try
+                                src_prefix = _pf  # 记录找到的前缀，答案用同一路径
+                                break
+                        if raw_img:
+                            break
+                if not raw_img:
+                    return (i, '', 0, 0, '', '')
+
+            # ── 压缩 JPEG 并写入 ──
             from PIL import Image as _PIL
-            _im = _PIL.open(io.BytesIO(raw))
+            _im = _PIL.open(io.BytesIO(raw_img))
             buf = io.BytesIO()
             _im.convert('RGB').save(buf, format='JPEG', quality=88)
             jpeg_data = buf.getvalue()
-            img_hash = _hl_save.md5(jpeg_data).hexdigest()  # ★ 写入时顺便计算，无需再读
+            img_hash  = _hl_save.md5(jpeg_data).hexdigest()
             if storage.is_r2_mode():
                 storage.store_bytes(f'{wb_prefix}/{img_fname}', jpeg_data)
             else:
                 with open(os.path.join(wb_prefix, img_fname), 'wb') as f:
                     f.write(jpeg_data)
             w, h = _im.width, _im.height
+
+            # ── 答案图片 ──
+            # type-a: 用 q['answer_b64']；type-b: 从 R2 读 src_ans_file
+            if task_type == 'a':
+                ans_raw_data = _b64.b64decode(q.get('answer_b64', '')) if q.get('answer_b64') else b''
+            else:
+                ans_raw_data = b''
+                if src_ans_file and src_prefix:
+                    if storage.is_r2_mode():
+                        _ar = storage.load_bytes(f'{src_prefix}/{src_ans_file}')
+                    else:
+                        _afp = os.path.join(src_prefix, src_ans_file)
+                        _ar = open(_afp, 'rb').read() if os.path.isfile(_afp) else None
+                    ans_raw_data = _ar or b''
+                elif q.get('answer_b64'):
+                    # answer_b64 由前端传来（替换答案或非R2来源）
+                    ans_raw_data = _b64.b64decode(q['answer_b64'])
+
+            if ans_raw_data:
+                ans_fname = f'q_{i+1:03d}_ans.jpg'
+                try:
+                    from PIL import Image as _PIL2
+                    _aim = _PIL2.open(io.BytesIO(ans_raw_data))
+                    abuf = io.BytesIO()
+                    _aim.convert('RGB').save(abuf, format='JPEG', quality=88)
+                    if storage.is_r2_mode():
+                        storage.store_bytes(f'{wb_prefix}/{ans_fname}', abuf.getvalue())
+                    else:
+                        with open(os.path.join(wb_prefix, ans_fname), 'wb') as f:
+                            f.write(abuf.getvalue())
+                except Exception:
+                    ans_fname = ''
+
+            return (i, img_fname, w, h, ans_fname, img_hash)
         except Exception:
             return (i, '', 0, 0, '', '')
 
-        # 答案图片
-        ans_b64 = q.get('answer_b64', '')
-        if ans_b64:
-            ans_fname = f'q_{i+1:03d}_ans.jpg'
-            try:
-                ans_raw = _b64.b64decode(ans_b64)
-                from PIL import Image as _PIL2
-                _aim = _PIL2.open(io.BytesIO(ans_raw))
-                abuf = io.BytesIO()
-                _aim.convert('RGB').save(abuf, format='JPEG', quality=88)
-                if storage.is_r2_mode():
-                    storage.store_bytes(f'{wb_prefix}/{ans_fname}', abuf.getvalue())
-                else:
-                    with open(os.path.join(wb_prefix, ans_fname), 'wb') as f:
-                        f.write(abuf.getvalue())
-            except Exception:
-                ans_fname = ''
-        return (i, img_fname, w, h, ans_fname, img_hash)
+    # ── 并发执行 type-A + type-B（合并进同一线程池，最大并发20）──
+    all_concurrent_tasks = (
+        [('a', i, q, '', '', '') for (i, q) in type_a_tasks] +
+        [(('b', i, q, sp, sif, saf)) for (i, q, sp, sif, saf) in type_b_tasks]
+    )
+    if all_concurrent_tasks:
+        with _SaveTPE(max_workers=20) as _ex:
+            futs = {
+                _ex.submit(_process_one, tt, i, q, sp, sif, saf): i
+                for (tt, i, q, sp, sif, saf) in all_concurrent_tasks
+            }
+            for fut in _save_ac(futs):
+                res_i, img_f, w, h, ans_f, i_hash = fut.result()
+                img_results[res_i] = (img_f, w, h, ans_f, i_hash)
 
-    b64_tasks = [(i, q) for i, q in enumerate(questions) if q_has_b64.get(i)]
-    if b64_tasks:
-        with _SaveTPE(max_workers=16) as _ex:
-            for fut in _save_ac([_ex.submit(_encode_and_store, t) for t in b64_tasks]):
-                i, img_f, w, h, ans_f, i_hash = fut.result()
-                img_results[i] = (img_f, w, h, ans_f, i_hash)
+    # type-B 失败的题目降级走裁图流程
+    for (i, q, sp, sif, saf) in type_b_tasks:
+        if img_results.get(i, ('',))[0] == '':
+            q_sid = q.get('session_id_override', '') or session_id
+            q_sess = _get_sess_cached(q_sid)
+            file_idx = int(q.get('file_idx_override', q.get('file_idx', q.get('gIdx', 0))))
+            file_idx_map[(q_sid, file_idx)].append((i, q, q_sess))
+            app.logger.warning(f'[library_save] type-B 读取失败 i={i}, 降级裁图')
 
     # ── 步骤2：从 PDF session 裁图（模式A）── 裁图串行，R2上传并发
     _r2_upload_queue = []   # [(key, data)] 待并发上传
@@ -9443,14 +9464,18 @@ def _library_save_impl():
             for (i, q, _qs) in items:
                 img_results[i] = ('', 0, 0, '', '')
 
-    # fallback 图片需补充处理（img_bytes_b64_fallback 降级为 b64 任务）
+    # fallback 图片需补充处理（img_bytes_b64_fallback 降级为 b64 任务，用 _process_one type-a 处理）
     late_b64_tasks = [(i, q) for i, q in enumerate(questions)
                       if q_has_b64.get(i) and i not in img_results]
     if late_b64_tasks:
         with _SaveTPE(max_workers=16) as _ex:
-            for fut in _save_ac([_ex.submit(_encode_and_store, t) for t in late_b64_tasks]):
-                i, img_f, w, h, ans_f, i_hash = fut.result()
-                img_results[i] = (img_f, w, h, ans_f, i_hash)
+            futs_late = {
+                _ex.submit(_process_one, 'a', i, q, '', '', ''): i
+                for (i, q) in late_b64_tasks
+            }
+            for fut in _save_ac(futs_late):
+                res_i, img_f, w, h, ans_f, i_hash = fut.result()
+                img_results[res_i] = (img_f, w, h, ans_f, i_hash)
 
     # R2 模式：并发上传所有裁图结果
     if storage.is_r2_mode() and _r2_upload_queue:
