@@ -6766,20 +6766,32 @@ def _build_pdf_merged_worker(task_id, groups_info, dpi, layout, out_path, total_
 
         # 若提供了 answer_visible_map（per-question 精确控制），优先使用它；
         # 否则回退到全局 include_answer 开关。
+        # ★ 重要：这里不能直接修改 ginfo['questions'] 里的原始字典（那是 session 的引用）！
+        # 否则"仅题目"导出后，session 里的 answer_b64 被 pop，下次"题目+答案"就没有答案了。
+        # 解决方案：把每道需要隐藏答案的题做浅拷贝，替换掉 ginfo['questions'] 里的引用。
         if answer_visible_map:
             # 对每道题根据 answer_visible_map 决定是否保留 answer_b64
             for ginfo in groups_info:
                 g_idx = ginfo['g_idx']
+                new_qs = []
                 for q in ginfo.get('questions', []):
                     uid = f"{g_idx}_{q['q_num']}"
                     visible = answer_visible_map.get(uid, include_answer)
-                    if not visible:
+                    if not visible and q.get('answer_b64'):
+                        q = dict(q)          # 浅拷贝，不污染 session 原始数据
                         q.pop('answer_b64', None)
+                    new_qs.append(q)
+                ginfo['questions'] = new_qs
         elif not include_answer:
-            # 全局开关：不包含答案，清除所有题目的 answer_b64
+            # 全局开关：不包含答案，清除所有题目的 answer_b64（同样用拷贝，不污染 session）
             for ginfo in groups_info:
+                new_qs = []
                 for q in ginfo.get('questions', []):
-                    q.pop('answer_b64', None)
+                    if q.get('answer_b64'):
+                        q = dict(q)
+                        q.pop('answer_b64', None)
+                    new_qs.append(q)
+                ginfo['questions'] = new_qs
 
         # ── 封面页 ──
         if cover_title:

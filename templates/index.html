@@ -3803,7 +3803,8 @@ function openPdfModal(scope) {
   _syncPdfQualityRadio('high');
 
   // 根据本次导出范围内是否有题目带答案，决定是否显示导出模式选项
-  const hasAnswerInScope = nums.some(q => q && q.answer_b64);
+  // ★ 修复：懒加载题目 answer_b64=''，但 has_answer=true 表示服务端有答案，需一并判断
+  const hasAnswerInScope = nums.some(q => q && (q.answer_b64 || q.has_answer));
   const wrap = document.getElementById('pdfAnswerToggleWrap');
   if (wrap) wrap.style.display = hasAnswerInScope ? '' : 'none';
   // 若无答案题目，重置回 question_only 状态
