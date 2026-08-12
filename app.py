@@ -9215,8 +9215,9 @@ def _library_save_impl():
         b64 = q.get('img_bytes_b64', '')
         if b64:
             q_has_b64[i] = True
-        elif q.get('_src_img_file'):
-            # ★ 题册来源题目：前端传来了精确文件名，直接从原题册 R2/本地读图
+        elif q.get('_src_img_file') and not q.get('_img_replaced'):
+            # ★ 题册来源题目且未手动替换：前端传来了精确文件名，直接从原题册 R2/本地读图
+            # 若 _img_replaced=True 则跳过此分支，使用前端传来的 img_bytes_b64
             # 这条路径完全绕开 q_num 歧义，且无需 session，100% 准确
             q_has_b64[i] = True   # 标记为"有图"，走 _encode_and_store
             # 同步读取图片内容填入 img_bytes_b64（_encode_and_store 会用它）
@@ -9253,16 +9254,18 @@ def _library_save_impl():
                 if raw_img:
                     import base64 as _b64_pre
                     q['img_bytes_b64'] = _b64_pre.b64encode(raw_img).decode('ascii')
-                    # 答案图片同理
-                    src_ans_file = q.get('_src_ans_file', '')
-                    if src_ans_file and src_prefix:
-                        if storage.is_r2_mode():
-                            raw_ans = storage.load_bytes(f'{src_prefix}/{src_ans_file}')
-                        else:
-                            _afp = os.path.join(src_prefix, src_ans_file)
-                            raw_ans = open(_afp, 'rb').read() if os.path.isfile(_afp) else None
-                        if raw_ans:
-                            q['answer_b64'] = _b64_pre.b64encode(raw_ans).decode('ascii')
+                    # 答案图片：仅在未手动替换时从 R2 读原始答案
+                    # 若 _answer_replaced=True，前端已传 answer_b64，保持不动
+                    if not q.get('_answer_replaced'):
+                        src_ans_file = q.get('_src_ans_file', '')
+                        if src_ans_file and src_prefix:
+                            if storage.is_r2_mode():
+                                raw_ans = storage.load_bytes(f'{src_prefix}/{src_ans_file}')
+                            else:
+                                _afp = os.path.join(src_prefix, src_ans_file)
+                                raw_ans = open(_afp, 'rb').read() if os.path.isfile(_afp) else None
+                            if raw_ans:
+                                q['answer_b64'] = _b64_pre.b64encode(raw_ans).decode('ascii')
                 else:
                     # 读取失败，降级走裁图流程
                     q_has_b64[i] = False

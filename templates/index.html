@@ -5173,53 +5173,67 @@ async function confirmSaveLib() {
         source:     q.source   || '',
       };
 
-      // 判断是否"无原始 PDF session 可用"的题目：
-      //   1. source === 'workbook' / 'cloud'：显式题册/云端来源
-      //   2. _lazy_wb_id 有值：题目从某个题册加载（含 source='bpho'/'cambridge' 等二次加载题目）
-      //   3. _img_replaced：用户手动替换了图片，不能走 PDF 裁图（否则覆盖用户图片）
-      // 以上情况均直接用内存 _img_b64，不走后端 PDF 裁图
-      const _fromWorkbook = q._lazy_wb_id || q.source === 'workbook' || q.source === 'cloud';
+      // 判断来源类型
+      //   _fromWorkbook: 从题库加载的题目（有 _lazy_wb_id 或 source=workbook/cloud）
+      //   _img_replaced:  用户在本次会话中手动替换了题目图片
+      //   _answer_replaced: 用户在本次会话中手动替换了答案图片
+      const _fromWorkbook    = !!(q._lazy_wb_id || q.source === 'workbook' || q.source === 'cloud');
+      const _imgReplaced     = !!q._img_replaced;
+      const _ansReplaced     = !!q._answer_replaced;
 
-      if (_fromWorkbook) {
-        // ★ 题库来源题目：优先传 _img_file 让后端直读 R2，避免大 payload
-        // 只有没有 _img_file 时才传 img_bytes_b64（兜底）
+      // ── 题目图片处理 ──
+      if (_imgReplaced && q._img_b64) {
+        // ★ 用户替换了图片（不论来源）：必须传 base64，后端用新图覆盖
+        entry.img_bytes_b64    = q._img_b64;
+        entry.img_w            = q._img_w || 0;
+        entry.img_h            = q._img_h || 0;
+        entry._img_replaced    = true;   // 告知后端这是替换图，不要走 R2 直读
+      } else if (_fromWorkbook) {
+        // 题库来源且未替换：优先让后端直读 R2（传文件名，避免大 payload）
         if (q._img_file) {
-          // 有精确文件名 → 后端直读 R2，不传图片 base64（节省几十MB传输）
           entry._src_img_file  = q._img_file;
           entry._src_wb_id     = q._lazy_wb_id || '';
           entry._src_board     = q._lazy_board  || '';
           entry._src_subject   = q._lazy_subject || '';
         } else if (q._img_b64) {
-          // 没有 _img_file（如手动导入的 .wb 文件）：回退传 base64
+          // 无文件名（如 .wb 本地导入）：回退传 base64
           entry.img_bytes_b64 = q._img_b64;
           entry.img_w         = q._img_w || 0;
           entry.img_h         = q._img_h || 0;
         }
-        if (q._ans_file) {
-          entry._src_ans_file = q._ans_file;
-        } else if (q.answer_b64 && !q._img_file) {
-          // 答案同理：有 ans_file 的走后端直读，否则传 b64
-          entry.answer_b64 = q.answer_b64;
-        }
       } else if (q._img_replaced) {
-        // 用户已手动替换图片：直接用替换后的 _img_b64，不走 PDF 抓图（否则覆盖用户图片）
+        // 普通 PDF 会话题目替换图片
         entry.img_bytes_b64 = q._img_b64;
         entry.img_w         = q._img_w || 0;
         entry.img_h         = q._img_h || 0;
       } else {
-        // 当前会话直传 PDF 来源：让后端模式A自行裁300dpi高清图（无需前端传图）
-        // 追加的题目需告知后端使用哪个 session + file_idx
+        // 普通 PDF 会话：让后端自行高清裁图
         if (q._append_session_id) {
           entry.session_id_override = q._append_session_id;
           entry.file_idx_override   = q._append_file_idx ?? q.gIdx;
         }
-        // 若内存中已有缓存图（低分辨率预览），作为 fallback（后端找不到 session 时用）
         if (q._img_b64) {
           entry.img_bytes_b64_fallback = q._img_b64;
         }
       }
 
-      if (q.answer_b64)     entry.answer_b64     = q.answer_b64;
+      // ── 答案图片处理 ──
+      if (_ansReplaced && (q.answer_b64 || q._answer_b64)) {
+        // ★ 用户替换了答案（不论来源）：必须传 base64
+        entry.answer_b64       = q.answer_b64 || q._answer_b64;
+        entry._answer_replaced = true;   // 告知后端这是替换答案
+      } else if (_fromWorkbook && !_ansReplaced) {
+        // 题库来源未替换答案：优先后端直读 R2
+        if (q._ans_file) {
+          entry._src_ans_file = q._ans_file;
+        } else if (q.answer_b64) {
+          entry.answer_b64 = q.answer_b64;
+        }
+      } else if (q.answer_b64) {
+        // 普通来源有答案
+        entry.answer_b64 = q.answer_b64;
+      }
+
       if (q.answer_pages)   entry.answer_pages   = q.answer_pages;
       if (q.ai_text_answer) entry.ai_text_answer = q.ai_text_answer;
       questionsPayload.push(entry);
