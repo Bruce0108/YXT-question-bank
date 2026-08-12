@@ -3046,7 +3046,7 @@ function _syncToggleAllAnsBtn() {
 
 // ── 更新全局答案切换按钮可见性（与 PDF Modal 的答案选项分离）──
 function _updatePdfAnswerToggle() {
-  const hasAnyAnswer = allQuestions.some(q => q.answer_b64);
+  const hasAnyAnswer = allQuestions.some(q => q.answer_b64 || q.has_answer);
   const allAnsWrap = document.getElementById('toggleAllAnsWrap');
   if (allAnsWrap) allAnsWrap.style.display = hasAnyAnswer ? '' : 'none';
 }
