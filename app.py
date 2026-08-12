@@ -7226,6 +7226,8 @@ def update_question_meta():
     body: {session_id, g_idx, q_num, field:'topics'|'difficulty', value: ...}
     topics value: [{id, title}] 或字符串 chapter_id
     difficulty value: 1-5 整数
+
+    若 session_id 以 'wb_' 开头（题库题目），同步持久化修改到 manifest.json。
     """
     data = request.json
     sess_id = data.get('session_id')
@@ -7241,8 +7243,26 @@ def update_question_meta():
     if not sess or g_idx >= len(sess):
         return jsonify({'error': 'session不存在'}), 400
 
-    questions = sess[g_idx]['questions']
-    q_obj = next((q for q in questions if q.get('q_num') == q_num), None)
+    group     = sess[g_idx]
+    questions = group['questions']
+
+    # 题库 session 用 _wb_seq 精确定位；普通 session 用 q_num
+    wb_prefix  = group.get('_wb_prefix', '')
+    wb_manifest = group.get('_wb_manifest')  # 原始 manifest dict（直接修改后写回）
+    is_wb_sess = sess_id.startswith('wb_') and wb_prefix
+
+    if is_wb_sess:
+        # 题库题目：前端传来的 q_num 对应 manifest 里的序号；
+        # virt_questions 里 '_wb_seq' 是 manifest questions 的 0-based index
+        # 用 '_wb_seq' 精确定位，避免多套卷 q_num 重复问题
+        _wb_seq_hint = data.get('_wb_seq')  # 前端可选传
+        if _wb_seq_hint is not None:
+            q_obj = next((q for q in questions if q.get('_wb_seq') == _wb_seq_hint), None)
+        else:
+            q_obj = next((q for q in questions if q.get('q_num') == q_num), None)
+    else:
+        q_obj = next((q for q in questions if q.get('q_num') == q_num), None)
+
     if q_obj is None:
         return jsonify({'error': f'题目 {q_num} 不存在'}), 404
 
@@ -7275,6 +7295,34 @@ def update_question_meta():
             q_obj['topics'] = value
         else:
             return jsonify({'error': 'topics 格式错误'}), 400
+
+    # ── 题库题目：持久化修改到 manifest.json ──
+    if is_wb_sess and wb_manifest:
+        try:
+            # q_obj['_wb_seq'] 是 manifest questions 的 0-based index
+            _seq = q_obj.get('_wb_seq')
+            mq_list = wb_manifest.get('questions', [])
+            # 找到 manifest 里对应的题目（seq 字段是 1-based，_wb_seq 是 0-based）
+            mq = None
+            if _seq is not None and 0 <= _seq < len(mq_list):
+                mq = mq_list[_seq]
+            else:
+                # fallback: 用 q_num 匹配
+                mq = next((q for q in mq_list if q.get('q_num') == q_num), None)
+            if mq is not None:
+                mq[field] = q_obj[field]   # 同步到 manifest dict
+            # 写回存储
+            if storage.is_r2_mode():
+                storage.store_json(f'{wb_prefix}/manifest.json', wb_manifest)
+            else:
+                mf_path = os.path.join(wb_prefix, 'manifest.json')
+                with open(mf_path, 'w', encoding='utf-8') as _mf:
+                    json.dump(wb_manifest, _mf, ensure_ascii=False, indent=2)
+            app.logger.info(f'[update_question_meta] 已持久化 wb={wb_prefix!r} '
+                            f'q_num={q_num} field={field!r}')
+        except Exception as _pe:
+            # 持久化失败不阻断请求，只记录日志
+            app.logger.warning(f'[update_question_meta] 持久化失败: {_pe}')
 
     return jsonify({'ok': True, 'q_num': q_num, 'field': field,
                     'new_value': q_obj.get(field)})
@@ -9239,27 +9287,31 @@ def _library_save_impl():
 
     # ── 步骤1：处理已有 b64 的题目（直接写图片文件）── 并发上传加速
     from concurrent.futures import ThreadPoolExecutor as _SaveTPE, as_completed as _save_ac
-    img_results = {}   # list_pos -> (img_file, img_w, img_h, ans_file)
+    import hashlib as _hl_save
+    img_results = {}   # list_pos -> (img_file, img_w, img_h, ans_file, img_hash)
 
     def _encode_and_store(args):
-        """将 base64 图片转 JPEG 并写入存储，返回 (i, img_fname, w, h, ans_fname)"""
+        """将 base64 图片转 JPEG 并写入存储，返回 (i, img_fname, w, h, ans_fname, img_hash)"""
         i, q = args
         img_fname = f'q_{i+1:03d}.jpg'
         ans_fname = ''
+        img_hash  = ''
         try:
             raw = _b64.b64decode(q.get('img_bytes_b64', ''))
             from PIL import Image as _PIL
             _im = _PIL.open(io.BytesIO(raw))
             buf = io.BytesIO()
             _im.convert('RGB').save(buf, format='JPEG', quality=88)
+            jpeg_data = buf.getvalue()
+            img_hash = _hl_save.md5(jpeg_data).hexdigest()  # ★ 写入时顺便计算，无需再读
             if storage.is_r2_mode():
-                storage.store_bytes(f'{wb_prefix}/{img_fname}', buf.getvalue())
+                storage.store_bytes(f'{wb_prefix}/{img_fname}', jpeg_data)
             else:
                 with open(os.path.join(wb_prefix, img_fname), 'wb') as f:
-                    f.write(buf.getvalue())
+                    f.write(jpeg_data)
             w, h = _im.width, _im.height
         except Exception:
-            return (i, '', 0, 0, '')
+            return (i, '', 0, 0, '', '')
 
         # 答案图片
         ans_b64 = q.get('answer_b64', '')
@@ -9278,14 +9330,14 @@ def _library_save_impl():
                         f.write(abuf.getvalue())
             except Exception:
                 ans_fname = ''
-        return (i, img_fname, w, h, ans_fname)
+        return (i, img_fname, w, h, ans_fname, img_hash)
 
     b64_tasks = [(i, q) for i, q in enumerate(questions) if q_has_b64.get(i)]
     if b64_tasks:
         with _SaveTPE(max_workers=16) as _ex:
             for fut in _save_ac([_ex.submit(_encode_and_store, t) for t in b64_tasks]):
-                i, img_f, w, h, ans_f = fut.result()
-                img_results[i] = (img_f, w, h, ans_f)
+                i, img_f, w, h, ans_f, i_hash = fut.result()
+                img_results[i] = (img_f, w, h, ans_f, i_hash)
 
     # ── 步骤2：从 PDF session 裁图（模式A）── 裁图串行，R2上传并发
     _r2_upload_queue = []   # [(key, data)] 待并发上传
@@ -9302,7 +9354,7 @@ def _library_save_impl():
                     q['img_bytes_b64'] = fb  # 降级为 fallback
                     q_has_b64[i] = True
                 else:
-                    img_results[i] = ('', 0, 0, '')
+                    img_results[i] = ('', 0, 0, '', '')
             continue
 
         group      = q_sess[file_idx]
@@ -9318,7 +9370,7 @@ def _library_save_impl():
                     q['img_bytes_b64'] = fb
                     q_has_b64[i] = True
                 else:
-                    img_results[i] = ('', 0, 0, '')
+                    img_results[i] = ('', 0, 0, '', '')
             continue
 
         try:
@@ -9333,7 +9385,7 @@ def _library_save_impl():
                         q['img_bytes_b64'] = fb
                         q_has_b64[i] = True
                     else:
-                        img_results[i] = ('', 0, 0, '')
+                        img_results[i] = ('', 0, 0, '', '')
                     continue
                 try:
                     img_bytes, w, h = crop_question_image(
@@ -9374,18 +9426,19 @@ def _library_save_impl():
                         except Exception:
                             ans_fname = ''
 
-                    img_results[i] = (img_file, w, h, ans_fname)
+                    img_results[i] = (img_file, w, h, ans_fname,
+                                          _hl_save.md5(jpeg_data).hexdigest())  # ★ 裁图路径也顺便算hash
                 except Exception:
                     fb = q.get('img_bytes_b64_fallback', '')
                     if fb:
                         q['img_bytes_b64'] = fb
                         q_has_b64[i] = True
                     else:
-                        img_results[i] = ('', 0, 0, '')
+                        img_results[i] = ('', 0, 0, '', '')
             doc.close()
         except Exception:
             for (i, q, _qs) in items:
-                img_results[i] = ('', 0, 0, '')
+                img_results[i] = ('', 0, 0, '', '')
 
     # fallback 图片需补充处理（img_bytes_b64_fallback 降级为 b64 任务）
     late_b64_tasks = [(i, q) for i, q in enumerate(questions)
@@ -9393,8 +9446,8 @@ def _library_save_impl():
     if late_b64_tasks:
         with _SaveTPE(max_workers=16) as _ex:
             for fut in _save_ac([_ex.submit(_encode_and_store, t) for t in late_b64_tasks]):
-                i, img_f, w, h, ans_f = fut.result()
-                img_results[i] = (img_f, w, h, ans_f)
+                i, img_f, w, h, ans_f, i_hash = fut.result()
+                img_results[i] = (img_f, w, h, ans_f, i_hash)
 
     # R2 模式：并发上传所有裁图结果
     if storage.is_r2_mode() and _r2_upload_queue:
@@ -9404,24 +9457,9 @@ def _library_save_impl():
             list(_ex.map(_r2_upload, _r2_upload_queue))
 
 
-    # ── 步骤3：构建 manifest ──
-    import hashlib as _hl_save
+    # ── 步骤3：构建 manifest（hash 已在写入时计算，无需再读 R2）──
     for i, q in enumerate(questions):
-        img_file, img_w, img_h, ans_file = img_results.get(i, ('', 0, 0, ''))
-        # 计算图片内容 MD5 哈希，用于后续读取时内容级去重
-        img_hash = ''
-        if img_file:
-            try:
-                if storage.is_r2_mode():
-                    _raw_for_hash = storage.load_bytes(f'{wb_prefix}/{img_file}')
-                else:
-                    _img_fpath = os.path.join(wb_prefix, img_file)
-                    with open(_img_fpath, 'rb') as _fh:
-                        _raw_for_hash = _fh.read()
-                if _raw_for_hash:
-                    img_hash = _hl_save.md5(_raw_for_hash).hexdigest()
-            except Exception:
-                img_hash = ''
+        img_file, img_w, img_h, ans_file, img_hash = img_results.get(i, ('', 0, 0, '', ''))
         saved_q.append({
             'seq':        i + 1,
             'q_num':      q.get('q_num', i + 1),
@@ -9431,10 +9469,10 @@ def _library_save_impl():
             'exam_date':  q.get('exam_date', ''),
             'source':     q.get('source', ''),
             'img_file':   img_file,
-            'img_hash':   img_hash,   # 图片内容 MD5，用于内容级去重
+            'img_hash':   img_hash,   # 图片内容 MD5，写入时顺便算，无需重读
             'img_w':      img_w,
             'img_h':      img_h,
-            'ans_file':   ans_file,   # Task1: 答案图片文件名
+            'ans_file':   ans_file,
         })
 
     success_count = sum(1 for q in saved_q if q.get('img_file'))
@@ -9569,6 +9607,9 @@ def _register_workbook_session(wb_id: str, manifest: dict, questions_out: list,
         'questions':       virt_questions,
         'total_questions': len(virt_questions),
         'total_pages':     0,
+        '_wb_prefix':      wb_prefix,   # ★ 持久化路径，update_question_meta 用来写 manifest
+        '_wb_id':          wb_id,        # ★ 题册 ID
+        '_wb_manifest':    manifest,     # ★ 原始 manifest 引用（dict，直接修改后写回）
     }
     with _multi_sessions_lock:
         _multi_sessions[sess_id] = [virt_group]
@@ -10128,14 +10169,14 @@ def library_append(wb_id):
                     ans_fname = ''
             img_results[i] = (img_fname, w, h, ans_fname)
         except Exception:
-            img_results[i] = ('', 0, 0, '')
+            img_results[i] = ('', 0, 0, '', '')
 
     # 裁图（从原始 PDF session 中裁取）
     if sess and file_idx_map:
         for file_idx, items in file_idx_map.items():
             if file_idx >= len(sess):
                 for (i, q) in items:
-                    img_results[i] = ('', 0, 0, '')
+                    img_results[i] = ('', 0, 0, '', '')
                 continue
             grp = sess[file_idx]
             pdf_path = grp.get('path', '')
@@ -10216,14 +10257,14 @@ def library_append(wb_id):
                                 break
                         img_results[i] = (img_fname, w, h, ans_fname)
                     else:
-                        img_results[i] = ('', 0, 0, '')
+                        img_results[i] = ('', 0, 0, '', '')
 
                 if doc:
                     doc.close()
             except Exception as e:
                 print(f'[library/append] 裁图异常 file_idx={file_idx}: {e}')
                 for (i, q) in items:
-                    img_results[i] = ('', 0, 0, '')
+                    img_results[i] = ('', 0, 0, '', '')
 
     # ── 构建新增题目条目，并计算 img_hash 用于内容级去重 ──
     import hashlib as _hl_append

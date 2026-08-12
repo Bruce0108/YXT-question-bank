@@ -4157,17 +4157,20 @@ let _editMeta = { uid: null, gIdx: null, qNum: null, diff: null, topicId: null }
 
 function setDiffQuick(uid, gIdx, qNum, stars, e) {
   if (e) e.stopPropagation();
-  // 直接调用 API 设置难度
+  // 精确定位 qObj（uid 优先，支持 _seq）
+  const _qObj = _uidToQ(uid);
+  const _sid  = (_qObj && _qObj._append_session_id) ? _qObj._append_session_id : sessionId;
+  const _gIdx = (_qObj && _qObj._append_session_id) ? (_qObj._append_file_idx ?? gIdx) : gIdx;
+  const _wbSeq = (_qObj && _qObj._seq != null) ? _qObj._seq : null;
   fetch('/api/update_question_meta', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({session_id: sessionId, g_idx: gIdx, q_num: qNum,
-                          field: 'difficulty', value: stars})
+    body: JSON.stringify({session_id: _sid, g_idx: _gIdx, q_num: qNum,
+                          field: 'difficulty', value: stars, _wb_seq: _wbSeq})
   }).then(r => r.json()).then(d => {
     if (d.ok) {
-      // 更新内存中的 allQuestions
-      const q = allQuestions.find(x => x.gIdx === gIdx && x.q_num === qNum);
-      if (q) q.difficulty = stars;
+      // 更新内存中的 allQuestions（用精确 qObj 定位）
+      if (_qObj) _qObj.difficulty = stars;
       // 只刷新这张卡片
       renderGrid();
       toast(`Q${String(qNum).padStart(2,'0')} 难度已设为 ${stars} 星`, 'ok');
@@ -4641,6 +4644,8 @@ async function _commitCurrentEdit(showToast) {
   const _isAppend = _qObj && _qObj._append_session_id != null;
   const _useSid   = _isAppend ? _qObj._append_session_id : sessionId;
   const _useGIdx  = _isAppend ? (_qObj._append_file_idx ?? gIdx) : gIdx;
+  // 题库题目：传 _wb_seq（manifest 0-based index）让后端精确定位，避免多套卷 q_num 重复
+  const _wbSeq = (_qObj && _qObj._seq != null) ? _qObj._seq : null;
 
   // 无有效 session 时只写内存，不报错（离线模式）
   if (!_useSid) {
@@ -4654,12 +4659,14 @@ async function _commitCurrentEdit(showToast) {
       fetch('/api/update_question_meta', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ session_id: _useSid, g_idx: _useGIdx, q_num: qNum,
-                               field: 'difficulty', value: diff })
+                               field: 'difficulty', value: diff,
+                               _wb_seq: _wbSeq })
       }).then(r => r.json()),
       fetch('/api/update_question_meta', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ session_id: _useSid, g_idx: _useGIdx, q_num: qNum,
-                               field: 'topics', value: topicsArr.length ? topicsArr : [] })
+                               field: 'topics', value: topicsArr.length ? topicsArr : [],
+                               _wb_seq: _wbSeq })
       }).then(r => r.json()),
     ]);
 
