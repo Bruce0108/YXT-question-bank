@@ -2289,6 +2289,8 @@ function renderGrid() {
         tok,
         appendSid:  q._append_session_id  || null,
         appendFIdx: q._append_session_id != null ? (q._append_file_idx ?? q.gIdx) : null,
+        // ★ manifest 序号，用于后端精确定位（当 img_file 为空时作为次选）
+        q_seq:   q.seq != null ? q.seq : null,
       });
       procThumbQ();
     });
@@ -2579,7 +2581,12 @@ function openAiSolution(uid, qNum, gIdx, e) {
     // 懒加载图片后再请求AI
     const loadingBox = document.getElementById('aiSolContent');
     if (loadingBox) loadingBox.innerHTML = '<div style="text-align:center;padding:40px;color:#888">⏳ 正在加载题目图片…</div>';
-    fetch(`/api/library/img/${wbId}/${qNum}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&type=q`)
+    // ★ 关键修复：传 img_file 精确定位，避免多套卷同 q_num 错位
+    const _aiImgFile = qObj ? qObj._img_file : '';
+    const _aiImgFileParam = _aiImgFile ? `&img_file=${encodeURIComponent(_aiImgFile)}` : '';
+    const _aiAnsFile = qObj ? qObj._ans_file : '';
+    const _aiAnsFileParam = _aiAnsFile ? `&img_file=${encodeURIComponent(_aiAnsFile)}` : '';
+    fetch(`/api/library/img/${wbId}/${qNum}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&type=q${_aiImgFileParam}`)
       .then(r => r.json())
       .then(d => {
         if (d.ok && d.b64) {
@@ -2588,7 +2595,7 @@ function openAiSolution(uid, qNum, gIdx, e) {
           if (loadingBox2) loadingBox2.innerHTML = '<div style="text-align:center;padding:40px;color:#888">🤖 正在生成解析，请稍候（约15-30秒）…</div>';
           // 同时拉答案图片
           if (ansB64) { _doAI(d.b64, ansB64); return; }
-          fetch(`/api/library/img/${wbId}/${qNum}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&type=a`)
+          fetch(`/api/library/img/${wbId}/${qNum}?board=${encodeURIComponent(board)}&subject=${encodeURIComponent(subject)}&type=a${_aiAnsFileParam}`)
             .then(r2 => r2.json())
             .then(d2 => _doAI(d.b64, d2.ok ? d2.b64 : ''))
             .catch(() => _doAI(d.b64, ''));
@@ -2883,7 +2890,10 @@ async function _loadAnswerPages(uid, ansWrap) {
   const _wbSubject = (_qObj && _qObj._lazy_subject) || (_loadedWb && _loadedWb.subject) || '';
   if (_wbId) {
     try {
-      const r = await fetch(`/api/library/img/${_wbId}/${qNum}?board=${encodeURIComponent(_wbBoard)}&subject=${encodeURIComponent(_wbSubject)}&type=a`);
+      // ★ 关键修复：传 ans_file / img_file 精确定位答案图，避免多套卷同 q_num 图片错位
+      const _ansFileParam = (_qObj && _qObj._ans_file)
+        ? `&img_file=${encodeURIComponent(_qObj._ans_file)}` : '';
+      const r = await fetch(`/api/library/img/${_wbId}/${qNum}?board=${encodeURIComponent(_wbBoard)}&subject=${encodeURIComponent(_wbSubject)}&type=a${_ansFileParam}`);
       const d = await r.json();
       if (d.ok && d.b64) {
         const mime = d.b64.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
@@ -3086,7 +3096,7 @@ function toggleAllAnswers() {
 
 function procThumbQ() {
   while (thumbIng < MAX_CO && thumbQ.length > 0) {
-    const { q_num, gIdx, uid, tok, appendSid, appendFIdx } = thumbQ.shift();
+    const { q_num, gIdx, uid, tok, appendSid, appendFIdx, q_seq } = thumbQ.shift();
     if (tok !== uploadToken) { procThumbQ(); continue; }
     thumbIng++;
     const img = document.getElementById(`th-${uid}`);
@@ -3113,7 +3123,12 @@ function procThumbQ() {
       const _board = encodeURIComponent(qObj._lazy_board || '');
       const _subj  = encodeURIComponent(qObj._lazy_subject || '');
       const _capTok = tok;
-      fetch(`/api/library/img/${_wbId}/${qObj.q_num}?board=${_board}&subject=${_subj}&type=q`)
+      // ★ 关键修复：必须传 img_file 精确定位，避免多套卷中相同 q_num 导致图片错位
+      // 例：BPhO 10套卷每套都有 Q1-Q21，若仅靠 q_num 则所有 Q1 都会加载第一套卷的 Q1 图
+      const _imgFileParam = qObj._img_file ? `&img_file=${encodeURIComponent(qObj._img_file)}` : '';
+      // 次选：manifest 序号（当 img_file 为空时提供额外精确定位，避免旧数据降级到 q_num）
+      const _qSeqParam = (!qObj._img_file && q_seq != null) ? `&q_seq=${q_seq}` : '';
+      fetch(`/api/library/img/${_wbId}/${qObj.q_num}?board=${_board}&subject=${_subj}&type=q${_imgFileParam}${_qSeqParam}`)
         .then(r => r.json())
         .then(d => {
           if (_capTok !== uploadToken) { thumbIng--; procThumbQ(); return; }
@@ -5814,6 +5829,7 @@ function _applyLoadedWorkbook(d) {
       maths_unit:    g.maths_unit,
       gIdx:          newGIdx,
       _seq:          baseSeq + _pushIdx,    // 全局唯一序号，用于 uid 定位
+      seq:           q.seq ?? null,         // manifest 原始序号，用于后端 q_seq 精确定位
       // 图片缓存（base64）
       _img_b64:      q.img_bytes_b64 || '',
       _img_w:        q.img_w || 0,

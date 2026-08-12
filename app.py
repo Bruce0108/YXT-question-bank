@@ -9645,6 +9645,20 @@ def _library_load_impl(wb_id):
 
         q_list = manifest.get('questions', [])
 
+        # ── 诊断日志：打印 manifest 实际内容摘要（排查重复/img_file问题）──
+        _diag_total = len(q_list)
+        _diag_with_hash  = sum(1 for _q in q_list if _q.get('img_hash','').strip())
+        _diag_with_imgf  = sum(1 for _q in q_list if _q.get('img_file','').strip())
+        _diag_imgf_vals  = [_q.get('img_file','') for _q in q_list[:5]]  # 前5个
+        _diag_dup_imgf   = len(q_list) - len(set(_q.get('img_file','') for _q in q_list))
+        _diag_dup_hash   = len(q_list) - len(set(_q.get('img_hash','') for _q in q_list if _q.get('img_hash','')))
+        app.logger.info(
+            f'[library_load DIAG] wb={wb_id!r} total={_diag_total} '
+            f'with_hash={_diag_with_hash} with_imgfile={_diag_with_imgf} '
+            f'dup_imgfile={_diag_dup_imgf} dup_hash={_diag_dup_hash} '
+            f'first5_imgfile={_diag_imgf_vals!r}'
+        )
+
         # ── 去重：优先按 img_hash（图片内容MD5）去重，无 hash 时降级用 img_file ──
         # img_hash 方案可识别内容相同但文件名不同的重复（如重复追加同套PDF）
         # img_file 降级可兼容旧版 manifest（无 img_hash 字段）
@@ -9740,6 +9754,7 @@ def _library_load_impl(wb_id):
                     'has_answer':    bool(imgs['ans_b64']),
                     '_img_file':     q.get('img_file', ''),   # 全局唯一，用于前端去重
                     '_img_hash':     q.get('img_hash', ''),   # 内容MD5，用于前端去重
+                    '_ans_file':     q.get('ans_file', ''),   # 答案文件名，用于精确定位
                 })
     else:
         mfest = os.path.join(wb_prefix, 'manifest.json')
@@ -9796,6 +9811,7 @@ def _library_load_impl(wb_id):
                 'ai_text_answer': q.get('ai_text_answer', ''),   # AI解析文字答案
                 '_img_file':      q.get('img_file', ''),         # 全局唯一，用于前端去重
                 '_img_hash':      q.get('img_hash', ''),         # 内容MD5，用于前端去重
+                '_ans_file':      q.get('ans_file', ''),         # 答案文件名，用于精确定位
             })
 
     return jsonify({
@@ -9829,16 +9845,21 @@ def library_img_lazy(wb_id, q_num_str):
     board    = request.args.get('board', '')
     subject  = request.args.get('subject', '')
     img_type = request.args.get('type', 'q')      # 'q' or 'a'
-    img_file_hint = request.args.get('img_file', '').strip()  # ★ 精确文件名
+    img_file_hint = request.args.get('img_file', '').strip()  # ★ 精确文件名（首选）
+    q_seq_hint    = request.args.get('q_seq', '').strip()     # ★ manifest 内序号（次选）
     try:
         q_num = int(q_num_str)
     except ValueError:
         return jsonify({'ok': False, 'error': 'invalid q_num'}), 400
+    try:
+        q_seq_int = int(q_seq_hint) if q_seq_hint else None
+    except ValueError:
+        q_seq_int = None
 
     wb_prefix = _lib_key_prefix(board, subject, wb_id)
 
     def _find_q_obj(q_list):
-        """按 img_file 精确匹配（首选），降级按 q_num 模糊匹配（兼容旧调用）"""
+        """按优先级定位题目：① img_file精确匹配 → ② q_seq序号 → ③ q_num模糊（旧）"""
         if img_file_hint:
             # img_file 是 manifest 内全局唯一文件名，精确匹配不会冲突
             target_field = 'ans_file' if img_type == 'a' else 'img_file'
@@ -9847,6 +9868,11 @@ def library_img_lazy(wb_id, q_num_str):
                 return obj
             # img_file_hint 传的是题目图片名但 type=a，尝试用 img_file 锁定行再取 ans_file
             obj = next((q for q in q_list if q.get('img_file', '') == img_file_hint), None)
+            if obj:
+                return obj
+        # 次选：按 seq 序号精确匹配（manifest 中第几条，全局唯一）
+        if q_seq_int is not None:
+            obj = next((q for q in q_list if q.get('seq') == q_seq_int), None)
             if obj:
                 return obj
         # 降级：按 q_num（旧逻辑，多套卷可能冲突）
