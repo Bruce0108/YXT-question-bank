@@ -7230,11 +7230,12 @@ def update_question_meta():
     若 session_id 以 'wb_' 开头（题库题目），同步持久化修改到 manifest.json。
     """
     data = request.json
-    sess_id = data.get('session_id')
-    g_idx   = data.get('g_idx', 0)
-    q_num   = data.get('q_num')
-    field   = data.get('field')
-    value   = data.get('value')
+    sess_id   = data.get('session_id')
+    g_idx     = data.get('g_idx', 0)
+    q_num     = data.get('q_num')
+    field     = data.get('field')
+    value     = data.get('value')
+    _img_file_hint = data.get('_img_file', '')  # ★ 前端传来的文件名，用于精确匹配 manifest
 
     if not sess_id or q_num is None or field not in ('topics', 'difficulty'):
         return jsonify({'error': '参数不完整'}), 400
@@ -7299,15 +7300,20 @@ def update_question_meta():
     # ── 题库题目：持久化修改到 manifest.json ──
     if is_wb_sess and wb_manifest:
         try:
-            # q_obj['_wb_seq'] 是 manifest questions 的 0-based index
-            _seq = q_obj.get('_wb_seq')
+            # 优先用 _img_file 精确匹配 manifest（文件名全局唯一，不受去重后 index 偏移影响）
+            # 来源优先级：前端请求参数 > virt_question._img_file
+            _mf_img = _img_file_hint or q_obj.get('_img_file', '')
             mq_list = wb_manifest.get('questions', [])
-            # 找到 manifest 里对应的题目（seq 字段是 1-based，_wb_seq 是 0-based）
             mq = None
-            if _seq is not None and 0 <= _seq < len(mq_list):
-                mq = mq_list[_seq]
-            else:
-                # fallback: 用 q_num 匹配
+            if _mf_img:
+                mq = next((q for q in mq_list if q.get('img_file', '') == _mf_img), None)
+            if mq is None:
+                # fallback: 用 _wb_seq 作为 0-based 下标
+                _seq = q_obj.get('_wb_seq')
+                if _seq is not None and 0 <= _seq < len(mq_list):
+                    mq = mq_list[_seq]
+            if mq is None:
+                # 最后降级：用 q_num 匹配
                 mq = next((q for q in mq_list if q.get('q_num') == q_num), None)
             if mq is not None:
                 mq[field] = q_obj[field]   # 同步到 manifest dict
@@ -7319,7 +7325,8 @@ def update_question_meta():
                 with open(mf_path, 'w', encoding='utf-8') as _mf:
                     json.dump(wb_manifest, _mf, ensure_ascii=False, indent=2)
             app.logger.info(f'[update_question_meta] 已持久化 wb={wb_prefix!r} '
-                            f'q_num={q_num} field={field!r}')
+                            f'q_num={q_num} field={field!r} '
+                            f'via img_file={_mf_img!r}')
         except Exception as _pe:
             # 持久化失败不阻断请求，只记录日志
             app.logger.warning(f'[update_question_meta] 持久化失败: {_pe}')
@@ -9614,6 +9621,7 @@ def _register_workbook_session(wb_id: str, manifest: dict, questions_out: list,
         virt_questions.append({
             'q_num':         q.get('q_num', i + 1),
             '_wb_seq':       i,                          # 唯一序号，用于 export 时精确定位
+            '_img_file':     q.get('_img_file', ''),     # ★ manifest 图片文件名，用于 update_meta 精确定位
             'page_idx':      0,
             'difficulty':    q.get('difficulty'),
             'topics':        q.get('topics', []),
@@ -9789,6 +9797,7 @@ def _library_load_impl(wb_id):
             for i, q in enumerate(q_list):
                 questions_out.append({
                     'seq':        q.get('seq', 0),
+                    '_wb_seq':    i,              # ★ manifest 0-based index，前端 update_question_meta 用
                     'q_num':      q.get('q_num', 0),
                     'difficulty': q.get('difficulty'),
                     'topics':     q.get('topics', []),
@@ -9831,6 +9840,7 @@ def _library_load_impl(wb_id):
                 imgs = img_map.get(i, {'b64': '', 'ans_b64': ''})
                 questions_out.append({
                     'seq':           q.get('seq', 0),
+                    '_wb_seq':       i,              # ★ manifest 0-based index，前端 update_question_meta 用
                     'q_num':         q.get('q_num', 0),
                     'difficulty':    q.get('difficulty'),
                     'topics':        q.get('topics', []),
@@ -9870,7 +9880,7 @@ def _library_load_impl(wb_id):
                 _seen_local_imgfiles.add(_lkey)
             _deduped_local.append(_lq)
         questions_out = []
-        for q in _deduped_local:
+        for _li, q in enumerate(_deduped_local):
             img_file = q.get('img_file', '')
             b64 = ''
             if img_file:
@@ -9888,6 +9898,7 @@ def _library_load_impl(wb_id):
                         ans_b64 = _b64.b64encode(f.read()).decode('ascii')
             questions_out.append({
                 'seq':            q.get('seq', 0),
+                '_wb_seq':        _li,            # ★ manifest 0-based index，前端 update_question_meta 用
                 'q_num':          q.get('q_num', 0),
                 'difficulty':     q.get('difficulty'),
                 'topics':         q.get('topics', []),

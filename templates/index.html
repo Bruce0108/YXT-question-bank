@@ -4161,12 +4161,14 @@ function setDiffQuick(uid, gIdx, qNum, stars, e) {
   const _qObj = _uidToQ(uid);
   const _sid  = (_qObj && _qObj._append_session_id) ? _qObj._append_session_id : sessionId;
   const _gIdx = (_qObj && _qObj._append_session_id) ? (_qObj._append_file_idx ?? gIdx) : gIdx;
-  const _wbSeq = (_qObj && _qObj._seq != null) ? _qObj._seq : null;
+  const _wbSeq   = (_qObj && _qObj._wb_seq != null) ? _qObj._wb_seq : null;
+  const _imgFile  = (_qObj && _qObj._img_file) ? _qObj._img_file : null;
   fetch('/api/update_question_meta', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({session_id: _sid, g_idx: _gIdx, q_num: qNum,
-                          field: 'difficulty', value: stars, _wb_seq: _wbSeq})
+                          field: 'difficulty', value: stars, _wb_seq: _wbSeq,
+                          _img_file: _imgFile})
   }).then(r => r.json()).then(d => {
     if (d.ok) {
       // 更新内存中的 allQuestions（用精确 qObj 定位）
@@ -4645,7 +4647,8 @@ async function _commitCurrentEdit(showToast) {
   const _useSid   = _isAppend ? _qObj._append_session_id : sessionId;
   const _useGIdx  = _isAppend ? (_qObj._append_file_idx ?? gIdx) : gIdx;
   // 题库题目：传 _wb_seq（manifest 0-based index）让后端精确定位，避免多套卷 q_num 重复
-  const _wbSeq = (_qObj && _qObj._seq != null) ? _qObj._seq : null;
+  const _wbSeq   = (_qObj && _qObj._wb_seq != null) ? _qObj._wb_seq : null;
+  const _imgFile = (_qObj && _qObj._img_file)  ? _qObj._img_file : null;
 
   // 无有效 session 时只写内存，不报错（离线模式）
   if (!_useSid) {
@@ -4660,13 +4663,13 @@ async function _commitCurrentEdit(showToast) {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ session_id: _useSid, g_idx: _useGIdx, q_num: qNum,
                                field: 'difficulty', value: diff,
-                               _wb_seq: _wbSeq })
+                               _wb_seq: _wbSeq, _img_file: _imgFile })
       }).then(r => r.json()),
       fetch('/api/update_question_meta', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ session_id: _useSid, g_idx: _useGIdx, q_num: qNum,
                                field: 'topics', value: topicsArr.length ? topicsArr : [],
-                               _wb_seq: _wbSeq })
+                               _wb_seq: _wbSeq, _img_file: _imgFile })
       }).then(r => r.json()),
     ]);
 
@@ -5867,7 +5870,8 @@ function _applyLoadedWorkbook(d) {
       maths_unit:    g.maths_unit,
       gIdx:          newGIdx,
       _seq:          baseSeq + _pushIdx,    // 全局唯一序号，用于 uid 定位
-      seq:           q.seq ?? null,         // manifest 原始序号，用于后端 q_seq 精确定位
+      seq:           q.seq ?? null,         // manifest 原始序号（1-based），备用
+      _wb_seq:       q._wb_seq ?? null,     // ★ manifest 0-based index，传给 update_question_meta
       // 图片缓存（base64）
       _img_b64:      q.img_bytes_b64 || '',
       _img_w:        q.img_w || 0,
